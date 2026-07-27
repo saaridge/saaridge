@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# curl shim — always go through the local auth-proxy → host bridge MITM proxy.
+set -euo pipefail
+
+REAL_CURL="/usr/bin/curl"
+if [[ ! -x "$REAL_CURL" ]]; then
+  REAL_CURL="$(type -P curl 2>/dev/null || true)"
+fi
+# Avoid recursion if somehow still pointing at this script
+if [[ "${REAL_CURL:-}" == *"/opt/bridge/host-bin/curl" ]]; then
+  REAL_CURL="/bin/curl"
+fi
+if [[ ! -x "${REAL_CURL:-}" ]]; then
+  echo "curl not found on system" >&2
+  exit 127
+fi
+
+PROXY="${HTTP_PROXY:-${http_proxy:-}}"
+if [[ -z "$PROXY" && -n "${LOCAL_PROXY_PORT:-}" ]]; then
+  PROXY="http://127.0.0.1:${LOCAL_PROXY_PORT}"
+fi
+if [[ -z "$PROXY" && -f "${BRIDGE_CREDENTIALS_FILE:-}" ]]; then
+  PORT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["localProxyPort"])' "$BRIDGE_CREDENTIALS_FILE")"
+  PROXY="http://127.0.0.1:${PORT}"
+fi
+
+if [[ -n "$PROXY" ]]; then
+  exec "$REAL_CURL" --proxy "$PROXY" --proxy-insecure "$@"
+fi
+exec "$REAL_CURL" "$@"

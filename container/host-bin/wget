@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# wget shim — force bridge proxy.
+set -euo pipefail
+
+REAL_WGET="/usr/bin/wget"
+if [[ ! -x "$REAL_WGET" ]]; then
+  REAL_WGET="$(type -P wget 2>/dev/null || true)"
+fi
+if [[ "${REAL_WGET:-}" == *"/opt/bridge/host-bin/wget" ]]; then
+  REAL_WGET="/bin/wget"
+fi
+if [[ ! -x "${REAL_WGET:-}" ]]; then
+  echo "wget not found" >&2
+  exit 127
+fi
+
+PROXY="${HTTP_PROXY:-${http_proxy:-}}"
+if [[ -z "$PROXY" && -n "${LOCAL_PROXY_PORT:-}" ]]; then
+  PROXY="http://127.0.0.1:${LOCAL_PROXY_PORT}"
+fi
+
+if [[ -n "$PROXY" ]]; then
+  exec "$REAL_WGET" -e "use_proxy=yes" -e "http_proxy=${PROXY}" -e "https_proxy=${PROXY}" --no-check-certificate "$@"
+fi
+exec "$REAL_WGET" "$@"

@@ -1,0 +1,14 @@
+{
+  "name": "onebridge-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "OneBridge native desktop shell (embeds workspace view)",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "bash ./launch-mac.sh",
+    "start:direct": "env -u ELECTRON_RUN_AS_NODE electron ."
+  },
+  "devDependencies": {
+    "electron": "^37.2.0"
+  }
+}

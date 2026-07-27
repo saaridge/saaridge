@@ -1,0 +1,7 @@
+{
+  "name": "bridge-proof-agent",
+  "version": "1.0.0",
+  "description": "Proves host file + network access only via OneBridge MCP tools",
+  "startCommand": ["node", "index.js"],
+  "type": "module"
+}

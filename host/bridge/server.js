@@ -1,0 +1,160 @@
+import express from "express";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js";
+import { resolveAgentFromRequestHeaders } from "../lib/auth.js";
+import { logBridge } from "../lib/logger.js";
+import { invokeTool, mcpToolList } from "./tools.js";
+import { startProxy } from "./proxy.js";
+import { DESKTOP_AGENT_ID } from "../lib/desktop.js";
+import {
+  listWorkspaceDownloadPackages,
+  installAgentFromWorkspaceDownload,
+} from "../lib/workspace-install.js";
+import { openInstallAssistantInDesktop } from "../lib/ui-commands.js";
+
+const createMcpServer = (agent) => {
+  const server = new Server(
+    { name: "host-bridge", version: "1.0.0" },
+    { capabilities: { tools: {} } },
+  );
+
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: mcpToolList(agent),
+  }));
+
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    return invokeTool(request.params.name, request.params.arguments || {}, {
+      agent,
+    });
+  });
+
+  return server;
+};
+
+const authAgent = (req, res, next) => {
+  const agent = resolveAgentFromRequestHeaders(req.headers);
+  if (!agent) {
+    logBridge("auth_failed", { ip: req.ip, path: req.path });
+    return res.status(401).json({ error: "unauthorized" });
+  }
+  req.agent = agent;
+  return next();
+};
+
+export const startBridge = ({
+  port = 7331,
+  proxyPort = 7332,
+} = {}) => {
+  const app = express();
+  app.use(express.json({ limit: "10mb" }));
+
+  app.get("/health", (_req, res) =>
+    res.json({ ok: true, service: "host-bridge", proxyPort }),
+  );
+
+  app.get("/v1/whoami", authAgent, (req, res) => {
+    res.json({
+      agentId: req.agent.id,
+      name: req.agent.name,
+      uid: req.agent.uid,
+    });
+  });
+
+  app.get("/v1/tools", authAgent, (req, res) => {
+    res.json({ tools: mcpToolList(req.agent) });
+  });
+
+  app.post("/v1/tools/:name/invoke", authAgent, async (req, res) => {
+    // Ignore body.agentId — identity is only from the bearer token.
+    const result = await invokeTool(req.params.name, req.body?.arguments || {}, {
+      agent: req.agent,
+    });
+    res.json(result);
+  });
+
+  app.post("/mcp", authAgent, async (req, res) => {
+    const server = createMcpServer(req.agent);
+    try {
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined,
+      });
+      await server.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+      res.on("close", () => {
+        transport.close();
+        server.close();
+      });
+    } catch (error) {
+      logBridge("mcp_error", { error: String(error), agentId: req.agent.id });
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: "2.0",
+          error: { code: -32603, message: "Internal error" },
+          id: null,
+        });
+      }
+    }
+  });
+
+  app.get("/mcp", authAgent, (_req, res) => {
+    res.status(405).json({
+      jsonrpc: "2.0",
+      error: { code: -32000, message: "Method not allowed" },
+      id: null,
+    });
+  });
+
+  // Desktop-user install flow (Downloads → install). Restricted to workspace desktop.
+  const requireDesktop = (req, res, next) => {
+    if (req.agent?.id !== DESKTOP_AGENT_ID && req.agent?.kind !== "desktop") {
+      return res.status(403).json({
+        ok: false,
+        error: "Only the workspace desktop can install from Downloads",
+      });
+    }
+    return next();
+  };
+
+  app.get("/v1/workspace/downloads", authAgent, requireDesktop, async (_req, res) => {
+    const result = await listWorkspaceDownloadPackages();
+    res.status(result.ok ? 200 : 500).json(result);
+  });
+
+  app.post("/v1/workspace/install", authAgent, requireDesktop, async (req, res) => {
+    const filename = req.body?.filename;
+    if (!filename) {
+      return res.status(400).json({ ok: false, error: "filename required" });
+    }
+    logBridge("workspace_install", { filename, agentId: req.agent.id });
+    const result = await installAgentFromWorkspaceDownload(filename);
+    res.status(result.ok ? 200 : 500).json(result);
+  });
+
+  app.post("/v1/workspace/open-install", authAgent, requireDesktop, async (_req, res) => {
+    const result = await openInstallAssistantInDesktop();
+    logBridge("open_install_assistant", {
+      ok: result.ok,
+      at: result.openInstallAt,
+    });
+    res.status(result.ok ? 200 : 500).json({
+      ...result,
+      message: result.ok
+        ? "Opening Install Assistant on the desktop…"
+        : result.error,
+    });
+  });
+
+  const server = app.listen(port, "127.0.0.1", () => {
+    logBridge("bridge_listening", {
+      message: `Host bridge on 127.0.0.1:${port} (per-agent bearer tokens)`,
+    });
+  });
+
+  const proxy = startProxy({ port: proxyPort });
+
+  return { app, server, proxy, port, proxyPort };
+};

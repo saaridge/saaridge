@@ -1,0 +1,867 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OneBridge — Safe Agent Workspace</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Manrope:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --ink: #14201c;
+        --ink-soft: #3d4f47;
+        --muted: #6b7c74;
+        --line: #d7e0db;
+        --paper: #f4f7f5;
+        --paper-2: #eef3f0;
+        --card: #ffffff;
+        --accent: #0f7a5f;
+        --accent-deep: #0a5a46;
+        --accent-soft: #d8f0e7;
+        --warn: #b86e00;
+        --warn-soft: #fff1d6;
+        --danger: #b42318;
+        --danger-soft: #fde8e6;
+        --ok: #0f7a5f;
+        --ok-soft: #d8f0e7;
+        --shadow: 0 18px 50px rgba(20, 32, 28, 0.08);
+        --radius: 18px;
+        --font: "Manrope", system-ui, sans-serif;
+        --display: "Fraunces", Georgia, serif;
+      }
+
+      * { box-sizing: border-box; }
+      html, body { margin: 0; min-height: 100%; }
+      body {
+        font-family: var(--font);
+        color: var(--ink);
+        background:
+          radial-gradient(900px 420px at 12% -8%, #dff3ea 0%, transparent 55%),
+          radial-gradient(700px 380px at 100% 0%, #e7eef8 0%, transparent 45%),
+          linear-gradient(180deg, #f7faf8 0%, var(--paper) 40%, #e9f0ec 100%);
+        line-height: 1.45;
+      }
+      button, input, textarea { font: inherit; }
+      a { color: var(--accent-deep); }
+
+      .shell {
+        width: min(1120px, calc(100% - 2rem));
+        margin: 0 auto;
+        padding: 1.25rem 0 3rem;
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        margin-bottom: 1.5rem;
+        animation: rise 0.55s ease both;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 0.85rem;
+      }
+      .mark {
+        width: 42px;
+        height: 42px;
+        border-radius: 12px;
+        background:
+          linear-gradient(145deg, #15a37f, #0c6b53);
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.35), 0 8px 20px rgba(15,122,95,0.28);
+        position: relative;
+      }
+      .mark::after {
+        content: "";
+        position: absolute;
+        inset: 11px;
+        border: 2px solid rgba(255,255,255,0.9);
+        border-radius: 6px;
+        border-right-color: transparent;
+        transform: rotate(45deg);
+      }
+      .brand h1 {
+        margin: 0;
+        font-family: var(--display);
+        font-size: 1.45rem;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+      }
+      .brand p {
+        margin: 0.1rem 0 0;
+        color: var(--muted);
+        font-size: 0.86rem;
+      }
+
+      .status-cluster {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        justify-content: flex-end;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0.4rem 0.75rem;
+        border-radius: 999px;
+        background: var(--card);
+        border: 1px solid var(--line);
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: var(--ink-soft);
+      }
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--muted);
+      }
+      .pill.ok .dot { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
+      .pill.warn .dot { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-soft); }
+      .pill.bad .dot { background: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); }
+
+      .hero {
+        display: grid;
+        grid-template-columns: 1.35fr 0.85fr;
+        gap: 1rem;
+        margin-bottom: 1.25rem;
+        animation: rise 0.65s ease both;
+        animation-delay: 0.05s;
+      }
+      @media (max-width: 860px) {
+        .hero { grid-template-columns: 1fr; }
+        .topbar { flex-direction: column; align-items: flex-start; }
+      }
+
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+      }
+      .hero-main {
+        padding: 1.5rem 1.6rem 1.4rem;
+        position: relative;
+        overflow: hidden;
+      }
+      .hero-main::before {
+        content: "";
+        position: absolute;
+        right: -40px;
+        top: -50px;
+        width: 180px;
+        height: 180px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(15,122,95,0.16), transparent 70%);
+      }
+      .eyebrow {
+        display: inline-block;
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--accent);
+        margin-bottom: 0.55rem;
+      }
+      .hero-main h2 {
+        margin: 0;
+        font-family: var(--display);
+        font-size: clamp(1.55rem, 2.4vw, 2rem);
+        letter-spacing: -0.02em;
+        line-height: 1.15;
+        max-width: 16ch;
+      }
+      .hero-main .lede {
+        margin: 0.75rem 0 1.2rem;
+        color: var(--ink-soft);
+        max-width: 42ch;
+        font-size: 0.98rem;
+      }
+      .cta-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.65rem;
+      }
+
+      .btn {
+        appearance: none;
+        border: 0;
+        border-radius: 12px;
+        padding: 0.72rem 1.05rem;
+        font-weight: 700;
+        cursor: pointer;
+        transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+      }
+      .btn:active { transform: translateY(1px); }
+      .btn:disabled { opacity: 0.55; cursor: wait; }
+      .btn-primary {
+        background: linear-gradient(180deg, #129572, var(--accent));
+        color: white;
+        box-shadow: 0 10px 24px rgba(15,122,95,0.28);
+      }
+      .btn-primary:hover { background: linear-gradient(180deg, #14a07c, var(--accent-deep)); }
+      .btn-secondary {
+        background: var(--paper-2);
+        color: var(--ink);
+        border: 1px solid var(--line);
+      }
+      .btn-secondary:hover { background: #e4ece8; }
+      .btn-ghost {
+        background: transparent;
+        color: var(--accent-deep);
+        border: 1px solid transparent;
+      }
+      .btn-ghost:hover { background: var(--accent-soft); }
+      .btn-danger {
+        background: var(--danger-soft);
+        color: var(--danger);
+        border: 1px solid #f3c4bf;
+      }
+      .btn-sm { padding: 0.45rem 0.75rem; font-size: 0.82rem; border-radius: 10px; }
+
+      .hero-side {
+        padding: 1.2rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        background:
+          linear-gradient(160deg, #123d33 0%, #1a5445 55%, #0f7a5f 140%);
+        color: #f3faf7;
+        border: 0;
+      }
+      .hero-side h3 {
+        margin: 0;
+        font-family: var(--display);
+        font-size: 1.15rem;
+      }
+      .hero-side p {
+        margin: 0;
+        opacity: 0.88;
+        font-size: 0.9rem;
+      }
+      .safe-list {
+        list-style: none;
+        margin: 0.3rem 0 0;
+        padding: 0;
+        display: grid;
+        gap: 0.55rem;
+      }
+      .safe-list li {
+        display: flex;
+        gap: 0.55rem;
+        align-items: flex-start;
+        font-size: 0.86rem;
+        opacity: 0.95;
+      }
+      .safe-list li::before {
+        content: "✓";
+        font-weight: 800;
+        color: #9af0cf;
+        margin-top: 0.05rem;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: 1.15fr 0.85fr;
+        gap: 1rem;
+      }
+      @media (max-width: 860px) {
+        .grid { grid-template-columns: 1fr; }
+      }
+
+      .panel { padding: 1.25rem 1.3rem 1.35rem; animation: rise 0.7s ease both; }
+      .panel h3 {
+        margin: 0;
+        font-family: var(--display);
+        font-size: 1.2rem;
+        letter-spacing: -0.01em;
+      }
+      .panel .help {
+        margin: 0.35rem 0 1rem;
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+
+      .field { margin-bottom: 0.85rem; }
+      .field label {
+        display: block;
+        font-size: 0.78rem;
+        font-weight: 700;
+        color: var(--ink-soft);
+        margin-bottom: 0.35rem;
+      }
+      .field input, .field textarea {
+        width: 100%;
+        border: 1px solid var(--line);
+        background: #fbfcfb;
+        border-radius: 12px;
+        padding: 0.75rem 0.85rem;
+        color: var(--ink);
+        outline: none;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      }
+      .field input:focus, .field textarea:focus {
+        border-color: #8fcbb8;
+        box-shadow: 0 0 0 4px rgba(15,122,95,0.12);
+      }
+      .hint {
+        margin-top: 0.35rem;
+        font-size: 0.78rem;
+        color: var(--muted);
+      }
+
+      .steps {
+        margin-top: 1rem;
+        border-top: 1px dashed var(--line);
+        padding-top: 0.9rem;
+      }
+      .steps h4 {
+        margin: 0 0 0.55rem;
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+      }
+      .timeline {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        max-height: 220px;
+        overflow: auto;
+      }
+      .timeline li {
+        display: grid;
+        grid-template-columns: 18px 1fr;
+        gap: 0.55rem;
+        padding: 0.4rem 0;
+        font-size: 0.86rem;
+      }
+      .timeline .mark-step {
+        width: 10px;
+        height: 10px;
+        margin-top: 0.35rem;
+        border-radius: 50%;
+        background: var(--ok);
+      }
+      .timeline .mark-step.bad { background: var(--danger); }
+      .timeline .msg { color: var(--ink-soft); }
+      .empty-soft {
+        color: var(--muted);
+        font-size: 0.88rem;
+        padding: 0.4rem 0;
+      }
+
+      .agent-list, .tool-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 0.7rem;
+      }
+      .agent-card, .tool-card {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 0.9rem 1rem;
+        background: linear-gradient(180deg, #fff, #f8fbf9);
+        display: flex;
+        justify-content: space-between;
+        gap: 0.8rem;
+        align-items: center;
+      }
+      .agent-card strong, .tool-card strong {
+        display: block;
+        font-size: 0.98rem;
+      }
+      .meta-line {
+        color: var(--muted);
+        font-size: 0.78rem;
+        margin-top: 0.2rem;
+      }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.15rem 0.5rem;
+        border-radius: 999px;
+        font-size: 0.7rem;
+        font-weight: 700;
+        background: var(--accent-soft);
+        color: var(--accent-deep);
+        margin-left: 0.35rem;
+      }
+      .badge.built { background: #e8eef8; color: #35507a; }
+
+      .toast {
+        position: fixed;
+        right: 1rem;
+        bottom: 1rem;
+        background: var(--ink);
+        color: white;
+        padding: 0.85rem 1rem;
+        border-radius: 14px;
+        box-shadow: var(--shadow);
+        transform: translateY(120%);
+        opacity: 0;
+        transition: 0.25s ease;
+        max-width: min(360px, calc(100% - 2rem));
+        z-index: 40;
+      }
+      .toast.show { transform: translateY(0); opacity: 1; }
+      .toast.bad { background: var(--danger); }
+
+      details.advanced {
+        margin-top: 1rem;
+        border-radius: var(--radius);
+        border: 1px solid var(--line);
+        background: var(--card);
+        overflow: hidden;
+        animation: rise 0.75s ease both;
+      }
+      details.advanced summary {
+        cursor: pointer;
+        padding: 1rem 1.2rem;
+        font-weight: 700;
+        color: var(--ink-soft);
+        list-style: none;
+      }
+      details.advanced summary::-webkit-details-marker { display: none; }
+      details.advanced[open] summary { border-bottom: 1px solid var(--line); }
+      .advanced-body { padding: 1rem 1.2rem 1.2rem; }
+      .log-tabs { display: flex; gap: 0.4rem; margin-bottom: 0.7rem; }
+      .log-view {
+        margin: 0;
+        background: #12201b;
+        color: #d7ebe2;
+        border-radius: 12px;
+        padding: 0.9rem;
+        max-height: 240px;
+        overflow: auto;
+        font-size: 0.75rem;
+        white-space: pre-wrap;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+
+      .split-tools {
+        display: grid;
+        gap: 0.9rem;
+      }
+
+      @keyframes rise {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="mark" aria-hidden="true"></div>
+          <div>
+            <h1>OneBridge</h1>
+            <p>Run AI assistants in a locked, supervised workspace</p>
+          </div>
+        </div>
+        <div class="status-cluster" id="statusCluster" aria-live="polite">
+          <span class="pill"><span class="dot"></span> Checking…</span>
+        </div>
+      </header>
+
+      <section class="hero">
+        <div class="card hero-main">
+          <div class="eyebrow">Your safe room</div>
+          <h2>Add assistants. Keep your computer protected.</h2>
+          <p class="lede">
+            Assistants work inside a sealed workspace. They can only reach your files,
+            websites, and commands through OneBridge — with a private key for each assistant.
+          </p>
+          <div class="cta-row">
+            <button class="btn btn-primary" id="openDesktopBtn" type="button">
+              Open workspace desktop
+            </button>
+            <button class="btn btn-secondary" id="ensureBtn" type="button">
+              Start workspace
+            </button>
+          </div>
+        </div>
+        <aside class="card hero-side">
+          <h3>What stays protected</h3>
+          <p>Built for people who want AI help without opening the whole machine.</p>
+          <ul class="safe-list">
+            <li>Each assistant has its own private access key</li>
+            <li>Internet from the workspace goes through OneBridge</li>
+            <li>Your project files are not copied into the workspace</li>
+            <li>You can remove an assistant completely in one click</li>
+          </ul>
+        </aside>
+      </section>
+
+      <div class="grid">
+        <section class="card panel">
+          <h3>Add an assistant</h3>
+          <p class="help">
+            Point to a folder on this computer that contains the assistant package
+            (<strong>agent.json</strong>. We’ll install it into the safe workspace and set up its private bridge access.
+          </p>
+
+          <div class="field">
+            <label for="hostPath">Assistant folder on this computer</label>
+            <input
+              id="hostPath"
+              type="text"
+              placeholder="Example: /Users/you/assistants/my-helper"
+              autocomplete="off"
+            />
+            <div class="hint">
+              Tip: use the sample assistant to try the flow first.
+              <button class="btn btn-ghost btn-sm" id="useSampleBtn" type="button">
+                Use sample assistant
+              </button>
+            </div>
+          </div>
+
+          <div class="cta-row">
+            <button class="btn btn-primary" id="installBtn" type="button">
+              Install assistant
+            </button>
+          </div>
+
+          <div class="steps">
+            <h4>Progress</h4>
+            <ul class="timeline" id="installLog">
+              <li class="empty-soft" style="display:block">
+                Installation updates will appear here.
+              </li>
+            </ul>
+          </div>
+        </section>
+
+        <section class="card panel">
+          <h3>Your assistants</h3>
+          <p class="help">Active assistants in the safe workspace.</p>
+          <ul class="agent-list" id="agents">
+            <li class="empty-soft">No assistants yet. Add one on the left.</li>
+          </ul>
+        </section>
+      </div>
+
+      <section class="card panel" style="margin-top: 1rem; animation-delay: 0.08s">
+        <h3>Capabilities the assistants can use</h3>
+        <p class="help">
+          These are the actions OneBridge can perform on this computer when an assistant asks.
+          Built-in actions come ready. You can also add simple custom actions.
+        </p>
+
+        <div class="split-tools">
+          <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 1rem">
+            <div>
+              <h4 style="margin: 0 0 0.6rem; font-size: 0.85rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em">
+                Available now
+              </h4>
+              <ul class="tool-list" id="tools"></ul>
+            </div>
+            <div>
+              <h4 style="margin: 0 0 0.6rem; font-size: 0.85rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em">
+                Add a custom action
+              </h4>
+              <div class="field">
+                <label for="toolName">Short name</label>
+                <input id="toolName" placeholder="e.g. show_date" />
+              </div>
+              <div class="field">
+                <label for="toolDesc">What it does (plain English)</label>
+                <input id="toolDesc" placeholder="e.g. Shows today’s date on this computer" />
+              </div>
+              <div class="field">
+                <label for="toolCmd">Command to run on this computer</label>
+                <input id="toolCmd" placeholder="e.g. date" />
+                <div class="hint">Advanced: you can use placeholders like {{arg}} in the command.</div>
+              </div>
+              <button class="btn btn-secondary" id="addToolBtn" type="button">Save action</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <details class="advanced">
+        <summary>Advanced details &amp; activity log</summary>
+        <div class="advanced-body">
+          <p class="help" style="margin-top: 0">
+            For IT or developers. Most people can ignore this section.
+          </p>
+          <div class="log-tabs">
+            <button class="btn btn-secondary btn-sm" data-log="control" type="button">Workspace log</button>
+            <button class="btn btn-secondary btn-sm" data-log="bridge" type="button">Bridge log</button>
+          </div>
+          <pre class="log-view" id="logs">Loading activity…</pre>
+        </div>
+      </details>
+    </div>
+
+    <div class="toast" id="toast" role="status"></div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const SAMPLE_PATH =
+        "/Users/mohitrohatgi/Documents/workspace/agent-bridge-prototype/examples/sample-agent";
+
+      const FRIENDLY_STEPS = [
+        [/Validated host path/i, "Checked the folder you selected"],
+        [/Issued per-agent token/i, "Created a private access key for this assistant"],
+        [/Wrote mcp\.json/i, "Connected the assistant to OneBridge"],
+        [/Super-container ready/i, "Safe workspace is ready"],
+        [/Created isolated container user/i, "Gave the assistant its own locked account"],
+        [/Installed agent files/i, "Installed the assistant into the workspace"],
+        [/Synced bridge/i, "Configured secure communication"],
+        [/Wrote per-agent credentials/i, "Stored the private key safely"],
+        [/npm install/i, "Installed assistant software packages"],
+        [/host-provided node_modules/i, "Prepared assistant software"],
+        [/Started auth-proxy/i, "Started the assistant"],
+        [/Recorded agent/i, "Saved assistant to your list"],
+        [/Stopped agent/i, "Removed the assistant from the workspace"],
+        [/Revoked agent token/i, "Disabled its private access key"],
+      ];
+
+      const friendlyStep = (message) => {
+        for (const [re, text] of FRIENDLY_STEPS) {
+          if (re.test(message)) return text;
+        }
+        return message;
+      };
+
+      const showToast = (text, bad = false) => {
+        const el = $("toast");
+        el.textContent = text;
+        el.classList.toggle("bad", bad);
+        el.classList.add("show");
+        clearTimeout(showToast._t);
+        showToast._t = setTimeout(() => el.classList.remove("show"), 3200);
+      };
+
+      const renderTimeline = (steps) => {
+        const ul = $("installLog");
+        if (!steps?.length) {
+          ul.innerHTML =
+            '<li class="empty-soft" style="display:block">Installation updates will appear here.</li>';
+          return;
+        }
+        ul.innerHTML = "";
+        for (const step of steps) {
+          const li = document.createElement("li");
+          const ok = step.ok !== false;
+          li.innerHTML = `<span class="mark-step ${ok ? "" : "bad"}"></span><span class="msg">${friendlyStep(step.message || "")}</span>`;
+          ul.appendChild(li);
+        }
+      };
+
+      const refreshHealth = async () => {
+        try {
+          const j = await (await fetch("/api/health")).json();
+          const cluster = $("statusCluster");
+          const running = j.containerRunning;
+          cluster.innerHTML = `
+            <span class="pill ${running ? "ok" : "bad"}"><span class="dot"></span>${running ? "Workspace online" : "Workspace offline"}</span>
+            <span class="pill"><span class="dot"></span>${j.agentCount || 0} assistant${(j.agentCount || 0) === 1 ? "" : "s"}</span>
+            <span class="pill ok"><span class="dot"></span>Bridge protected</span>
+          `;
+          $("ensureBtn").textContent = running ? "Workspace is running" : "Start workspace";
+          $("ensureBtn").disabled = !!running;
+        } catch {
+          $("statusCluster").innerHTML =
+            '<span class="pill bad"><span class="dot"></span>Can’t reach OneBridge</span>';
+        }
+      };
+
+      const refreshAgents = async () => {
+        const j = await (await fetch("/api/agents")).json();
+        const ul = $("agents");
+        ul.innerHTML = "";
+        if (!j.agents?.length) {
+          ul.innerHTML = '<li class="empty-soft">No assistants yet. Add one on the left.</li>';
+          return;
+        }
+        for (const a of j.agents) {
+          const li = document.createElement("li");
+          li.className = "agent-card";
+          li.innerHTML = `
+            <div>
+              <strong>${a.name || "Assistant"}</strong>
+              <div class="meta-line">Private key · ${a.tokenFingerprint || "••••"}… · Account #${a.uid ?? "—"}</div>
+              <div class="meta-line">Status: ${a.status || "ready"}</div>
+            </div>
+          `;
+          const btn = document.createElement("button");
+          btn.className = "btn btn-danger btn-sm";
+          btn.type = "button";
+          btn.textContent = "Remove";
+          btn.onclick = async () => {
+            if (!confirm(`Remove “${a.name}”? This cannot be undone.`)) return;
+            btn.disabled = true;
+            btn.textContent = "Removing…";
+            const res = await fetch(`/api/agents/${a.id}/uninstall`, { method: "POST" });
+            const body = await res.json();
+            renderTimeline(body.steps || []);
+            showToast(body.ok ? "Assistant removed" : "Could not remove assistant", !body.ok);
+            await refreshAgents();
+            await refreshHealth();
+            await refreshLogs("control");
+          };
+          li.appendChild(btn);
+          ul.appendChild(li);
+        }
+      };
+
+      const toolLabel = (name) =>
+        ({
+          terminal_exec: "Run a command",
+          read_file: "Read a file",
+          write_file: "Write a file",
+          list_dir: "List a folder",
+          delete_path: "Delete a file",
+          http_request: "Visit a website / API",
+          open_url: "Open a web page",
+        })[name] || name;
+
+      const refreshTools = async () => {
+        const j = await (await fetch("/api/tools")).json();
+        const ul = $("tools");
+        ul.innerHTML = "";
+        for (const t of j.tools || []) {
+          const li = document.createElement("li");
+          li.className = "tool-card";
+          const kind = t.kind === "custom" ? "Custom" : "Built-in";
+          li.innerHTML = `
+            <div>
+              <strong>${toolLabel(t.name)} <span class="badge ${t.kind === "custom" ? "" : "built"}">${kind}</span></strong>
+              <div class="meta-line">${t.description || ""}</div>
+            </div>
+          `;
+          if (t.kind === "custom") {
+            const btn = document.createElement("button");
+            btn.className = "btn btn-danger btn-sm";
+            btn.type = "button";
+            btn.textContent = "Remove";
+            btn.onclick = async () => {
+              await fetch(`/api/tools/${encodeURIComponent(t.name)}`, { method: "DELETE" });
+              showToast("Custom action removed");
+              await refreshTools();
+            };
+            li.appendChild(btn);
+          }
+          ul.appendChild(li);
+        }
+      };
+
+      const refreshLogs = async (which = "control") => {
+        const r = await fetch(`/api/logs?name=${which}`);
+        const j = await r.json();
+        $("logs").textContent = (j.logs || [])
+          .map(
+            (l) =>
+              `${l.ts || ""}  ${l.message || ""}${l.detail ? "  " + JSON.stringify(l.detail) : ""}`,
+          )
+          .join("\n") || "No activity yet.";
+      };
+
+      $("openDesktopBtn").onclick = () => {
+        // Custom viewer: overflow:hidden + no scale so trackpad scroll reaches remote apps
+        window.open(
+          "http://127.0.0.1:6081/novnc-onebridge.html",
+          "_blank",
+          "noopener,noreferrer",
+        );
+      };
+
+      $("useSampleBtn").onclick = () => {
+        $("hostPath").value = SAMPLE_PATH;
+        showToast("Sample assistant folder selected");
+      };
+
+      $("installBtn").onclick = async () => {
+        const hostPath = $("hostPath").value.trim();
+        if (!hostPath) {
+          showToast("Please choose an assistant folder first", true);
+          return;
+        }
+        $("installBtn").disabled = true;
+        $("installBtn").textContent = "Installing…";
+        renderTimeline([{ ok: true, message: "Starting installation…" }]);
+        try {
+          const r = await fetch("/api/agents/install", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ hostPath }),
+          });
+          const j = await r.json();
+          renderTimeline(j.steps || [{ ok: false, message: j.error || "Install failed" }]);
+          showToast(j.ok ? "Assistant installed successfully" : "Installation failed", !j.ok);
+          await refreshAgents();
+          await refreshHealth();
+          await refreshLogs("control");
+        } catch (err) {
+          renderTimeline([{ ok: false, message: String(err) }]);
+          showToast("Installation failed", true);
+        } finally {
+          $("installBtn").disabled = false;
+          $("installBtn").textContent = "Install assistant";
+        }
+      };
+
+      $("ensureBtn").onclick = async () => {
+        $("ensureBtn").disabled = true;
+        $("ensureBtn").textContent = "Starting…";
+        try {
+          const r = await fetch("/api/container/ensure", { method: "POST" });
+          const j = await r.json();
+          showToast(j.ok ? "Workspace is ready" : "Could not start workspace", !j.ok);
+          await refreshHealth();
+        } finally {
+          await refreshHealth();
+        }
+      };
+
+      $("addToolBtn").onclick = async () => {
+        const name = $("toolName").value.trim();
+        const commandTemplate = $("toolCmd").value.trim();
+        if (!name || !commandTemplate) {
+          showToast("Name and command are required", true);
+          return;
+        }
+        const r = await fetch("/api/tools", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            name,
+            description: $("toolDesc").value.trim(),
+            commandTemplate,
+          }),
+        });
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({}));
+          showToast(err.error || "Could not save action", true);
+          return;
+        }
+        $("toolName").value = "";
+        $("toolDesc").value = "";
+        $("toolCmd").value = "";
+        showToast("Custom action saved");
+        await refreshTools();
+      };
+
+      document.querySelectorAll("[data-log]").forEach((btn) => {
+        btn.onclick = () => refreshLogs(btn.dataset.log);
+      });
+
+      refreshHealth();
+      refreshAgents();
+      refreshTools();
+      refreshLogs("control");
+      setInterval(refreshHealth, 5000);
+    </script>
+  </body>
+</html>

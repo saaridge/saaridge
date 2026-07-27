@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Desktop</title>
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      width: 100%;
+      overflow: hidden;
+      overscroll-behavior: none;
+      background: #0b0b0b;
+      touch-action: none;
+    }
+    #screen {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #0b0b0b;
+      touch-action: none;
+    }
+    /* noVNC owns canvas sizing — never stretch/crop via CSS. */
+    #screen canvas {
+      display: block;
+    }
+  </style>
+  <script type="module" crossorigin="anonymous">
+    import RFB from "./core/rfb.js";
+    import KeyTable from "./core/input/keysym.js";
+
+    let rfb;
+    let accY = 0;
+    let accX = 0;
+    const STEP = 6;
+
+    const screen = document.getElementById("screen");
+
+    /* ---------------- Audio ---------------- */
+    let audioCtx = null;
+    let audioWs = null;
+    let nextPlayTime = 0;
+    let audioRate = 48000;
+    let audioChannels = 2;
+    let audioArmed = false;
+
+    const ensureAudioContext = async () => {
+      if (!audioCtx) audioCtx = new AudioContext({ sampleRate: audioRate });
+      if (audioCtx.state === "suspended") await audioCtx.resume();
+      audioArmed = true;
+    };
+
+    const playPcmChunk = (arrayBuffer) => {
+      if (!audioCtx || !audioArmed) return;
+      const int16 = new Int16Array(arrayBuffer);
+      if (!int16.length) return;
+      const frames = Math.floor(int16.length / audioChannels);
+      if (frames <= 0) return;
+      const buffer = audioCtx.createBuffer(audioChannels, frames, audioRate);
+      for (let ch = 0; ch < audioChannels; ch++) {
+        const data = buffer.getChannelData(ch);
+        for (let i = 0; i < frames; i++) {
+          data[i] = int16[i * audioChannels + ch] / 32768;
+        }
+      }
+      const src = audioCtx.createBufferSource();
+      src.buffer = buffer;
+      src.connect(audioCtx.destination);
+      const now = audioCtx.currentTime;
+      if (nextPlayTime < now + 0.02) nextPlayTime = now + 0.02;
+      src.start(nextPlayTime);
+      nextPlayTime += buffer.duration;
+      if (nextPlayTime - now > 0.75) nextPlayTime = now + 0.05;
+    };
+
+    const connectAudio = () => {
+      if (audioWs && (audioWs.readyState === WebSocket.OPEN || audioWs.readyState === WebSocket.CONNECTING)) {
+        return;
+      }
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      const host = location.hostname || "127.0.0.1";
+      try {
+        audioWs = new WebSocket(`${proto}://${host}:6082/`);
+      } catch (_) {
+        return;
+      }
+      audioWs.binaryType = "arraybuffer";
+      audioWs.onmessage = (ev) => {
+        if (typeof ev.data === "string") {
+          try {
+            const msg = JSON.parse(ev.data);
+            if (msg.type === "hello") {
+              audioRate = msg.rate || 48000;
+              audioChannels = msg.channels || 2;
+            }
+          } catch (_) {}
+          return;
+        }
+        playPcmChunk(ev.data);
+      };
+      audioWs.onclose = () => setTimeout(connectAudio, 1500);
+      audioWs.onerror = () => {};
+    };
+
+    /* ---------------- Scroll (keys only) ---------------- */
+    const clientToCanvas = (clientX, clientY) => {
+      const canvas = rfb && rfb._canvas;
+      if (!canvas) return { x: 0, y: 0 };
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return { x: 0, y: 0 };
+      const x = ((clientX - rect.left) / rect.width) * canvas.width;
+      const y = ((clientY - rect.top) / rect.height) * canvas.height;
+      return {
+        x: Math.max(0, Math.min(canvas.width - 1, x)),
+        y: Math.max(0, Math.min(canvas.height - 1, y)),
+      };
+    };
+
+    const sendKey = (keysym) => {
+      rfb.sendKey(keysym, null, true);
+      rfb.sendKey(keysym, null, false);
+    };
+
+    const sendScrollStep = (x, y, vertical, negative, strong) => {
+      if (typeof rfb._handleMouseMove === "function") {
+        rfb._handleMouseMove(x, y);
+      }
+      if (vertical) {
+        if (strong) {
+          sendKey(negative ? KeyTable.XK_Page_Up : KeyTable.XK_Page_Down);
+        } else {
+          const key = negative ? KeyTable.XK_Up : KeyTable.XK_Down;
+          sendKey(key);
+          sendKey(key);
+        }
+      } else {
+        sendKey(negative ? KeyTable.XK_Left : KeyTable.XK_Right);
+      }
+    };
+
+    const onWheel = (ev) => {
+      if (!rfb || rfb._rfbConnectionState !== "connected") return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      ev.stopImmediatePropagation();
+
+      rfb.focus();
+      let dX = ev.deltaX;
+      let dY = ev.deltaY;
+      if (ev.deltaMode === 1) {
+        dX *= 19;
+        dY *= 19;
+      } else if (ev.deltaMode === 2) {
+        dX *= 19 * 10;
+        dY *= 19 * 10;
+      }
+
+      accX += dX;
+      accY += dY;
+      const { x, y } = clientToCanvas(ev.clientX, ev.clientY);
+      const strong = Math.abs(dY) >= 40 || Math.abs(dX) >= 40;
+
+      let steps = 0;
+      while (Math.abs(accY) >= STEP) {
+        sendScrollStep(x, y, true, accY < 0, strong);
+        accY += accY < 0 ? STEP : -STEP;
+        steps += 1;
+        if (steps > 40) { accY = 0; break; }
+      }
+      while (Math.abs(accX) >= STEP) {
+        sendScrollStep(x, y, false, accX < 0, strong);
+        accX += accX < 0 ? STEP : -STEP;
+        steps += 1;
+        if (steps > 40) { accX = 0; break; }
+      }
+    };
+
+    const armWheel = () => {
+      const canvas = rfb && rfb._canvas;
+      if (canvas && rfb._eventHandlers?.handleWheel) {
+        canvas.removeEventListener("wheel", rfb._eventHandlers.handleWheel);
+      }
+      for (const el of [screen, canvas, document].filter(Boolean)) {
+        el.removeEventListener("wheel", onWheel, true);
+        el.addEventListener("wheel", onWheel, { passive: false, capture: true });
+      }
+    };
+
+    /**
+     * Adaptive desktop sizing for any viewer environment:
+     * 1) Always scaleViewport — full remote desktop fits the pane (never cropped).
+     * 2) Match remote FB to the pane CSS size when possible — 1:1 clicks.
+     * 3) If X cannot match (viewer larger than X max), keep scaling (still full view).
+     */
+    let lastResizeKey = "";
+    let resizeInFlight = false;
+    let resizeTimer = 0;
+
+    const viewerSize = () => {
+      let w = Math.floor(screen.clientWidth || window.innerWidth || 0);
+      let h = Math.floor(screen.clientHeight || window.innerHeight || 0);
+      w = Math.max(800, w - (w % 2));
+      h = Math.max(600, h - (h % 2));
+      return { w, h };
+    };
+
+    const syncDesktopToViewer = () => {
+      if (!rfb || rfb._rfbConnectionState !== "connected") return;
+      const { w, h } = viewerSize();
+      const key = `${w}x${h}`;
+      const fbW = Number(rfb._fbWidth || 0);
+      const fbH = Number(rfb._fbHeight || 0);
+      // Already 1:1 with the pane — nothing to do.
+      if (fbW === w && fbH === h) {
+        lastResizeKey = key;
+        rfb.scaleViewport = true;
+        rfb.clipViewport = false;
+        return;
+      }
+      if (key === lastResizeKey && resizeInFlight) return;
+
+      // Keep scale-to-fit on so any transient mismatch never crops.
+      rfb.scaleViewport = true;
+      rfb.clipViewport = false;
+      rfb.dragViewport = false;
+
+      if (resizeInFlight) return;
+      resizeInFlight = true;
+      fetch("http://127.0.0.1:3847/api/ui/resize-desktop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ width: w, height: h }),
+      })
+        .then((r) => r.json().catch(() => ({})))
+        .then((j) => {
+          if (j && j.ok) lastResizeKey = key;
+          rfb.scaleViewport = true;
+          rfb.clipViewport = false;
+          if (typeof rfb._updateScale === "function") {
+            try { rfb._updateScale(); } catch (_) {}
+          } else if (typeof rfb._adjustScale === "function") {
+            try { rfb._adjustScale(); } catch (_) {}
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          resizeInFlight = false;
+        });
+    };
+
+    const scheduleSync = (ms = 120) => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(syncDesktopToViewer, ms);
+    };
+
+    function connect() {
+      if (rfb) {
+        try { rfb.disconnect(); } catch (_) {}
+        rfb = null;
+      }
+      accX = 0;
+      accY = 0;
+      lastResizeKey = "";
+
+      const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+      const path = new URLSearchParams(window.location.search).get("path") || "websockify";
+      const url = `${protocol}://${window.location.host}/${path}`;
+
+      rfb = new RFB(screen, url);
+      window.__onebridgeRfb = rfb;
+
+      // Critical: scale full desktop into pane (no crop). Host resize makes clicks 1:1.
+      rfb.scaleViewport = true;
+      rfb.resizeSession = false; // host docker resize is authoritative
+      rfb.clipViewport = false;
+      rfb.dragViewport = false;
+      rfb.focusOnClick = true;
+      rfb.viewOnly = false;
+      rfb.qualityLevel = 8;
+      rfb.compressionLevel = 2;
+      rfb.showDotCursor = true;
+
+      const grabKeyboard = () => {
+        try { screen.focus({ preventScroll: true }); } catch (_) { screen.focus(); }
+        try { window.focus(); } catch (_) {}
+        if (rfb) {
+          try {
+            if (rfb._canvas) rfb._canvas.tabIndex = 0;
+            if (rfb._keyboard) {
+              try { rfb._keyboard.ungrab(); } catch (_) {}
+              rfb._keyboard._target = window;
+              rfb._keyboard.grab();
+            }
+            rfb.focus();
+          } catch (_) {}
+        }
+      };
+
+      rfb.addEventListener("connect", () => {
+        // Ensure canvas can receive key events in Electron BrowserView.
+        try {
+          if (rfb._canvas) rfb._canvas.tabIndex = 0;
+        } catch (_) {}
+        grabKeyboard();
+        armWheel();
+        scheduleSync(50);
+        setTimeout(armWheel, 100);
+        setTimeout(() => scheduleSync(0), 350);
+        setTimeout(grabKeyboard, 200);
+        connectAudio();
+      });
+      rfb.addEventListener("desktopresize", () => {
+        // Remote FB changed — keep scale-to-fit accurate and re-sync if needed.
+        rfb.scaleViewport = true;
+        rfb.clipViewport = false;
+        lastResizeKey = "";
+        scheduleSync(80);
+        setTimeout(grabKeyboard, 60);
+      });
+      rfb.addEventListener("disconnect", (e) => {
+        if (!e.detail.clean) setTimeout(connect, 800);
+      });
+      rfb.addEventListener("credentialsrequired", () => {
+        rfb.sendCredentials({ password: "" });
+      });
+    }
+
+    window.addEventListener("resize", () => scheduleSync(150));
+    if (typeof ResizeObserver !== "undefined") {
+      new ResizeObserver(() => scheduleSync(150)).observe(screen);
+    }
+    // Safety net: if FB and pane drift, heal within a couple seconds.
+    setInterval(() => scheduleSync(0), 2000);
+
+    const armAudioOnGesture = () => {
+      void ensureAudioContext();
+      connectAudio();
+    };
+    const grabKeyboard = () => {
+      try { screen.focus({ preventScroll: true }); } catch (_) { screen.focus(); }
+      if (rfb) {
+        try { rfb.focus(); } catch (_) {}
+      }
+    };
+    screen.addEventListener("pointerdown", () => {
+      grabKeyboard();
+      armAudioOnGesture();
+    });
+    // If a key arrives while canvas isn't focused, focus then — rare after iframe focus fix.
+    window.addEventListener(
+      "keydown",
+      () => {
+        armAudioOnGesture();
+        if (!rfb) return;
+        const active = document.activeElement;
+        if (active !== rfb._canvas && active !== screen) grabKeyboard();
+      },
+      true,
+    );
+    window.addEventListener("focus", grabKeyboard);
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) grabKeyboard();
+    });
+
+    connect();
+    connectAudio();
+  </script>
+</head>
+<body>
+  <div id="screen" tabindex="0"></div>
+</body>
+</html>

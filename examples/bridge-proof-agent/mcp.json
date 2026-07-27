@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "host-bridge": {
+      "command": "node",
+      "args": [
+        "/opt/bridge/bridge-mcp-stdio.mjs"
+      ],
+      "env": {
+        "BRIDGE_URL": "http://host.docker.internal:7331",
+        "BRIDGE_CREDENTIALS_FILE": "/opt/agents/bridge-proof-agent-5a648e71/.bridge-credentials",
+        "AGENT_ID": "bridge-proof-agent-5a648e71"
+      }
+    }
+  }
+}

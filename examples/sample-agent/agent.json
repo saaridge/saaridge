@@ -1,0 +1,20 @@
+{
+  "name": "sample-host-agent",
+  "version": "1.0.0",
+  "description": "Minimal agent that only talks to the host bridge MCP proxy",
+  "startCommand": ["node", "index.js"],
+  "type": "module",
+  "installCommands": [],
+  "distributions": [
+    {
+      "os": "linux",
+      "arch": "arm64",
+      "label": "Linux ARM64 (Debian workspace)"
+    },
+    {
+      "os": "linux",
+      "arch": "amd64",
+      "label": "Linux x86_64 (Debian workspace)"
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+# Egress is blocked inside the container via iptables (network-lock.sh),
+# allowing only host.docker.internal:7331 (MCP) and :7332 (HTTP proxy).
+
+services:
+  agent-box:
+    build:
+      context: .
+      dockerfile: container/Dockerfile
+    image: agent-bridge-box:local
+    container_name: agent-bridge-box
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - agent-runtime:/opt/agents
+      - browser-home:/home/browser
+    ports:
+      - "6081:6080"
+      - "6082:6082"
+    environment:
+      BRIDGE_URL: http://host.docker.internal:7331
+      BRIDGE_PORT: "7331"
+      BRIDGE_PROXY_PORT: "7332"
+      BRIDGE_HOST: host.docker.internal
+      BROWSER: /opt/bridge/bridge-browser.sh
+      DISPLAY: ":1"
+      RESOLUTION: 1920x1080x24
+    shm_size: "1gb"
+    cap_add:
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    restart: unless-stopped
+
+volumes:
+  agent-runtime:
+  browser-home:

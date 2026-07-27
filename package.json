@@ -1,0 +1,27 @@
+{
+  "name": "agent-bridge-prototype",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Secure super-container agents with host-side bridge MCP",
+  "type": "module",
+  "scripts": {
+    "start": "node host/index.js",
+    "dev": "node --watch host/index.js",
+    "app": "npm --prefix desktop start",
+    "app:install": "npm --prefix desktop install",
+    "container:build": "docker compose build",
+    "container:up": "docker compose up -d --no-build",
+    "container:down": "docker compose down",
+    "logs": "docker compose logs -f agent-box"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "uuid": "^11.1.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10"
+  }
+}
