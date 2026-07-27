@@ -342,6 +342,53 @@ export const installAgentFromHostArchive = async (hostFilePath) => {
   }
 };
 
+/**
+ * Install a package that lives inside the workspace container filesystem
+ * (e.g. zenity file picker under /home/browser).
+ */
+export const installAgentFromWorkspacePath = async (workspacePath) => {
+  const raw = String(workspacePath || "").trim();
+  // Allow any file the workspace user can see (home + common download/tmp paths).
+  const allowed =
+    raw.startsWith("/home/browser/") ||
+    raw.startsWith("/tmp/") ||
+    raw.startsWith("/var/tmp/");
+  if (!allowed || raw.includes("\0") || raw.includes("..")) {
+    return { ok: false, error: "Pick a file inside the workspace filesystem" };
+  }
+  if (!(await containerRunning())) {
+    return { ok: false, error: "Workspace is not running" };
+  }
+
+  const base = path.basename(raw);
+
+  const stagingRoot = path.join(STATE_DIR, "staging");
+  fs.mkdirSync(stagingRoot, { recursive: true });
+  const staging = path.join(
+    stagingRoot,
+    `ws-${Date.now()}-${base.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 40)}`,
+  );
+  fs.mkdirSync(staging, { recursive: true });
+  const hostCopy = path.join(staging, base);
+
+  try {
+    logStep("Copying workspace package to host for install", { path: raw });
+    const cp = await dockerCp(`${CONTAINER_NAME}:${raw}`, hostCopy);
+    if (cp.code !== 0 || !fs.existsSync(hostCopy)) {
+      throw new Error(cp.stderr || cp.stdout || "Could not read that file from the workspace");
+    }
+    return await installAgentFromHostArchive(hostCopy);
+  } catch (err) {
+    logError("Install from workspace path failed", {
+      path: raw,
+      detail: String(err?.message || err),
+    });
+    return { ok: false, error: String(err?.message || err) };
+  } finally {
+    cleanupStaging(staging);
+  }
+};
+
 /** True if filename looks like an installable assistant package. */
 export const isAssistantPackageName = (name) => {
   const base = String(name || "").toLowerCase();

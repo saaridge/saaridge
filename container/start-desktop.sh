@@ -72,23 +72,27 @@ cat > "$HOME/.local/share/applications/onebridge-install-assistant.desktop" <<'E
 Version=1.0
 Type=Application
 Name=Install Assistant
-Comment=Open the Downloads folder
+Comment=Choose an installer package and install it
 Exec=/bin/bash /opt/bridge/open-install-assistant.sh
-Icon=folder-download
+Icon=system-software-install
 Terminal=false
 Categories=Utility;
 StartupNotify=true
 EOF
 chmod +x "$HOME/.local/share/applications/onebridge-install-assistant.desktop"
 
+# XFCE needs Type=Application + Exec= (application:// links are unsupported).
 cat > "$HOME/Desktop/Install Assistant.desktop" <<'EOF'
 [Desktop Entry]
 Version=1.0
-Type=Link
+Type=Application
 Name=Install Assistant
-Comment=Open the Downloads folder
-Icon=folder-download
-URL=application://onebridge-install-assistant.desktop
+Comment=Choose an installer package and install it
+Exec=/bin/bash /opt/bridge/open-install-assistant.sh
+Icon=system-software-install
+Terminal=false
+Categories=Utility;
+StartupNotify=false
 EOF
 chmod +x "$HOME/Desktop/Install Assistant.desktop"
 if command -v gio >/dev/null 2>&1; then

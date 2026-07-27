@@ -18,9 +18,20 @@
     osBadge.hidden = false;
   };
 
-  btnInstall?.addEventListener("click", () => {
-    void window.onebridge?.openInstall?.();
-    void window.onebridge?.focusDesktop?.();
+  btnInstall?.addEventListener("click", async () => {
+    try {
+      const r = await window.onebridge?.installPackage?.();
+      if (r?.cancelled) return;
+      if (r && r.ok === false) {
+        window.alert(r.error || "Install failed");
+        return;
+      }
+      if (r?.ok) {
+        window.alert(`Installed: ${r.displayName || r.agentId || "assistant"}`);
+      }
+    } catch (err) {
+      window.alert(String(err?.message || err || "Install failed"));
+    }
   });
 
   btnApiKey?.addEventListener("click", () => {

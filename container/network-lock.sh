@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Allow only host bridge MCP (:7331) and passthrough proxy (:7332).
+# Allow only host bridge MCP (:7331), inspecting proxy (:7332),
+# and control plane (:3847) for Install Assistant callbacks.
 set -euo pipefail
 
 BRIDGE_HOST="${BRIDGE_HOST:-host.docker.internal}"
 BRIDGE_PORT="${BRIDGE_PORT:-7331}"
 BRIDGE_PROXY_PORT="${BRIDGE_PROXY_PORT:-7332}"
+CONTROL_PORT="${CONTROL_PORT:-3847}"
 
 if ! command -v iptables >/dev/null 2>&1; then
   echo "[network-lock] iptables not available"
@@ -24,6 +26,7 @@ iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
 iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
 iptables -A OUTPUT -d "$BRIDGE_IP" -p tcp --dport "$BRIDGE_PORT" -j ACCEPT
 iptables -A OUTPUT -d "$BRIDGE_IP" -p tcp --dport "$BRIDGE_PROXY_PORT" -j ACCEPT
+iptables -A OUTPUT -d "$BRIDGE_IP" -p tcp --dport "$CONTROL_PORT" -j ACCEPT
 iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 iptables -A OUTPUT -j DROP
 
@@ -32,4 +35,4 @@ if [[ -w /proc/sys/kernel/yama/ptrace_scope ]]; then
   echo 1 > /proc/sys/kernel/yama/ptrace_scope || true
 fi
 
-echo "[network-lock] egress locked to ${BRIDGE_IP}:{${BRIDGE_PORT},${BRIDGE_PROXY_PORT}}"
+echo "[network-lock] egress locked to ${BRIDGE_IP}:{${BRIDGE_PORT},${BRIDGE_PROXY_PORT},${CONTROL_PORT}}"

@@ -25,6 +25,7 @@ import {
   listWorkspaceDownloadPackages,
   installAgentFromWorkspaceDownload,
   installAgentFromHostArchive,
+  installAgentFromWorkspacePath,
 } from "../lib/workspace-install.js";
 import {
   requestOpenInstallAssistant,
@@ -122,6 +123,15 @@ export const startControlPlane = ({ port = 3847 } = {}) => {
       return res.status(400).json({ ok: false, error: "hostPath required" });
     }
     const result = await installAgentFromHostArchive(hostPath);
+    res.status(result.ok ? 200 : 500).json(result);
+  });
+
+  app.post("/api/agents/install-from-workspace-path", async (req, res) => {
+    const workspacePath = req.body?.path || req.body?.workspacePath;
+    if (!workspacePath) {
+      return res.status(400).json({ ok: false, error: "path required" });
+    }
+    const result = await installAgentFromWorkspacePath(workspacePath);
     res.status(result.ok ? 200 : 500).json(result);
   });
 

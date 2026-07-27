@@ -27,7 +27,8 @@ pkill -x zenity >/dev/null 2>&1 || true
 pkill -u "$(id -u)" -f '/usr/lib/chromium/chromium' >/dev/null 2>&1 || true
 sleep 0.3
 
-# Restore sensible window-manager behavior
+# Restore sensible window-manager + double-click behavior (VNC clicks need
+# a larger distance/time window or word/URL selection fails).
 xfconf-query -c xfwm4 -p /general/click_to_focus -s true 2>/dev/null || true
 xfconf-query -c xfwm4 -p /general/raise_on_click -s true 2>/dev/null || true
 xfconf-query -c xfwm4 -p /general/raise_with_any_button -s true 2>/dev/null || true
@@ -35,6 +36,28 @@ xfconf-query -c xfwm4 -p /general/focus_delay -s 0 2>/dev/null || true
 xfconf-query -c xfwm4 -p /general/button_layout -s "O|HMC" 2>/dev/null || true
 # Do NOT set easy_click to Super — that breaks normal single-clicks.
 xfconf-query -c xfwm4 -p /general/easy_click -s None 2>/dev/null || true
+# VNC/scaled viewers need a generous window — tiny defaults make word/URL
+# selection look like "only part of the text" or fail entirely.
+xfconf-query -c xsettings -p /Net/DoubleClickTime -n -t int -s 900 2>/dev/null || \
+  xfconf-query -c xsettings -p /Net/DoubleClickTime -s 900 2>/dev/null || true
+xfconf-query -c xsettings -p /Net/DoubleClickDistance -n -t int -s 48 2>/dev/null || \
+  xfconf-query -c xsettings -p /Net/DoubleClickDistance -s 48 2>/dev/null || true
+
+# Chromium (GTK) reads these independently of xfsettings.
+mkdir -p "$HOME/.config/gtk-3.0"
+if [[ -f "$HOME/.config/gtk-3.0/settings.ini" ]]; then
+  grep -q '^gtk-double-click-time=' "$HOME/.config/gtk-3.0/settings.ini" 2>/dev/null && \
+    sed -i 's/^gtk-double-click-time=.*/gtk-double-click-time=900/' "$HOME/.config/gtk-3.0/settings.ini" || \
+    printf '\ngtk-double-click-time=900\ngtk-double-click-distance=48\n' >>"$HOME/.config/gtk-3.0/settings.ini"
+  grep -q '^gtk-double-click-distance=' "$HOME/.config/gtk-3.0/settings.ini" 2>/dev/null && \
+    sed -i 's/^gtk-double-click-distance=.*/gtk-double-click-distance=48/' "$HOME/.config/gtk-3.0/settings.ini" || true
+else
+  cat >"$HOME/.config/gtk-3.0/settings.ini" <<'EOF'
+[Settings]
+gtk-double-click-time=900
+gtk-double-click-distance=48
+EOF
+fi
 
 # Restart window manager with session env
 pkill -x xfwm4 >/dev/null 2>&1 || true

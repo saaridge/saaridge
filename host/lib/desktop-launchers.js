@@ -4,7 +4,7 @@ import { logStep } from "./logger.js";
 const INSTALL_DESKTOP_NAME = "Install Assistant.desktop";
 
 /**
- * Desktop launcher that only opens the Downloads folder.
+ * Desktop launcher: zenity file picker → install selected package.
  */
 export const ensureInstallAssistantLauncher = async () => {
   if (!(await containerRunning())) return { ok: false };
@@ -18,23 +18,28 @@ cat > "$HOME/.local/share/applications/onebridge-install-assistant.desktop" <<'E
 Version=1.0
 Type=Application
 Name=Install Assistant
-Comment=Open the Downloads folder
+Comment=Choose an installer package and install it
 Exec=/bin/bash /opt/bridge/open-install-assistant.sh
-Icon=folder-download
+Icon=system-software-install
 Terminal=false
 Categories=Utility;
 StartupNotify=true
 EOF
 chmod +x "$HOME/.local/share/applications/onebridge-install-assistant.desktop"
 
+# XFCE desktop icons must be Type=Application with Exec= — Type=Link
+# application://… URIs fail with "Operation not supported".
 cat > "$HOME/Desktop/${INSTALL_DESKTOP_NAME}" <<'EOF'
 [Desktop Entry]
 Version=1.0
-Type=Link
+Type=Application
 Name=Install Assistant
-Comment=Open the Downloads folder
-Icon=folder-download
-URL=application://onebridge-install-assistant.desktop
+Comment=Choose an installer package and install it
+Exec=/bin/bash /opt/bridge/open-install-assistant.sh
+Icon=system-software-install
+Terminal=false
+Categories=Utility;
+StartupNotify=false
 EOF
 chmod +x "$HOME/Desktop/${INSTALL_DESKTOP_NAME}"
 
@@ -49,7 +54,7 @@ chown -R browser:browser "$HOME/Desktop" "$HOME/Downloads" "$HOME/.local/share/a
   if (res.code !== 0) {
     return { ok: false, error: res.stderr || res.stdout };
   }
-  logStep("Install Assistant launcher ready (opens Downloads)");
+  logStep("Install Assistant launcher ready (file picker)");
   return { ok: true };
 };
 

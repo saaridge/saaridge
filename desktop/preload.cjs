@@ -7,7 +7,8 @@ contextBridge.exposeInMainWorld("onebridge", {
   showDesktop: () => ipcRenderer.invoke("onebridge:show-desktop"),
   hideDesktop: () => ipcRenderer.invoke("onebridge:hide-desktop"),
   focusDesktop: () => ipcRenderer.invoke("onebridge:focus-desktop"),
-  openInstall: () => ipcRenderer.invoke("onebridge:open-install"),
+  openInstall: () => ipcRenderer.invoke("onebridge:install-package"),
+  installPackage: () => ipcRenderer.invoke("onebridge:install-package"),
   openApiKey: () => ipcRenderer.invoke("onebridge:open-api-key"),
   onBoot: (cb) => {
     const handler = (_event, payload) => {

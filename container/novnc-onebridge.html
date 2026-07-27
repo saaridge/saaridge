@@ -30,12 +30,10 @@
   </style>
   <script type="module" crossorigin="anonymous">
     import RFB from "./core/rfb.js";
-    import KeyTable from "./core/input/keysym.js";
 
     let rfb;
     let accY = 0;
     let accX = 0;
-    const STEP = 6;
 
     const screen = document.getElementById("screen");
 
@@ -105,7 +103,12 @@
       audioWs.onerror = () => {};
     };
 
-    /* ---------------- Scroll (keys only) ---------------- */
+    /* ---------------- Scroll: real VNC wheel buttons (4/5/6/7) ---------------- */
+    // Arrow-key scrolling was unreliable (stuck modifiers / Chromium ignores
+    // arrow keys for page scroll). Use noVNC's pointer button masks instead.
+    const WHEEL_STEP = 40;
+    const WHEEL_LINE = 19;
+
     const clientToCanvas = (clientX, clientY) => {
       const canvas = rfb && rfb._canvas;
       if (!canvas) return { x: 0, y: 0 };
@@ -119,25 +122,10 @@
       };
     };
 
-    const sendKey = (keysym) => {
-      rfb.sendKey(keysym, null, true);
-      rfb.sendKey(keysym, null, false);
-    };
-
-    const sendScrollStep = (x, y, vertical, negative, strong) => {
-      if (typeof rfb._handleMouseMove === "function") {
-        rfb._handleMouseMove(x, y);
-      }
-      if (vertical) {
-        if (strong) {
-          sendKey(negative ? KeyTable.XK_Page_Up : KeyTable.XK_Page_Down);
-        } else {
-          const key = negative ? KeyTable.XK_Up : KeyTable.XK_Down;
-          sendKey(key);
-          sendKey(key);
-        }
-      } else {
-        sendKey(negative ? KeyTable.XK_Left : KeyTable.XK_Right);
+    const clickWheelButton = (x, y, bmask) => {
+      if (typeof rfb._handleMouseButton === "function") {
+        rfb._handleMouseButton(x, y, true, bmask);
+        rfb._handleMouseButton(x, y, false, bmask);
       }
     };
 
@@ -147,32 +135,31 @@
       ev.stopPropagation();
       ev.stopImmediatePropagation();
 
-      rfb.focus();
+      try { rfb.focus(); } catch (_) {}
+
       let dX = ev.deltaX;
       let dY = ev.deltaY;
-      if (ev.deltaMode === 1) {
-        dX *= 19;
-        dY *= 19;
-      } else if (ev.deltaMode === 2) {
-        dX *= 19 * 10;
-        dY *= 19 * 10;
+      if (ev.deltaMode !== 0) {
+        dX *= WHEEL_LINE;
+        dY *= WHEEL_LINE;
       }
 
       accX += dX;
       accY += dY;
       const { x, y } = clientToCanvas(ev.clientX, ev.clientY);
-      const strong = Math.abs(dY) >= 40 || Math.abs(dX) >= 40;
 
       let steps = 0;
-      while (Math.abs(accY) >= STEP) {
-        sendScrollStep(x, y, true, accY < 0, strong);
-        accY += accY < 0 ? STEP : -STEP;
+      while (Math.abs(accY) >= WHEEL_STEP) {
+        // noVNC: button4 = 1<<3 (up), button5 = 1<<4 (down)
+        clickWheelButton(x, y, accY < 0 ? (1 << 3) : (1 << 4));
+        accY += accY < 0 ? WHEEL_STEP : -WHEEL_STEP;
         steps += 1;
         if (steps > 40) { accY = 0; break; }
       }
-      while (Math.abs(accX) >= STEP) {
-        sendScrollStep(x, y, false, accX < 0, strong);
-        accX += accX < 0 ? STEP : -STEP;
+      while (Math.abs(accX) >= WHEEL_STEP) {
+        // button6 = 1<<5 (left), button7 = 1<<6 (right)
+        clickWheelButton(x, y, accX < 0 ? (1 << 5) : (1 << 6));
+        accX += accX < 0 ? WHEEL_STEP : -WHEEL_STEP;
         steps += 1;
         if (steps > 40) { accX = 0; break; }
       }
@@ -180,6 +167,8 @@
 
     const armWheel = () => {
       const canvas = rfb && rfb._canvas;
+      // Prefer our handler (capture on document) so Electron trackpad
+      // events are not lost; detach stock handler to avoid double scroll.
       if (canvas && rfb._eventHandlers?.handleWheel) {
         canvas.removeEventListener("wheel", rfb._eventHandlers.handleWheel);
       }
@@ -332,8 +321,9 @@
     if (typeof ResizeObserver !== "undefined") {
       new ResizeObserver(() => scheduleSync(150)).observe(screen);
     }
-    // Safety net: if FB and pane drift, heal within a couple seconds.
-    setInterval(() => scheduleSync(0), 2000);
+    // Safety net: if FB and pane drift, heal occasionally (not every 2s —
+    // frequent resizes break double-click text selection).
+    setInterval(() => scheduleSync(0), 8000);
 
     const armAudioOnGesture = () => {
       void ensureAudioContext();

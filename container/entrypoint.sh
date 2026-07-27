@@ -48,8 +48,7 @@ fi
   DISPLAY=:1 xsetroot -solid "#1a2f28" 2>/dev/null || true
 
   if command -v x11vnc >/dev/null 2>&1 && ! pgrep -x x11vnc >/dev/null 2>&1; then
-    # Wheel scrolling is handled in novnc-onebridge.html via key events.
-    # Keep pointer injection reliable; do not remap buttons (conflicts with viewer keys).
+    # Wheel buttons 4/5 come from noVNC pointer events — keep injection on.
     x11vnc -display :1 -forever -shared -rfbport 5900 -nopw \
       -noncache -modtweak -xkb -noxdamage -noscrollcopyrect \
       -always_inject -xrandr resize \
