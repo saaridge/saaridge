@@ -14,14 +14,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-bin \
     zenity \
     python3 \
+    fuse3 \
+    python3-fuse \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -m -s /bin/bash browser \
-    && mkdir -p /opt/agents /opt/bridge /tmp/agent-scratch \
+    && mkdir -p /opt/agents /opt/bridge /tmp/agent-scratch /host \
     && chown root:root /opt/bridge \
     && chown -R browser:browser /home/browser \
     && echo 'browser ALL=(root) NOPASSWD: /opt/bridge/uninstall-workspace-app.sh' \
          > /etc/sudoers.d/onebridge-uninstall \
-    && chmod 440 /etc/sudoers.d/onebridge-uninstall
+    && chmod 440 /etc/sudoers.d/onebridge-uninstall \
+    && echo 'user_allow_other' >> /etc/fuse.conf
 
 WORKDIR /opt/bridge
 
@@ -47,6 +50,8 @@ COPY container/workspace-ops-client.py /opt/bridge/workspace-ops-client.py
 COPY container/repair-desktop.sh /opt/bridge/repair-desktop.sh
 COPY container/dedupe-xfce-panel.sh /opt/bridge/dedupe-xfce-panel.sh
 COPY container/host-bin/ /opt/bridge/host-bin/
+COPY container/hostfs-fuse.py /opt/bridge/hostfs-fuse.py
+COPY container/hostfs-watchdog.sh /opt/bridge/hostfs-watchdog.sh
 COPY container/trust-mitm-ca.sh /usr/local/bin/trust-mitm-ca.sh
 COPY container/start-audio.sh /usr/local/bin/start-audio.sh
 COPY container/novnc-onebridge.html /usr/share/novnc/novnc-onebridge.html
@@ -65,6 +70,8 @@ RUN chmod +x /opt/bridge/bridge-browser.sh /opt/bridge/launch-browser.sh \
       /opt/bridge/workspace-ops-client.py \
       /opt/bridge/repair-desktop.sh \
       /opt/bridge/dedupe-xfce-panel.sh \
+      /opt/bridge/hostfs-fuse.py \
+      /opt/bridge/hostfs-watchdog.sh \
       /opt/bridge/agent-env.sh /opt/bridge/host-bin/* \
       /usr/local/bin/network-lock.sh /usr/local/bin/start-desktop.sh \
       /usr/local/bin/start-audio.sh /usr/local/bin/trust-mitm-ca.sh \

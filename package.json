@@ -12,7 +12,8 @@
     "container:build": "docker compose build",
     "container:up": "docker compose up -d --no-build",
     "container:down": "docker compose down",
-    "logs": "docker compose logs -f agent-box"
+    "logs": "docker compose logs -f agent-box",
+    "test:data-plane": "node scripts/test-data-plane.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",

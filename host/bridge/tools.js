@@ -1,44 +1,15 @@
-import fs from "node:fs";
 import os from "node:os";
-import path from "node:path";
 import { run } from "../lib/docker.js";
 import { logBridge } from "../lib/logger.js";
 import { getTools, listAllTools } from "../lib/state.js";
+import * as dataApi from "./data/api.js";
+import { audit } from "./data/audit.js";
+import { getRoots } from "./data/api.js";
 
 const textResult = (text, isError = false) => ({
   content: [{ type: "text", text }],
   isError,
 });
-
-/** Expand ~ and relative paths against the HOST home — agents should use host paths. */
-const resolveHostPath = (input) => {
-  if (input == null || input === "") {
-    return os.homedir();
-  }
-  let p = String(input);
-  if (p === "~") return os.homedir();
-  if (p.startsWith("~/")) return path.join(os.homedir(), p.slice(2));
-  if (!path.isAbsolute(p)) return path.resolve(os.homedir(), p);
-  return path.resolve(p);
-};
-
-/**
- * Optional path allowlist on agent.policy.paths (prefix match).
- * Empty / missing = allow all (prototype). Never allow escaping via .. after resolve.
- */
-const assertPathAllowed = (agent, hostPath) => {
-  const resolved = path.resolve(hostPath);
-  const allow = agent?.policy?.paths;
-  if (!Array.isArray(allow) || allow.length === 0) return resolved;
-  const ok = allow.some((prefix) => {
-    const base = path.resolve(resolveHostPath(prefix));
-    return resolved === base || resolved.startsWith(base + path.sep);
-  });
-  if (!ok) {
-    throw new Error(`Path denied by policy: ${resolved}`);
-  }
-  return resolved;
-};
 
 /**
  * Optional URL allowlist on agent.policy.urls (prefix / host match).
@@ -102,7 +73,7 @@ export const invokeTool = async (name, args = {}, meta = {}) => {
 
   try {
     if (tool.kind === "custom") {
-      return await invokeCustom(tool, args);
+      return await invokeCustom(tool, args, agent);
     }
     return await invokeBuiltin(name, args, agent);
   } catch (err) {
@@ -114,6 +85,7 @@ export const invokeTool = async (name, args = {}, meta = {}) => {
 const invokeBuiltin = async (name, args, agent) => {
   switch (name) {
     case "host_info": {
+      const roots = agent ? getRoots(agent) : null;
       return textResult(
         JSON.stringify(
           {
@@ -122,8 +94,16 @@ const invokeBuiltin = async (name, args, agent) => {
             homedir: os.homedir(),
             hostname: os.hostname(),
             cwd: process.cwd(),
+            oneBridge: roots
+              ? {
+                  workspace: roots.workspace,
+                  shared: roots.shared,
+                  readWrite: roots.readWrite,
+                  readOnly: roots.readOnly,
+                }
+              : null,
             note:
-              "All read_file / write_file / terminal_exec / http_request tools run on this HOST. Container processes have no direct internet; use these tools or HTTP_PROXY.",
+              "File tools use the OneBridge data plane (~/OneBridge/...). Container apps use /host via FUSE. Network goes through the bridge proxy.",
           },
           null,
           2,
@@ -131,45 +111,57 @@ const invokeBuiltin = async (name, args, agent) => {
       );
     }
     case "terminal_exec": {
-      const cwd = args.cwd
-        ? assertPathAllowed(agent, resolveHostPath(args.cwd))
-        : os.homedir();
+      // Privileged: cwd must stay under allowlisted OneBridge roots.
+      const cwd = dataApi.assertCwdAllowed(
+        agent,
+        args.cwd || getRoots(agent).workspace,
+      );
+      audit({
+        plane: "data",
+        op: "terminal_exec",
+        agentId: agent?.id,
+        ok: true,
+        cwd,
+        command: String(args.command || "").slice(0, 500),
+      });
       return runShell(args.command, cwd, args.timeoutMs || 60_000);
     }
     case "read_file": {
-      const filePath = assertPathAllowed(agent, resolveHostPath(args.path));
-      const encoding = args.encoding || "utf8";
-      const content = fs.readFileSync(filePath, encoding);
-      return textResult(content);
+      const result = await dataApi.read(agent, args.path, {
+        encoding: args.encoding === "base64" ? "base64" : "utf8",
+        offset: args.offset,
+        length: args.length,
+      });
+      return textResult(result.content);
     }
     case "write_file": {
-      const filePath = assertPathAllowed(agent, resolveHostPath(args.path));
-      fs.mkdirSync(path.dirname(filePath), { recursive: true });
-      fs.writeFileSync(filePath, args.content, args.encoding || "utf8");
-      return textResult(`Wrote ${filePath}`);
+      const result = await dataApi.write(agent, args.path, args.content, {
+        encoding: args.encoding || "utf8",
+        truncate: true,
+        offset: 0,
+      });
+      return textResult(`Wrote ${result.path} (${result.bytesWritten} bytes)`);
     }
     case "list_dir": {
-      const dirPath = assertPathAllowed(agent, resolveHostPath(args.path));
-      const entries = fs.readdirSync(dirPath, { withFileTypes: true }).map((e) => ({
+      const result = await dataApi.list(agent, args.path || getRoots(agent).workspace);
+      const entries = result.entries.map((e) => ({
         name: e.name,
-        type: e.isDirectory() ? "dir" : "file",
+        type: e.isDirectory ? "dir" : "file",
       }));
       return textResult(JSON.stringify(entries, null, 2));
     }
     case "stat_file": {
-      const filePath = assertPathAllowed(agent, resolveHostPath(args.path));
-      const st = fs.lstatSync(filePath);
+      const info = await dataApi.stat(agent, args.path);
       return textResult(
         JSON.stringify(
           {
-            path: filePath,
-            size: st.size,
-            isFile: st.isFile(),
-            isDirectory: st.isDirectory(),
-            isSymbolicLink: st.isSymbolicLink(),
-            mode: st.mode,
-            mtime: st.mtime.toISOString(),
-            ctime: st.ctime.toISOString(),
+            path: info.path,
+            size: info.size,
+            isFile: info.isFile,
+            isDirectory: info.isDirectory,
+            isSymbolicLink: info.isSymbolicLink,
+            mode: info.mode,
+            mtime: new Date(info.mtimeMs).toISOString(),
           },
           null,
           2,
@@ -177,11 +169,8 @@ const invokeBuiltin = async (name, args, agent) => {
       );
     }
     case "delete_path": {
-      const filePath = assertPathAllowed(agent, resolveHostPath(args.path));
-      const st = fs.lstatSync(filePath);
-      if (st.isDirectory()) fs.rmdirSync(filePath);
-      else fs.unlinkSync(filePath);
-      return textResult(`Deleted ${filePath}`);
+      const result = await dataApi.unlink(agent, args.path);
+      return textResult(`Deleted ${result.path}`);
     }
     case "http_request":
     case "open_url": {
@@ -212,7 +201,7 @@ const invokeBuiltin = async (name, args, agent) => {
   }
 };
 
-const invokeCustom = async (tool, args) => {
+const invokeCustom = async (tool, args, agent) => {
   let command = tool.commandTemplate || "";
   for (const [key, value] of Object.entries(args || {})) {
     command = command.replaceAll(`{{${key}}}`, String(value));
@@ -220,7 +209,10 @@ const invokeCustom = async (tool, args) => {
   if (!command.trim()) {
     return textResult("Custom tool missing commandTemplate", true);
   }
-  return runShell(command, tool.cwd || os.homedir(), tool.timeoutMs || 60_000);
+  const cwd = agent
+    ? dataApi.assertCwdAllowed(agent, tool.cwd || getRoots(agent).workspace)
+    : tool.cwd || os.homedir();
+  return runShell(command, cwd, tool.timeoutMs || 60_000);
 };
 
 export const mcpToolList = (agent = null) => {
@@ -238,5 +230,7 @@ export const mcpToolList = (agent = null) => {
     },
   }));
 };
+
+export { assertUrlAllowed };
 
 export const reloadToolState = () => getTools();

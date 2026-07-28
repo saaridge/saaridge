@@ -16,9 +16,14 @@
     }
     #screen {
       position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
+      /* Electron titlebar BrowserView overlays the top; keep the VNC pane
+         below it so remote FB size matches the visible clickable area. */
+      top: var(--onebridge-titlebar, 44px);
+      left: 0;
+      right: 0;
+      bottom: 0;
+      width: auto;
+      height: auto;
       overflow: hidden;
       background: #0b0b0b;
       touch-action: none;
@@ -36,6 +41,82 @@
     let accX = 0;
 
     const screen = document.getElementById("screen");
+
+    // Sync titlebar inset with Electron shell (?titlebar=44).
+    (() => {
+      const q = Number(new URLSearchParams(location.search).get("titlebar"));
+      const px = Number.isFinite(q) && q >= 0 ? q : 44;
+      document.documentElement.style.setProperty("--onebridge-titlebar", `${px}px`);
+    })();
+
+    /**
+     * Electron main process forwards keys here (before-input-event → RFB.sendKey).
+     * Direct sendKey — more reliable than DOM KeyboardEvent (often untrusted/empty).
+     */
+    window.__onebridgeKey = (payload) => {
+      try {
+        const r = window.__onebridgeRfb;
+        if (!r || r._rfbConnectionState !== "connected" || r._viewOnly) {
+          return false;
+        }
+        if (typeof r.sendKey !== "function") return false;
+
+        const NAMED = {
+          Enter: 0xff0d,
+          Return: 0xff0d,
+          Backspace: 0xff08,
+          Tab: 0xff09,
+          Escape: 0xff1b,
+          Esc: 0xff1b,
+          Delete: 0xffff,
+          Home: 0xff50,
+          ArrowLeft: 0xff51,
+          ArrowUp: 0xff52,
+          ArrowRight: 0xff53,
+          ArrowDown: 0xff54,
+          PageUp: 0xff55,
+          PageDown: 0xff56,
+          End: 0xff57,
+          Insert: 0xff63,
+          " ": 0x0020,
+          Spacebar: 0x0020,
+          Shift: 0xffe1,
+          Control: 0xffe3,
+          Alt: 0xffe9,
+          Meta: 0xffeb,
+          F1: 0xffbe,
+          F2: 0xffbf,
+          F3: 0xffc0,
+          F4: 0xffc1,
+          F5: 0xffc2,
+          F6: 0xffc3,
+          F7: 0xffc4,
+          F8: 0xffc5,
+          F9: 0xffc6,
+          F10: 0xffc7,
+          F11: 0xffc8,
+          F12: 0xffc9,
+        };
+
+        const key = String(payload.key || "");
+        const code = String(payload.code || "") || undefined;
+        let keysym = NAMED[key];
+
+        if (keysym == null && key.length === 1) {
+          // Latin-1 / BMP printable (covers letters, digits, punctuation).
+          keysym = key.charCodeAt(0);
+        }
+        if (keysym == null && code.startsWith("Digit") && code.length === 6) {
+          keysym = code.charCodeAt(5); // Digit5 → '5'
+        }
+        if (keysym == null) return false;
+
+        r.sendKey(keysym, code, !!payload.down);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    };
 
     /* ---------------- Audio ---------------- */
     let audioCtx = null;
@@ -167,8 +248,6 @@
 
     const armWheel = () => {
       const canvas = rfb && rfb._canvas;
-      // Prefer our handler (capture on document) so Electron trackpad
-      // events are not lost; detach stock handler to avoid double scroll.
       if (canvas && rfb._eventHandlers?.handleWheel) {
         canvas.removeEventListener("wheel", rfb._eventHandlers.handleWheel);
       }
@@ -179,21 +258,39 @@
     };
 
     /**
-     * Adaptive desktop sizing for any viewer environment:
-     * 1) Always scaleViewport — full remote desktop fits the pane (never cropped).
-     * 2) Match remote FB to the pane CSS size when possible — 1:1 clicks.
-     * 3) If X cannot match (viewer larger than X max), keep scaling (still full view).
+     * Keep remote FB == viewer pane for true 1:1 clicks via native noVNC mouse.
+     * Do NOT inject mouse via xdotool — that fights x11vnc's pointer ownership.
      */
     let lastResizeKey = "";
     let resizeInFlight = false;
     let resizeTimer = 0;
 
     const viewerSize = () => {
-      let w = Math.floor(screen.clientWidth || window.innerWidth || 0);
-      let h = Math.floor(screen.clientHeight || window.innerHeight || 0);
+      let w = Math.floor(screen.clientWidth || 0);
+      let h = Math.floor(screen.clientHeight || 0);
+      // Fall back only if screen not laid out yet
+      if (w < 100) w = Math.floor(window.innerWidth || 1280);
+      if (h < 100) h = Math.floor(window.innerHeight || 800);
       w = Math.max(800, w - (w % 2));
       h = Math.max(600, h - (h % 2));
       return { w, h };
+    };
+
+    const applyScaleMode = () => {
+      if (!rfb) return;
+      const { w, h } = viewerSize();
+      const fbW = Number(rfb._fbWidth || 0);
+      const fbH = Number(rfb._fbHeight || 0);
+      const matched = fbW > 0 && fbH > 0 && fbW === w && fbH === h;
+      // Pixel-perfect when matched; otherwise scale-to-fit (still clickable).
+      rfb.scaleViewport = !matched;
+      rfb.clipViewport = false;
+      rfb.dragViewport = false;
+      if (typeof rfb._updateScale === "function") {
+        try {
+          rfb._updateScale();
+        } catch (_) {}
+      }
     };
 
     const syncDesktopToViewer = () => {
@@ -202,20 +299,13 @@
       const key = `${w}x${h}`;
       const fbW = Number(rfb._fbWidth || 0);
       const fbH = Number(rfb._fbHeight || 0);
-      // Already 1:1 with the pane — nothing to do.
       if (fbW === w && fbH === h) {
         lastResizeKey = key;
-        rfb.scaleViewport = true;
-        rfb.clipViewport = false;
+        applyScaleMode();
         return;
       }
       if (key === lastResizeKey && resizeInFlight) return;
-
-      // Keep scale-to-fit on so any transient mismatch never crops.
-      rfb.scaleViewport = true;
-      rfb.clipViewport = false;
-      rfb.dragViewport = false;
-
+      applyScaleMode();
       if (resizeInFlight) return;
       resizeInFlight = true;
       fetch("http://127.0.0.1:3847/api/ui/resize-desktop", {
@@ -226,13 +316,7 @@
         .then((r) => r.json().catch(() => ({})))
         .then((j) => {
           if (j && j.ok) lastResizeKey = key;
-          rfb.scaleViewport = true;
-          rfb.clipViewport = false;
-          if (typeof rfb._updateScale === "function") {
-            try { rfb._updateScale(); } catch (_) {}
-          } else if (typeof rfb._adjustScale === "function") {
-            try { rfb._adjustScale(); } catch (_) {}
-          }
+          applyScaleMode();
         })
         .catch(() => {})
         .finally(() => {
@@ -261,9 +345,9 @@
       rfb = new RFB(screen, url);
       window.__onebridgeRfb = rfb;
 
-      // Critical: scale full desktop into pane (no crop). Host resize makes clicks 1:1.
-      rfb.scaleViewport = true;
-      rfb.resizeSession = false; // host docker resize is authoritative
+      // Native noVNC mouse — required (x11vnc owns the X pointer).
+      rfb.scaleViewport = false;
+      rfb.resizeSession = false;
       rfb.clipViewport = false;
       rfb.dragViewport = false;
       rfb.focusOnClick = true;
@@ -272,7 +356,7 @@
       rfb.compressionLevel = 2;
       rfb.showDotCursor = true;
 
-      const grabKeyboard = () => {
+      const grabKeyboardLocal = () => {
         try { screen.focus({ preventScroll: true }); } catch (_) { screen.focus(); }
         try { window.focus(); } catch (_) {}
         if (rfb) {
@@ -289,25 +373,22 @@
       };
 
       rfb.addEventListener("connect", () => {
-        // Ensure canvas can receive key events in Electron BrowserView.
         try {
           if (rfb._canvas) rfb._canvas.tabIndex = 0;
         } catch (_) {}
-        grabKeyboard();
+        grabKeyboardLocal();
         armWheel();
         scheduleSync(50);
         setTimeout(armWheel, 100);
         setTimeout(() => scheduleSync(0), 350);
-        setTimeout(grabKeyboard, 200);
+        setTimeout(grabKeyboardLocal, 200);
         connectAudio();
       });
       rfb.addEventListener("desktopresize", () => {
-        // Remote FB changed — keep scale-to-fit accurate and re-sync if needed.
-        rfb.scaleViewport = true;
-        rfb.clipViewport = false;
         lastResizeKey = "";
+        applyScaleMode();
         scheduleSync(80);
-        setTimeout(grabKeyboard, 60);
+        setTimeout(grabKeyboardLocal, 60);
       });
       rfb.addEventListener("disconnect", (e) => {
         if (!e.detail.clean) setTimeout(connect, 800);
@@ -331,22 +412,38 @@
     };
     const grabKeyboard = () => {
       try { screen.focus({ preventScroll: true }); } catch (_) { screen.focus(); }
-      if (rfb) {
-        try { rfb.focus(); } catch (_) {}
-      }
+      try { window.focus(); } catch (_) {}
+      if (!rfb) return;
+      try {
+        if (rfb._canvas) {
+          rfb._canvas.tabIndex = 0;
+        }
+        // noVNC Keyboard must listen on window so Electron key events reach it.
+        if (rfb._keyboard) {
+          try { rfb._keyboard.ungrab(); } catch (_) {}
+          rfb._keyboard._target = window;
+          try { rfb._keyboard.grab(); } catch (_) {}
+        }
+        if (typeof rfb.focus === "function") rfb.focus();
+      } catch (_) {}
     };
     screen.addEventListener("pointerdown", () => {
       grabKeyboard();
       armAudioOnGesture();
     });
-    // If a key arrives while canvas isn't focused, focus then — rare after iframe focus fix.
+    screen.addEventListener("pointerup", () => {
+      grabKeyboard();
+    });
+    // Ensure first key after focus still reaches noVNC.
     window.addEventListener(
       "keydown",
-      () => {
+      (ev) => {
         armAudioOnGesture();
         if (!rfb) return;
         const active = document.activeElement;
-        if (active !== rfb._canvas && active !== screen) grabKeyboard();
+        if (active !== rfb._canvas && active !== screen && active !== document.body) {
+          grabKeyboard();
+        }
       },
       true,
     );

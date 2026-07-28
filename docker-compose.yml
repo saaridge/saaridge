@@ -1,5 +1,8 @@
 # Egress is blocked inside the container via iptables (network-lock.sh),
-# allowing only host.docker.internal:7331 (MCP) and :7332 (HTTP proxy).
+# allowing only host.docker.internal:7331 (MCP/Data API) and :7332 (HTTP proxy).
+#
+# Host project data is NOT bind-mounted. Container apps use /host (FUSE → Data API).
+# Docker Desktop: requires /dev/fuse; SYS_ADMIN is needed for FUSE mounts.
 
 services:
   agent-box:
@@ -24,11 +27,15 @@ services:
       BROWSER: /opt/bridge/bridge-browser.sh
       DISPLAY: ":1"
       RESOLUTION: 1920x1080x24
+      HOSTFS_MOUNT: /host
     shm_size: "1gb"
+    devices:
+      - /dev/fuse
     cap_add:
       - NET_ADMIN
+      - SYS_ADMIN
     security_opt:
-      - no-new-privileges:true
+      - apparmor:unconfined
     tmpfs:
       - /tmp:size=512m,mode=1777
     restart: unless-stopped

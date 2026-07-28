@@ -11,10 +11,16 @@ rm -f /opt/bridge/token
 
 if [[ "$(id -u)" -eq 0 ]]; then
   /usr/local/bin/network-lock.sh || true
-  mkdir -p /var/run/bridge
+  mkdir -p /var/run/bridge /host
   if [[ -x /opt/bridge/workspace-ops-daemon.py ]]; then
     pkill -f 'workspace-ops-daemon.py' 2>/dev/null || true
     nohup python3 /opt/bridge/workspace-ops-daemon.py >/tmp/workspace-ops-daemon.log 2>&1 &
+  fi
+  # Start FUSE hostfs watchdog early; it waits for credentials then mounts /host
+  if [[ -x /opt/bridge/hostfs-watchdog.sh ]]; then
+    pkill -f 'hostfs-watchdog.sh' 2>/dev/null || true
+    pkill -f 'hostfs-fuse.py' 2>/dev/null || true
+    nohup /opt/bridge/hostfs-watchdog.sh >/tmp/hostfs-watchdog.log 2>&1 &
   fi
 fi
 

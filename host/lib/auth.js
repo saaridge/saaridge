@@ -1,7 +1,20 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
 import { getAgents, saveAgents } from "./state.js";
+import { defaultDataPolicy } from "../bridge/data/policy.js";
+import { workspaceRootFor, sharedRoot, oneBridgeRoot } from "../bridge/data/paths.js";
 
 const NEXT_UID_START = 12000;
+
+/** Ensure ~/OneBridge/workspaces/<id> and shared exist on the host. */
+export const provisionOneBridgeRoots = (agentId) => {
+  const root = oneBridgeRoot();
+  const ws = workspaceRootFor(agentId);
+  const shared = sharedRoot();
+  fs.mkdirSync(ws, { recursive: true });
+  fs.mkdirSync(shared, { recursive: true });
+  return { root, workspace: ws, shared };
+};
 
 export const createAgentCredential = ({ id, name }) => {
   const state = getAgents();
@@ -12,6 +25,7 @@ export const createAgentCredential = ({ id, name }) => {
 
   const token = crypto.randomBytes(32).toString("hex");
   const username = `u${uid}`;
+  const roots = provisionOneBridgeRoots(id);
   const record = {
     id,
     name,
@@ -19,13 +33,8 @@ export const createAgentCredential = ({ id, name }) => {
     username,
     token,
     localProxyPort: 18000 + (uid % 1000),
-    policy: {
-      // Passthrough for now — hooks for later allow/deny.
-      allowAllProxy: true,
-      tools: null, // null = all tools
-      paths: null,
-      urls: null,
-    },
+    policy: defaultDataPolicy(id),
+    hostWorkspace: roots.workspace,
     installedAt: new Date().toISOString(),
     status: "installing",
   };

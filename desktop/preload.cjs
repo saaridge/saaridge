@@ -8,6 +8,12 @@ contextBridge.exposeInMainWorld("onebridge", {
   hideDesktop: () => ipcRenderer.invoke("onebridge:hide-desktop"),
   focusDesktop: () => ipcRenderer.invoke("onebridge:focus-desktop"),
   openApiKey: () => ipcRenderer.invoke("onebridge:open-api-key"),
+  /** Inject mouse into remote X (bypasses noVNC coordinate bugs). */
+  injectMouse: (payload) => {
+    try {
+      ipcRenderer.send("onebridge:mouse", payload);
+    } catch (_) {}
+  },
   onBoot: (cb) => {
     const handler = (_event, payload) => {
       try {

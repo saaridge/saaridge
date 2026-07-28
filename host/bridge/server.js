@@ -15,6 +15,11 @@ import {
   installAgentFromWorkspaceDownload,
 } from "../lib/workspace-install.js";
 import { openInstallAssistantInDesktop } from "../lib/ui-commands.js";
+import * as dataApi from "./data/api.js";
+import { readAudit, auditMetrics } from "./data/audit.js";
+import { limitsSnapshot } from "./data/limits.js";
+
+const FS_VERSION = "1";
 
 const createMcpServer = (agent) => {
   const server = new Server(
@@ -45,22 +50,195 @@ const authAgent = (req, res, next) => {
   return next();
 };
 
+const sendFsError = (res, err) => {
+  const code = err?.code;
+  const status =
+    code === "EACCES" || code === "EPERM"
+      ? 403
+      : code === "ENOENT"
+        ? 404
+        : code === "EFBIG"
+          ? 413
+          : code === "EBUSY" || code === "ETIMEDOUT"
+            ? 429
+            : 500;
+  res.setHeader("X-OneBridge-FS", FS_VERSION);
+  res.status(status).json({
+    ok: false,
+    error: err?.message || String(err),
+    code: code || "ERROR",
+  });
+};
+
+const mountFsApi = (app) => {
+  app.get("/v1/fs/health", (_req, res) => {
+    res.setHeader("X-OneBridge-FS", FS_VERSION);
+    res.json({ ...dataApi.health(), limits: limitsSnapshot(), audit: auditMetrics() });
+  });
+
+  app.get("/v1/fs/stat", authAgent, async (req, res) => {
+    try {
+      const info = await dataApi.stat(req.agent, req.query.path);
+      res.setHeader("X-OneBridge-FS", FS_VERSION);
+      res.json({ ok: true, ...info });
+    } catch (err) {
+      sendFsError(res, err);
+    }
+  });
+
+  app.get("/v1/fs/list", authAgent, async (req, res) => {
+    try {
+      const result = await dataApi.list(req.agent, req.query.path);
+      res.setHeader("X-OneBridge-FS", FS_VERSION);
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      sendFsError(res, err);
+    }
+  });
+
+  app.get("/v1/fs/read", authAgent, async (req, res) => {
+    try {
+      const offset = req.query.offset != null ? Number(req.query.offset) : 0;
+      const length =
+        req.query.length != null && req.query.length !== ""
+          ? Number(req.query.length)
+          : undefined;
+      const result = await dataApi.read(req.agent, req.query.path, {
+        offset,
+        length,
+        encoding: "buffer",
+      });
+      res.setHeader("X-OneBridge-FS", FS_VERSION);
+      res.setHeader("Content-Type", "application/octet-stream");
+      res.setHeader("X-OneBridge-Bytes", String(result.bytes));
+      res.setHeader("X-OneBridge-Path", result.path);
+      res.status(200).end(result.data);
+    } catch (err) {
+      sendFsError(res, err);
+    }
+  });
+
+  app.put(
+    "/v1/fs/write",
+    authAgent,
+    express.raw({ type: "*/*", limit: "52mb" }),
+    async (req, res) => {
+      try {
+        const offset = req.query.offset != null ? Number(req.query.offset) : 0;
+        const truncate =
+          req.query.truncate === "1" ||
+          req.query.truncate === "true" ||
+          (offset === 0 && req.query.truncate !== "0");
+        const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+        const result = await dataApi.write(req.agent, req.query.path, body, {
+          offset,
+          truncate,
+          encoding: "buffer",
+        });
+        res.setHeader("X-OneBridge-FS", FS_VERSION);
+        res.json({ ok: true, ...result });
+      } catch (err) {
+        sendFsError(res, err);
+      }
+    },
+  );
+
+  app.post("/v1/fs/truncate", authAgent, async (req, res) => {
+    try {
+      const result = await dataApi.truncate(
+        req.agent,
+        req.body?.path || req.query.path,
+        req.body?.size ?? req.query.size ?? 0,
+      );
+      res.setHeader("X-OneBridge-FS", FS_VERSION);
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      sendFsError(res, err);
+    }
+  });
+
+  app.post("/v1/fs/mkdir", authAgent, async (req, res) => {
+    try {
+      const result = await dataApi.mkdir(
+        req.agent,
+        req.body?.path || req.query.path,
+      );
+      res.setHeader("X-OneBridge-FS", FS_VERSION);
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      sendFsError(res, err);
+    }
+  });
+
+  app.delete("/v1/fs/path", authAgent, async (req, res) => {
+    try {
+      const result = await dataApi.unlink(
+        req.agent,
+        req.body?.path || req.query.path,
+      );
+      res.setHeader("X-OneBridge-FS", FS_VERSION);
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      sendFsError(res, err);
+    }
+  });
+
+  app.post("/v1/fs/rename", authAgent, async (req, res) => {
+    try {
+      const result = await dataApi.rename(
+        req.agent,
+        req.body?.from || req.query.from,
+        req.body?.to || req.query.to,
+      );
+      res.setHeader("X-OneBridge-FS", FS_VERSION);
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      sendFsError(res, err);
+    }
+  });
+
+  app.get("/v1/fs/roots", authAgent, (req, res) => {
+    res.setHeader("X-OneBridge-FS", FS_VERSION);
+    res.json({ ok: true, ...dataApi.getRoots(req.agent) });
+  });
+
+  app.get("/v1/audit", authAgent, (req, res) => {
+    const limit = Number(req.query.limit) || 200;
+    const agentId =
+      req.query.all === "1" ? null : req.query.agentId || req.agent.id;
+    res.json({
+      ok: true,
+      events: readAudit(limit, agentId),
+      metrics: auditMetrics(),
+    });
+  });
+};
+
 export const startBridge = ({
   port = 7331,
   proxyPort = 7332,
 } = {}) => {
   const app = express();
-  app.use(express.json({ limit: "10mb" }));
+  // JSON for most routes; /v1/fs/write uses express.raw mounted above.
+  app.use((req, res, next) => {
+    if (req.method === "PUT" && req.path.startsWith("/v1/fs/write")) {
+      return next();
+    }
+    return express.json({ limit: "10mb" })(req, res, next);
+  });
 
   app.get("/health", (_req, res) =>
-    res.json({ ok: true, service: "host-bridge", proxyPort }),
+    res.json({ ok: true, service: "host-bridge", proxyPort, fs: FS_VERSION }),
   );
+
+  mountFsApi(app);
 
   app.get("/v1/whoami", authAgent, (req, res) => {
     res.json({
       agentId: req.agent.id,
       name: req.agent.name,
       uid: req.agent.uid,
+      roots: dataApi.getRoots(req.agent),
     });
   });
 
@@ -69,7 +247,6 @@ export const startBridge = ({
   });
 
   app.post("/v1/tools/:name/invoke", authAgent, async (req, res) => {
-    // Ignore body.agentId — identity is only from the bearer token.
     const result = await invokeTool(req.params.name, req.body?.arguments || {}, {
       agent: req.agent,
     });
@@ -108,7 +285,6 @@ export const startBridge = ({
     });
   });
 
-  // Desktop-user install flow (Downloads → install). Restricted to workspace desktop.
   const requireDesktop = (req, res, next) => {
     if (req.agent?.id !== DESKTOP_AGENT_ID && req.agent?.kind !== "desktop") {
       return res.status(403).json({

@@ -48,6 +48,22 @@ if [[ -S "${PULSE_RUNTIME_PATH}/native" ]]; then
   export PULSE_SERVER="unix:${PULSE_RUNTIME_PATH}/native"
 fi
 
-# Hint for agents: filesystem + privileged network live on the HOST via MCP
-export ONEBRIDGE_HOST_VIA="mcp+proxy"
+# Hint for agents: filesystem + privileged network live on the HOST via MCP/FUSE
+export ONEBRIDGE_HOST_VIA="mcp+proxy+fuse"
 export BROWSER="${BROWSER:-/opt/bridge/bridge-browser.sh}"
+
+# Mediated host project tree (FUSE → Data API → ~/OneBridge on the host)
+export ONEBRIDGE_HOST_MOUNT="${ONEBRIDGE_HOST_MOUNT:-/host}"
+export ONEBRIDGE_SHARED="${ONEBRIDGE_SHARED:-/host/shared}"
+if [[ -n "$_CRED" && -f "$_CRED" ]]; then
+  _AGENT_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("agentId",""))' "$_CRED" 2>/dev/null || true)"
+  _WS_HINT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("hostWorkspace",""))' "$_CRED" 2>/dev/null || true)"
+  if [[ -n "${_WS_HINT:-}" ]]; then
+    export ONEBRIDGE_PROJECTS="$_WS_HINT"
+  elif [[ -n "${_AGENT_ID:-}" ]]; then
+    export ONEBRIDGE_PROJECTS="/host/workspaces/${_AGENT_ID}"
+  fi
+fi
+export ONEBRIDGE_PROJECTS="${ONEBRIDGE_PROJECTS:-/host/workspaces/workspace-desktop}"
+# Cursor / editors: open projects under this path (not container-local copies)
+export CURSOR_PROJECT_DIR="${CURSOR_PROJECT_DIR:-$ONEBRIDGE_PROJECTS}"

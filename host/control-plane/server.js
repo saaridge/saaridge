@@ -35,6 +35,7 @@ import {
   consumeOpenInstallAssistant,
   openInstallAssistantInDesktop,
   resizeDesktopDisplay,
+  injectDesktopMouse,
 } from "../lib/ui-commands.js";
 
 
@@ -164,6 +165,12 @@ export const startControlPlane = ({ port = 3847 } = {}) => {
     const width = req.body?.width;
     const height = req.body?.height;
     const result = await resizeDesktopDisplay(width, height);
+    res.status(result.ok ? 200 : 500).json(result);
+  });
+
+  // Fire-and-forget mouse inject for the Electron/noVNC viewer (xdotool).
+  app.post("/api/ui/mouse", async (req, res) => {
+    const result = await injectDesktopMouse(req.body || {});
     res.status(result.ok ? 200 : 500).json(result);
   });
 

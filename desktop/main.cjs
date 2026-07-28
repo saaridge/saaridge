@@ -20,7 +20,7 @@ const fs = require("node:fs");
 
 const ROOT = path.resolve(__dirname, "..");
 const CONTROL = "http://127.0.0.1:3847";
-const DESKTOP = "http://127.0.0.1:6081/novnc-onebridge.html";
+const DESKTOP = "http://127.0.0.1:6081/novnc-onebridge.html?titlebar=44";
 const TITLEBAR_H = 44;
 
 let mainWindow = null;
@@ -131,7 +131,7 @@ const focusDesktop = () => {
 
 /** Persistent xdotool pipe — bypasses noVNC keyboard (unreliable in Electron). */
 let keyPump = null;
-let keyPumpBuf = "";
+let mousePump = null;
 
 const XDOTOOL_SPECIAL = {
   Backspace: "BackSpace",
@@ -173,9 +173,50 @@ const ensureKeyPump = () => {
   return keyPump;
 };
 
+const ensureMousePump = () => {
+  if (mousePump && !mousePump.killed) return mousePump;
+  mousePump = spawn(
+    "docker",
+    [
+      "exec",
+      "-i",
+      "-u",
+      "browser",
+      "-e",
+      "DISPLAY=:1",
+      "agent-bridge-box",
+      "/opt/bridge/mouse-pump.sh",
+    ],
+    { stdio: ["pipe", "ignore", "ignore"] },
+  );
+  mousePump.on("exit", () => {
+    mousePump = null;
+  });
+  return mousePump;
+};
+
+const injectMouseToX = (payload) => {
+  if (!desktopLive || !payload) return;
+  const pump = ensureMousePump();
+  if (!pump?.stdin?.writable) return;
+  const type = String(payload.type || "");
+  const x = Math.round(Number(payload.x) || 0);
+  const y = Math.round(Number(payload.y) || 0);
+  const button = Math.max(1, Math.min(5, Number(payload.button) || 1));
+  let line = "";
+  if (type === "move") line = `MOVE ${x} ${y}\n`;
+  else if (type === "down") line = `MOVE ${x} ${y}\nDOWN ${button}\n`;
+  else if (type === "up") line = `MOVE ${x} ${y}\nUP ${button}\n`;
+  else if (type === "click") line = `MOVE ${x} ${y}\nCLICK ${button}\n`;
+  else return;
+  try {
+    pump.stdin.write(line);
+  } catch (_) {}
+};
+
+/** Original path: Electron steals keys → xdotool into focused X window. */
 const injectKeyToX = (input) => {
   if (!desktopLive) return;
-  // xdotool generates press+release; only act on keyDown.
   if (input.type !== "keyDown") return;
   if (input.isAutoRepeat) return;
   if (
@@ -193,7 +234,6 @@ const injectKeyToX = (input) => {
   const mods = [];
   if (input.control) mods.push("ctrl");
   if (input.alt) mods.push("alt");
-  // Meta/Cmd on Mac → ctrl for Linux browser shortcuts often expected as ctrl
   if (input.meta) mods.push("ctrl");
 
   let line;
@@ -223,7 +263,6 @@ const attachKeyBridge = (webContents) => {
     ) {
       return;
     }
-    // Steal the event from Chromium/noVNC and inject into the remote X session.
     event.preventDefault();
     forwardingKeys = true;
     try {
@@ -248,7 +287,6 @@ const showTitleBar = () => {
     titleBarView.setBackgroundColor("#121a17");
     titleBarView.webContents.setIgnoreMenuShortcuts(true);
     void titleBarView.webContents.loadFile(path.join(__dirname, "titlebar.html"));
-    // Typing while the titlebar has focus must still reach the desktop.
     titleBarView.webContents.on("before-input-event", (event, input) => {
       if (!desktopLive) return;
       if (input.type !== "keyDown" && input.type !== "keyUp") return;
@@ -530,6 +568,10 @@ ipcMain.handle("onebridge:hide-desktop", async () => {
 ipcMain.handle("onebridge:focus-desktop", async () => {
   focusDesktop();
   return { ok: true };
+});
+
+ipcMain.on("onebridge:mouse", (_event, payload) => {
+  injectMouseToX(payload);
 });
 
 ipcMain.handle("onebridge:open-api-key", async () => {

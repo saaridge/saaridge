@@ -6,6 +6,8 @@ import { dockerCp, dockerExec, containerRunning } from "./docker.js";
 import { logStep, logError } from "./logger.js";
 import { ROOT, CONTAINER_NAME } from "./paths.js";
 import { clearDesktopKeepInstall, restoreInstalledAppIcons } from "./desktop-launchers.js";
+import { defaultDataPolicy } from "../bridge/data/policy.js";
+import { provisionOneBridgeRoots } from "./auth.js";
 
 export const DESKTOP_AGENT_ID = "workspace-desktop";
 export const DESKTOP_PROXY_PORT = 17999;
@@ -15,6 +17,7 @@ export const ensureDesktopCredential = () => {
   const state = getAgents();
   state.agents = state.agents || [];
   let agent = state.agents.find((a) => a.id === DESKTOP_AGENT_ID);
+  const roots = provisionOneBridgeRoots(DESKTOP_AGENT_ID);
   if (!agent) {
     agent = {
       id: DESKTOP_AGENT_ID,
@@ -24,18 +27,28 @@ export const ensureDesktopCredential = () => {
       token: crypto.randomBytes(32).toString("hex"),
       localProxyPort: DESKTOP_PROXY_PORT,
       kind: "desktop",
-      policy: {
-        allowAllProxy: true,
-        tools: null,
-        paths: null,
-        urls: null,
-      },
+      policy: defaultDataPolicy(DESKTOP_AGENT_ID),
+      hostWorkspace: roots.workspace,
       status: "desktop",
       installedAt: new Date().toISOString(),
     };
     state.agents.push(agent);
     saveAgents(state);
     logStep("Created workspace desktop bridge identity");
+  } else {
+    let dirty = false;
+    if (!agent.policy?.paths?.length) {
+      agent.policy = { ...defaultDataPolicy(DESKTOP_AGENT_ID), ...agent.policy };
+      agent.policy.paths = defaultDataPolicy(DESKTOP_AGENT_ID).paths;
+      agent.policy.pathsReadOnly =
+        agent.policy.pathsReadOnly || defaultDataPolicy(DESKTOP_AGENT_ID).pathsReadOnly;
+      dirty = true;
+    }
+    if (!agent.hostWorkspace) {
+      agent.hostWorkspace = roots.workspace;
+      dirty = true;
+    }
+    if (dirty) saveAgents(state);
   }
   if (!agent.localProxyPort) {
     agent.localProxyPort = DESKTOP_PROXY_PORT;
@@ -82,6 +95,9 @@ export const provisionDesktopSession = async () => {
     localProxyPort: agent.localProxyPort,
     bridgeUrl: "http://host.docker.internal:7331",
     bridgeProxy: "http://host.docker.internal:7332",
+    hostMount: "/host",
+    hostWorkspace: `/host/workspaces/${agent.id}`,
+    hostShared: "/host/shared",
   };
 
   const hostCred = path.join(ROOT, "state", ".desktop-cred.json");
@@ -113,6 +129,9 @@ export const provisionDesktopSession = async () => {
     "fit-windows.sh",
     "upgrade-xvfb-max.sh",
     "key-pump.sh",
+    "mouse-pump.sh",
+    "hostfs-fuse.py",
+    "hostfs-watchdog.sh",
   ]) {
     await dockerCp(
       path.join(ROOT, "container", file),
@@ -138,8 +157,9 @@ export const provisionDesktopSession = async () => {
     "bash",
     "-lc",
     [
-      "chmod 755 /opt/bridge/bridge-browser.sh /opt/bridge/launch-browser.sh /opt/bridge/open-agent.sh /opt/bridge/open-install-assistant.sh /opt/bridge/gtk-file-picker.py /opt/bridge/repair-desktop.sh /opt/bridge/dedupe-xfce-panel.sh /opt/bridge/ensure-x-modes.sh /opt/bridge/resize-display.sh /opt/bridge/fit-windows.sh /opt/bridge/fix-vnc-stack.py /opt/bridge/key-pump.sh /opt/bridge/agent-env.sh /opt/bridge/host-bin/* /usr/local/bin/start-desktop.sh /usr/local/bin/start-audio.sh",
+      "chmod 755 /opt/bridge/bridge-browser.sh /opt/bridge/launch-browser.sh /opt/bridge/open-agent.sh /opt/bridge/open-install-assistant.sh /opt/bridge/gtk-file-picker.py /opt/bridge/repair-desktop.sh /opt/bridge/dedupe-xfce-panel.sh /opt/bridge/ensure-x-modes.sh /opt/bridge/resize-display.sh /opt/bridge/fit-windows.sh /opt/bridge/fix-vnc-stack.py /opt/bridge/key-pump.sh /opt/bridge/mouse-pump.sh /opt/bridge/agent-env.sh /opt/bridge/hostfs-fuse.py /opt/bridge/hostfs-watchdog.sh /opt/bridge/host-bin/* /usr/local/bin/start-desktop.sh /usr/local/bin/start-audio.sh",
       "chmod 644 /opt/bridge/*.mjs 2>/dev/null || true",
+      "mkdir -p /host",
       // Keep RANDR modes available so viewer resize maps 1:1 (accurate clicks).
       "DISPLAY=:1 /opt/bridge/ensure-x-modes.sh >/tmp/ensure-x-modes.log 2>&1 || true",
       // Route /usr/bin/chromium through the bridge proxy (direct Chromium has no net).
@@ -150,6 +170,11 @@ export const provisionDesktopSession = async () => {
         "cp -a /usr/bin/chromium /usr/bin/chromium.real; fi; " +
         "printf '%s\\n' '#!/bin/sh' 'exec /usr/local/bin/chromium-force-proxy.sh \"$@\"' > /usr/bin/chromium; " +
         "chmod 755 /usr/bin/chromium; fi",
+      // Host data plane FUSE mount (/host → ~/OneBridge via Data API)
+      "pkill -f hostfs-watchdog.sh 2>/dev/null || true; " +
+        "BRIDGE_CREDENTIALS_FILE=/home/browser/.bridge-credentials " +
+        "BRIDGE_URL=http://host.docker.internal:7331 " +
+        "nohup /opt/bridge/hostfs-watchdog.sh >/tmp/hostfs-watchdog.log 2>&1 &",
     ].join("; "),
   ]);
   await dockerCp(

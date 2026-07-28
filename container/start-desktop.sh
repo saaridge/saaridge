@@ -9,9 +9,24 @@ export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
 export BRIDGE_CREDENTIALS_FILE="${BRIDGE_CREDENTIALS_FILE:-$HOME/.bridge-credentials}"
 
+# Mediated host projects via /host FUSE
+if [[ -f /opt/bridge/agent-env.sh ]]; then
+  # shellcheck source=/dev/null
+  source /opt/bridge/agent-env.sh
+fi
+export ONEBRIDGE_PROJECTS="${ONEBRIDGE_PROJECTS:-/host/workspaces/workspace-desktop}"
+export CURSOR_PROJECT_DIR="${CURSOR_PROJECT_DIR:-$ONEBRIDGE_PROJECTS}"
+
 mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" \
   "$HOME/Desktop" "$HOME/Downloads" "$HOME/chromium-bridge-profile" \
-  "$HOME/.local/share/applications"
+  "$HOME/.local/share/applications" \
+  "$ONEBRIDGE_PROJECTS" 2>/dev/null || true
+
+# Convenient Desktop link to host-mediated projects (for Cursor / file manager)
+if [[ -d /host/workspaces ]] || [[ -d "$ONEBRIDGE_PROJECTS" ]]; then
+  ln -sfn "$ONEBRIDGE_PROJECTS" "$HOME/Desktop/Host Projects" 2>/dev/null || true
+  ln -sfn "$ONEBRIDGE_PROJECTS" "$HOME/Projects" 2>/dev/null || true
+fi
 
 CRED_FILE="$BRIDGE_CREDENTIALS_FILE"
 PORT="${LOCAL_PROXY_PORT:-}"

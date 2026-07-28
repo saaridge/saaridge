@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { STATE_DIR } from "./paths.js";
+import { spawn } from "node:child_process";
+import { STATE_DIR, CONTAINER_NAME } from "./paths.js";
 import { dockerExec, containerRunning } from "./docker.js";
 import { logStep, logError } from "./logger.js";
 
@@ -108,4 +109,73 @@ export const resizeDesktopDisplay = async (width, height) => {
   }
 
   return { ok: true, width: w, height: h, detail: (res.stdout || "").trim() };
+};
+
+/** Long-lived xdotool mouse injector inside the workspace container. */
+let mousePump = null;
+
+const ensureDesktopMousePump = () => {
+  if (mousePump && !mousePump.killed && mousePump.stdin?.writable) {
+    return mousePump;
+  }
+  mousePump = spawn(
+    "docker",
+    [
+      "exec",
+      "-i",
+      "-u",
+      "browser",
+      "-e",
+      "DISPLAY=:1",
+      CONTAINER_NAME || "agent-bridge-box",
+      "/opt/bridge/mouse-pump.sh",
+    ],
+    { stdio: ["pipe", "ignore", "ignore"] },
+  );
+  mousePump.on("exit", () => {
+    mousePump = null;
+  });
+  mousePump.on("error", () => {
+    mousePump = null;
+  });
+  return mousePump;
+};
+
+/**
+ * Inject a mouse event into the workspace X session.
+ * type: move | down | up | click
+ */
+export const injectDesktopMouse = async ({
+  type = "move",
+  x = 0,
+  y = 0,
+  button = 1,
+} = {}) => {
+  if (!(await containerRunning())) {
+    return { ok: false, error: "Workspace is not running" };
+  }
+  const xi = Math.max(0, Math.round(Number(x) || 0));
+  const yi = Math.max(0, Math.round(Number(y) || 0));
+  const btn = Math.max(1, Math.min(5, Number(button) || 1));
+  const t = String(type || "move");
+
+  const pump = ensureDesktopMousePump();
+  if (!pump?.stdin?.writable) {
+    return { ok: false, error: "mouse pump unavailable" };
+  }
+
+  let line = "";
+  if (t === "move") line = `MOVE ${xi} ${yi}\n`;
+  else if (t === "down") line = `MOVE ${xi} ${yi}\nDOWN ${btn}\n`;
+  else if (t === "up") line = `MOVE ${xi} ${yi}\nUP ${btn}\n`;
+  else if (t === "click") line = `MOVE ${xi} ${yi}\nCLICK ${btn}\n`;
+  else return { ok: false, error: `unknown type ${t}` };
+
+  try {
+    pump.stdin.write(line);
+    return { ok: true, x: xi, y: yi, type: t, button: btn };
+  } catch (err) {
+    mousePump = null;
+    return { ok: false, error: String(err?.message || err) };
+  }
 };

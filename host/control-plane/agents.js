@@ -99,6 +99,10 @@ export const installAgentFromHostPath = async (hostPath) => {
       uid: agent.uid,
       username: agent.username,
       tokenFingerprint: agent.token.slice(0, 8),
+      hostWorkspace: agent.hostWorkspace,
+    });
+    push("Provisioned OneBridge workspace", true, {
+      path: agent.hostWorkspace,
     });
 
     writeMcpConfig(resolved, agent);
