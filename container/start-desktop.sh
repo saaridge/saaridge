@@ -93,6 +93,71 @@ do
   _patch_cursor_desktop "$_desk"
 done
 
+# Keep Cursor from file-watching huge FUSE trees (node_modules/Library) which
+# saturates the mediated mount and makes the explorer look empty.
+mkdir -p "$HOME/.config/Cursor/User"
+python3 - <<'PY' 2>/dev/null || true
+import json
+from pathlib import Path
+path = Path.home() / ".config/Cursor/User/settings.json"
+cur = {}
+if path.is_file():
+    try:
+        cur = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        cur = {}
+if not isinstance(cur, dict):
+    cur = {}
+watcher = cur.get("files.watcherExclude") or {}
+if not isinstance(watcher, dict):
+    watcher = {}
+watcher.update({
+    "**/node_modules/**": True,
+    "**/.git/objects/**": True,
+    "**/.git/subtree-cache/**": True,
+    "**/Library/**": True,
+    "**/.cache/**": True,
+    "**/dist/**": True,
+    "**/.npm/**": True,
+    "**/build/**": True,
+    "**/.next/**": True,
+    "**/target/**": True,
+})
+cur["files.watcherExclude"] = watcher
+# Hide heavy trees from the explorer so Cursor does not recurse into them
+# on open. User can still open those paths via Open File if needed.
+exclude = cur.get("files.exclude") if isinstance(cur.get("files.exclude"), dict) else {}
+exclude.update({
+    "**/node_modules": True,
+    "**/.git": True,
+    "**/Library": True,
+    "**/.cache": True,
+    "**/dist": True,
+    "**/.next": True,
+    "**/build": True,
+    "**/target": True,
+})
+cur["files.exclude"] = exclude
+search = cur.get("search.exclude") or {}
+if not isinstance(search, dict):
+    search = {}
+search.update({
+    "**/node_modules": True,
+    "**/Library": True,
+    "**/.git": True,
+    "**/dist": True,
+})
+cur["search.exclude"] = search
+cur["search.followSymlinks"] = False
+cur["explorer.autoReveal"] = False
+cur["explorer.compactFolders"] = True
+cur["git.autoRepositoryDetection"] = False
+cur["git.detectSubmodules"] = False
+cur["git.enabled"] = False
+path.write_text(json.dumps(cur, indent=2) + "\n", encoding="utf-8")
+print("[start-desktop] Cursor lazy-folder settings for FUSE host paths")
+PY
+
 
 CRED_FILE="$BRIDGE_CREDENTIALS_FILE"
 PORT="${LOCAL_PROXY_PORT:-}"

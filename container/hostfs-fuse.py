@@ -179,16 +179,28 @@ class DataApi:
         return f"~/OneBridge/{rel}"
 
 
+CACHE_ROOT = os.environ.get("HOSTFS_CACHE", "/var/cache/onebridge-vfs")
+FRESH_MARKER = ".onebridge-fresh"
+BODY_MARKER_SUFFIX = ".onebridge-body"
+META_MARKER_SUFFIX = ".onebridge-meta"
+TREE_EXCLUDE = (
+    "node_modules,.git,Library,.cache,dist,build,.next,target,.npm,__pycache__,.turbo"
+)
+# Progressive boundary: each folder visit fetches this many levels; drill expands.
+HYDRATE_DEPTH = 3
+# Directory listing TTL — re-fetch from host so creates/deletes show up.
+DIR_TTL_SEC = 25.0
+
+
 def _mk_stat(is_dir: bool, size: int = 0, mtime: int = 0, ino: int = 0) -> "fuse.Stat":
     st = fuse.Stat()
     st.st_mode = (stat.S_IFDIR | 0o755) if is_dir else (stat.S_IFREG | 0o644)
-    # Non-empty dirs: nlink>2 so clients don't treat the folder as vacant.
     st.st_nlink = 3 if is_dir else 1
     st.st_size = int(size or 0)
     st.st_uid = FS_UID
     st.st_gid = FS_GID
     st.st_ino = (int(ino) & 0xFFFFFFFF) or 1
-    now = int(mtime or 0) or 1
+    now = int(mtime or 0) or int(time.time())
     st.st_atime = now
     st.st_mtime = now
     st.st_ctime = now
@@ -196,14 +208,45 @@ def _mk_stat(is_dir: bool, size: int = 0, mtime: int = 0, ino: int = 0) -> "fuse
 
 
 def _ino_for(path: str) -> int:
-    # Stable non-zero inode per path (Electron/Node file trees break on inode 0 collisions).
     h = 0
     for ch in path:
         h = ((h * 131) + ord(ch)) & 0xFFFFFFFF
     return h or 1
 
 
+def _stat_from_os(cp: str) -> "fuse.Stat":
+    st_os = os.lstat(cp)
+    st = fuse.Stat()
+    st.st_mode = st_os.st_mode
+    st.st_nlink = st_os.st_nlink if st_os.st_nlink > 1 else (3 if stat.S_ISDIR(st_os.st_mode) else 1)
+    st.st_size = st_os.st_size
+    st.st_uid = FS_UID
+    st.st_gid = FS_GID
+    st.st_ino = (int(st_os.st_ino) & 0xFFFFFFFF) or _ino_for(cp)
+    st.st_atime = int(st_os.st_atime) or 1
+    st.st_mtime = int(st_os.st_mtime) or 1
+    st.st_ctime = int(st_os.st_ctime) or 1
+    return st
+
+
+def _is_internal_name(name: str) -> bool:
+    return (
+        name == FRESH_MARKER
+        or name.endswith(BODY_MARKER_SUFFIX)
+        or name.endswith(META_MARKER_SUFFIX)
+    )
+
+
 class HostFS(Fuse):
+    """
+    Progressive mediated host view.
+
+    On each folder visit: fetch up to HYDRATE_DEPTH levels via Data API, materialize
+    placeholders (with real sizes) under CACHE_ROOT. Drill-down re-fetches the next
+    boundary. Directory TTL is short so host changes appear on refresh. File bodies
+    download on open/read (revalidated against host mtime).
+    """
+
     def __init__(self, api: DataApi, agent_id: str, *args, **kw):
         Fuse.__init__(self, *args, **kw)
         self.api = api
@@ -211,9 +254,9 @@ class HostFS(Fuse):
         self.fd_map: Dict[int, str] = {}
         self.next_fd = 3
         self._fd_lock = threading.Lock()
-        self._getattr_cache: Dict[str, Tuple[float, object]] = {}
-        self._getattr_lock = threading.Lock()
-        self._getattr_ttl = 2.0
+        self._hydrate_lock = threading.Lock()
+        self._hydrating: Dict[str, threading.Event] = {}
+        os.makedirs(CACHE_ROOT, exist_ok=True)
 
     def _path(self, path: str) -> str:
         return self.api.host_path(path)
@@ -221,53 +264,301 @@ class HostFS(Fuse):
     def _norm(self, path: str) -> str:
         return path.rstrip("/") or "/"
 
+    def _cache_path(self, fuse_path: str) -> str:
+        p = self._norm(fuse_path)
+        if p == "/":
+            return CACHE_ROOT
+        return os.path.join(CACHE_ROOT, p.lstrip("/"))
+
+    def _fresh_path(self, cache_dir: str) -> str:
+        return os.path.join(cache_dir, FRESH_MARKER)
+
+    def _body_marker(self, cache_file: str) -> str:
+        return cache_file + BODY_MARKER_SUFFIX
+
+    def _meta_path(self, cache_file: str) -> str:
+        return cache_file + META_MARKER_SUFFIX
+
+    def _is_fresh(self, cache_dir: str, ttl: float = DIR_TTL_SEC) -> bool:
+        fp = self._fresh_path(cache_dir)
+        try:
+            return (time.time() - os.path.getmtime(fp)) < ttl
+        except OSError:
+            return False
+
+    def _mark_fresh(self, cache_dir: str) -> None:
+        os.makedirs(cache_dir, exist_ok=True)
+        fp = self._fresh_path(cache_dir)
+        with open(fp, "w", encoding="utf-8") as f:
+            f.write(str(time.time()))
+
     def _err(self, err: BaseException) -> int:
         if isinstance(err, OSError):
             return -int(err.errno or errno.EIO)
         return -errno.EIO
 
+    def _write_meta(self, cp: str, size: int, mtime_ms: float = 0) -> None:
+        meta = {
+            "size": int(size or 0),
+            "mtimeMs": float(mtime_ms or 0),
+        }
+        with open(self._meta_path(cp), "w", encoding="utf-8") as f:
+            json.dump(meta, f)
+
+    def _read_meta(self, cp: str) -> Optional[dict]:
+        try:
+            with open(self._meta_path(cp), "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError, json.JSONDecodeError):
+            return None
+
+    def _touch_placeholder(self, cp: str, is_dir: bool, size: int = 0, mtime_ms: float = 0) -> None:
+        if is_dir:
+            os.makedirs(cp, exist_ok=True)
+            return
+        os.makedirs(os.path.dirname(cp), exist_ok=True)
+        old = self._read_meta(cp)
+        if not os.path.lexists(cp):
+            open(cp, "a", encoding="utf-8").close()
+        marker = self._body_marker(cp)
+        if os.path.isfile(marker):
+            old_size = int((old or {}).get("size") or -1)
+            old_mtime = float((old or {}).get("mtimeMs") or 0)
+            if int(size or 0) != old_size or (
+                mtime_ms and old_mtime and abs(float(mtime_ms) - old_mtime) > 1
+            ):
+                try:
+                    os.unlink(marker)
+                except OSError:
+                    pass
+                open(cp, "wb").close()
+        self._write_meta(cp, size, mtime_ms)
+
+    def _remove_cache_entry(self, cp: str) -> None:
+        import shutil
+
+        for extra in (self._body_marker(cp), self._meta_path(cp)):
+            try:
+                os.unlink(extra)
+            except OSError:
+                pass
+        try:
+            if os.path.isdir(cp) and not os.path.islink(cp):
+                shutil.rmtree(cp, ignore_errors=True)
+            elif os.path.lexists(cp):
+                os.unlink(cp)
+        except OSError:
+            pass
+
+    def _hydrate_tree(self, fuse_dir: str) -> None:
+        """Fetch HYDRATE_DEPTH levels for this folder; reconcile local placeholders."""
+        p = self._norm(fuse_dir)
+        cp = self._cache_path(p)
+        with self._hydrate_lock:
+            if self._is_fresh(cp):
+                return
+            if p in self._hydrating:
+                ev = self._hydrating[p]
+                worker = False
+            else:
+                ev = threading.Event()
+                self._hydrating[p] = ev
+                worker = True
+        if not worker:
+            ev.wait(timeout=120)
+            return
+        try:
+            t0 = time.time()
+            result = self.api.request(
+                "GET",
+                "/v1/fs/tree",
+                {
+                    "path": self._path(p),
+                    "maxDepth": str(HYDRATE_DEPTH),
+                    "maxEntries": "8000",
+                    "exclude": TREE_EXCLUDE,
+                },
+            )
+            entries = result.get("entries") or []
+            os.makedirs(cp, exist_ok=True)
+            top_names = set()
+            for e in entries:
+                rel = e.get("rel") or e.get("name")
+                if not rel:
+                    continue
+                top_names.add(rel.split("/", 1)[0])
+                child = os.path.join(cp, rel)
+                self._touch_placeholder(
+                    child,
+                    bool(e.get("isDirectory")),
+                    int(e.get("size") or 0),
+                    float(e.get("mtimeMs") or 0),
+                )
+            # Drop immediate children removed on host
+            try:
+                for name in os.listdir(cp):
+                    if _is_internal_name(name):
+                        continue
+                    if name not in top_names:
+                        self._remove_cache_entry(os.path.join(cp, name))
+            except OSError:
+                pass
+            self._mark_fresh(cp)
+            LOG.info(
+                "hydrated %s depth=%s entries=%s in %.0fms",
+                p,
+                HYDRATE_DEPTH,
+                len(entries),
+                (time.time() - t0) * 1000,
+            )
+        except OSError as err:
+            LOG.warning("tree hydrate failed for %s: %s — falling back to list", p, err)
+            try:
+                self._hydrate_list(p)
+            except OSError:
+                pass
+        finally:
+            with self._hydrate_lock:
+                self._hydrating.pop(p, None)
+            ev.set()
+
+    def _hydrate_list(self, fuse_dir: str) -> None:
+        p = self._norm(fuse_dir)
+        cp = self._cache_path(p)
+        result = self.api.request(
+            "GET",
+            "/v1/fs/list",
+            {"path": self._path(p), "shallow": "1"},
+        )
+        os.makedirs(cp, exist_ok=True)
+        skip = {
+            "Library",
+            ".cache",
+            ".Trash",
+            "node_modules",
+            ".git",
+            FRESH_MARKER,
+        }
+        top_names = set()
+        for e in result.get("entries") or []:
+            name = e.get("name")
+            if not name or name in skip or _is_internal_name(name):
+                continue
+            top_names.add(name)
+            self._touch_placeholder(
+                os.path.join(cp, name),
+                bool(e.get("isDirectory")),
+                int(e.get("size") or 0),
+                float(e.get("mtimeMs") or 0),
+            )
+        try:
+            for name in os.listdir(cp):
+                if _is_internal_name(name):
+                    continue
+                if name not in top_names:
+                    self._remove_cache_entry(os.path.join(cp, name))
+        except OSError:
+            pass
+        self._mark_fresh(cp)
+
+    def _ensure_dir(self, fuse_dir: str) -> None:
+        p = self._norm(fuse_dir)
+        if p in ("/", "/workspaces", "/shared"):
+            os.makedirs(self._cache_path(p), exist_ok=True)
+            if p == "/workspaces":
+                os.makedirs(self._cache_path(f"/workspaces/{self.agent_id}"), exist_ok=True)
+            return
+        if p.startswith("/workspaces/") and not (
+            p == f"/workspaces/{self.agent_id}"
+            or p.startswith(f"/workspaces/{self.agent_id}/")
+        ):
+            raise OSError(errno.ENOENT, "Not found")
+        cp = self._cache_path(p)
+        if self._is_fresh(cp):
+            return
+        # /home: shallow list only. Deeper paths: progressive depth-N tree.
+        if p == "/home" or p.count("/") < 2:
+            self._hydrate_list(p)
+        else:
+            self._hydrate_tree(p)
+
+    def _ensure_file_body(self, fuse_path: str) -> str:
+        p = self._norm(fuse_path)
+        cp = self._cache_path(p)
+        marker = self._body_marker(cp)
+        meta = self._read_meta(cp)
+        if os.path.isfile(marker) and os.path.isfile(cp):
+            # Revalidate against cached host size when meta present
+            if meta is None or os.path.getsize(cp) == int(meta.get("size") or 0):
+                return cp
+        parent = self._norm(os.path.dirname(p))
+        self._ensure_dir(parent if parent else "/")
+        data = self.api.request(
+            "GET",
+            "/v1/fs/read",
+            {"path": self._path(p), "offset": "0"},
+        )
+        if isinstance(data, dict) and "_raw" in data:
+            raw = data["_raw"]
+        elif isinstance(data, (bytes, bytearray)):
+            raw = bytes(data)
+        else:
+            raw = b""
+        os.makedirs(os.path.dirname(cp), exist_ok=True)
+        with open(cp, "wb") as f:
+            f.write(raw)
+        with open(marker, "w", encoding="utf-8") as f:
+            f.write(str(len(raw)))
+        self._write_meta(cp, len(raw), time.time() * 1000)
+        return cp
+
     def getattr(self, path):
         p = self._norm(path)
-        now = time.time()
-        with self._getattr_lock:
-            hit = self._getattr_cache.get(p)
-            if hit and now - hit[0] < self._getattr_ttl:
-                return hit[1]
-
         if p in ("/", "/workspaces", "/shared", "/home"):
-            st = _mk_stat(True, ino=_ino_for(p))
-            with self._getattr_lock:
-                self._getattr_cache[p] = (now, st)
-            return st
+            os.makedirs(self._cache_path(p), exist_ok=True)
+            return _mk_stat(True, ino=_ino_for(p))
         if p.startswith("/workspaces/") and not (
             p == f"/workspaces/{self.agent_id}"
             or p.startswith(f"/workspaces/{self.agent_id}/")
         ):
             return -errno.ENOENT
-        try:
-            info = self.api.request("GET", "/v1/fs/stat", {"path": self._path(path)})
-        except OSError as err:
-            return self._err(err)
-        st = _mk_stat(
-            bool(info.get("isDirectory")),
-            int(info.get("size") or 0),
-            int((info.get("mtimeMs") or 0) / 1000),
-            ino=_ino_for(p),
-        )
-        with self._getattr_lock:
-            self._getattr_cache[p] = (now, st)
+        cp = self._cache_path(p)
+        if not os.path.lexists(cp):
+            parent = self._norm(os.path.dirname(p) or "/")
+            try:
+                self._ensure_dir(parent)
+            except OSError as err:
+                return self._err(err)
+        if not os.path.lexists(cp):
+            try:
+                info = self.api.request("GET", "/v1/fs/stat", {"path": self._path(p)})
+            except OSError as err:
+                return self._err(err)
+            self._touch_placeholder(
+                cp,
+                bool(info.get("isDirectory")),
+                int(info.get("size") or 0),
+                float(info.get("mtimeMs") or 0),
+            )
+            if not info.get("isDirectory") and int(info.get("size") or 0) == 0:
+                open(self._body_marker(cp), "a", encoding="utf-8").close()
+        if not os.path.lexists(cp):
+            return -errno.ENOENT
+        st = _stat_from_os(cp)
+        # Placeholders are 0-byte on disk — report host size so editors can open.
+        if not os.path.isdir(cp) and not os.path.isfile(self._body_marker(cp)):
+            meta = self._read_meta(cp)
+            if meta is not None:
+                st.st_size = int(meta.get("size") or 0)
+                mtime_ms = float(meta.get("mtimeMs") or 0)
+                if mtime_ms > 0:
+                    st.st_mtime = int(mtime_ms / 1000) or st.st_mtime
         return st
 
     def access(self, path, mode):
-        # allow_other + browser ownership: permit read/write/exec checks for desktop user
-        st = self.getattr(path)
-        if isinstance(st, int) and st < 0:
-            return st
         return 0
 
     def statfs(self, path=None):
-        # Critical for Electron/Chromium GtkFileChooser — zero blocks ⇒ mount hidden.
-        # Keep values modest so 32-bit statvfs fields never overflow.
         return fuse.StatVfs(
             f_bsize=_STATFS_BLOCK_SIZE,
             f_frsize=_STATFS_BLOCK_SIZE,
@@ -283,30 +574,27 @@ class HostFS(Fuse):
 
     def readdir(self, path, offset):
         p = self._norm(path)
-        # (name, type_mode or None) — include type so Node/Cursor withFileTypes
-        # does not fire a getattr storm (which wedges single-thread FUSE).
         entries = [(".", stat.S_IFDIR), ("..", stat.S_IFDIR)]
         if p == "/":
-            entries += [
-                ("workspaces", stat.S_IFDIR),
-                ("shared", stat.S_IFDIR),
-                ("home", stat.S_IFDIR),
-            ]
+            for name in ("workspaces", "shared", "home"):
+                os.makedirs(self._cache_path(f"/{name}"), exist_ok=True)
+                entries.append((name, stat.S_IFDIR))
         elif p == "/workspaces":
-            entries += [(self.agent_id, stat.S_IFDIR)]
+            os.makedirs(self._cache_path(f"/workspaces/{self.agent_id}"), exist_ok=True)
+            entries.append((self.agent_id, stat.S_IFDIR))
         else:
             try:
-                result = self.api.request("GET", "/v1/fs/list", {"path": self._path(path)})
-                for e in result.get("entries") or []:
-                    name = e.get("name")
-                    if not name:
+                self._ensure_dir(p)
+            except OSError as err:
+                yield -int(err.errno or errno.EIO)
+                return
+            cp = self._cache_path(p)
+            try:
+                for name in os.listdir(cp):
+                    if _is_internal_name(name):
                         continue
-                    if e.get("isDirectory"):
-                        mode = stat.S_IFDIR
-                    elif e.get("isSymbolicLink"):
-                        mode = stat.S_IFLNK
-                    else:
-                        mode = stat.S_IFREG
+                    child = os.path.join(cp, name)
+                    mode = stat.S_IFDIR if os.path.isdir(child) else stat.S_IFREG
                     entries.append((name, mode))
             except OSError as err:
                 yield -int(err.errno or errno.EIO)
@@ -315,26 +603,25 @@ class HostFS(Fuse):
             yield fuse.Direntry(name, type=mode)
 
     def open(self, path, flags):
+        cp = self._cache_path(path)
+        if os.path.isdir(cp):
+            return 0
+        if flags & (os.O_WRONLY | os.O_RDWR | os.O_APPEND):
+            return 0
+        try:
+            self._ensure_file_body(path)
+        except OSError as err:
+            return self._err(err)
         return 0
 
     def read(self, path, length, offset):
         try:
-            data = self.api.request(
-                "GET",
-                "/v1/fs/read",
-                {
-                    "path": self._path(path),
-                    "offset": str(offset),
-                    "length": str(length),
-                },
-            )
+            cp = self._ensure_file_body(path)
+            with open(cp, "rb") as f:
+                f.seek(int(offset) or 0)
+                return f.read(int(length) or 0)
         except OSError as err:
             return self._err(err)
-        if isinstance(data, dict) and "_raw" in data:
-            return data["_raw"]
-        if isinstance(data, (bytes, bytearray)):
-            return bytes(data)
-        return b""
 
     def write(self, path, buf, offset):
         data = buf if isinstance(buf, (bytes, bytearray)) else bytes(buf)
@@ -345,6 +632,16 @@ class HostFS(Fuse):
                 {"path": self._path(path), "offset": str(offset), "truncate": "0"},
                 body=data,
             )
+            cp = self._cache_path(path)
+            os.makedirs(os.path.dirname(cp), exist_ok=True)
+            with open(cp, "r+b" if os.path.exists(cp) else "wb") as f:
+                f.seek(int(offset) or 0)
+                f.write(data)
+            open(self._body_marker(cp), "a", encoding="utf-8").close()
+            try:
+                self._write_meta(cp, os.path.getsize(cp), time.time() * 1000)
+            except OSError:
+                pass
         except OSError as err:
             return self._err(err)
         return len(data)
@@ -356,6 +653,11 @@ class HostFS(Fuse):
                 "/v1/fs/truncate",
                 json_body={"path": self._path(path), "size": int(size)},
             )
+            cp = self._cache_path(path)
+            os.makedirs(os.path.dirname(cp), exist_ok=True)
+            with open(cp, "ab") as f:
+                f.truncate(int(size) or 0)
+            open(self._body_marker(cp), "a", encoding="utf-8").close()
         except OSError as err:
             return self._err(err)
         return 0
@@ -368,6 +670,9 @@ class HostFS(Fuse):
                 {"path": self._path(path), "offset": "0", "truncate": "1"},
                 body=b"",
             )
+            cp = self._cache_path(path)
+            self._touch_placeholder(cp, False)
+            open(self._body_marker(cp), "a", encoding="utf-8").close()
         except OSError as err:
             return self._err(err)
         return 0
@@ -375,6 +680,8 @@ class HostFS(Fuse):
     def mkdir(self, path, mode):
         try:
             self.api.request("POST", "/v1/fs/mkdir", json_body={"path": self._path(path)})
+            self._touch_placeholder(self._cache_path(path), True)
+            self._mark_fresh(self._cache_path(path))
         except OSError as err:
             return self._err(err)
         return 0
@@ -383,12 +690,27 @@ class HostFS(Fuse):
         try:
             q = urllib.parse.urlencode({"path": self._path(path)})
             self.api.request("DELETE", f"/v1/fs/path?{q}")
+            cp = self._cache_path(path)
+            for cand in (cp, self._body_marker(cp)):
+                try:
+                    os.unlink(cand)
+                except OSError:
+                    pass
         except OSError as err:
             return self._err(err)
         return 0
 
     def rmdir(self, path):
-        return self.unlink(path)
+        try:
+            q = urllib.parse.urlencode({"path": self._path(path)})
+            self.api.request("DELETE", f"/v1/fs/path?{q}")
+            cp = self._cache_path(path)
+            import shutil
+
+            shutil.rmtree(cp, ignore_errors=True)
+        except OSError as err:
+            return self._err(err)
+        return 0
 
     def rename(self, old, new):
         try:
@@ -397,6 +719,12 @@ class HostFS(Fuse):
                 "/v1/fs/rename",
                 json_body={"from": self._path(old), "to": self._path(new)},
             )
+            import shutil
+
+            op, np = self._cache_path(old), self._cache_path(new)
+            os.makedirs(os.path.dirname(np), exist_ok=True)
+            if os.path.lexists(op):
+                shutil.move(op, np)
         except OSError as err:
             return self._err(err)
         return 0
@@ -447,13 +775,14 @@ def main():
     )
 
     LOG.info("Presenting files as uid=%s gid=%s", FS_UID, FS_GID)
+    LOG.info("VFS cache root: %s", CACHE_ROOT)
     server = HostFS(
         api,
         agent_id,
         version="%prog OneBridge hostfs",
         usage="hostfs-fuse MOUNTPOINT",
-        # Multithreaded: Cursor/Node issue many parallel getattr/readdir calls.
-        dash_s_do="setsingle",
+        # Default is multithreaded; don't use setsingle (serializes Cursor).
+        dash_s_do="undef",
     )
     server.multithreaded = True
     server.parser.add_option(
@@ -468,20 +797,35 @@ def main():
         server.fuse_args.add("allow_other")
     except Exception:
         pass
-    try:
-        # Avoid kernel applying root-only DAC that confuses file dialogs
-        server.fuse_args.add("default_permissions")
-    except Exception:
-        pass
+    # NOTE: do NOT enable default_permissions — it forces access()+getattr on
+    # every name and turns a 1-list folder open into hundreds of HTTP calls.
     try:
         server.fuse_args.add("nonempty")
     except Exception:
         pass
-    # Prefer multi-threaded request handling when libfuse supports it.
-    try:
-        server.fuse_args.add("max_readahead=131072")
-    except Exception:
-        pass
+    for opt in (
+        # Short attr cache: placeholder size → real body must be visible to editors.
+        "attr_timeout=2",
+        "entry_timeout=10",
+        "negative_timeout=5",
+        "max_readahead=1048576",
+    ):
+        try:
+            server.fuse_args.add(opt)
+        except Exception:
+            pass
+    # Do NOT enable kernel_cache — it freezes size=0 placeholders and breaks open.
+
+    def _prefetch():
+        time.sleep(1.0)
+        try:
+            LOG.info("prefetch start /home")
+            server._ensure_dir("/home")
+            LOG.info("prefetch done /home")
+        except Exception as err:
+            LOG.warning("prefetch /home failed: %s", err)
+
+    threading.Thread(target=_prefetch, name="hostfs-prefetch", daemon=True).start()
     server.main()
 
 

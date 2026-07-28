@@ -1,5 +1,5 @@
-const GLOBAL_MAX_CONCURRENT = 64;
-const PER_AGENT_MAX = 8;
+const GLOBAL_MAX_CONCURRENT = 128;
+const PER_AGENT_MAX = 64;
 
 const agentSem = new Map(); // agentId -> { active, wait }
 let globalActive = 0;

@@ -60,16 +60,47 @@ export const health = () => ({
   ts: new Date().toISOString(),
 });
 
-export const list = async (agent, inputPath = ".") => {
+export const list = async (agent, inputPath = ".", { shallow = true } = {}) => {
   return withLimit(agent, "list", async () => {
     try {
       const { real } = assertReadable(agent, inputPath);
-      let entries = await store.listDir(real);
+      let entries = await store.listDir(real, { shallow: !!shallow });
       entries = await transformList(agent, real, entries);
-      auditOk(agent, "list", { path: real, count: entries.length });
-      return { path: real, entries };
+      auditOk(agent, "list", {
+        path: real,
+        count: entries.length,
+        shallow: !!shallow,
+      });
+      return { path: real, entries, shallow: !!shallow };
     } catch (err) {
       auditFail(agent, "list", err, { path: inputPath });
+      throw err;
+    }
+  });
+};
+
+/** One-shot mediated tree (names/types). No file bodies. */
+export const tree = async (
+  agent,
+  inputPath = ".",
+  { maxDepth = 3, exclude, maxEntries = 8000 } = {},
+) => {
+  return withLimit(agent, "tree", async () => {
+    try {
+      const { real } = assertReadable(agent, inputPath);
+      const entries = await store.walkTree(real, {
+        maxDepth: Number(maxDepth) || 3,
+        exclude,
+        maxEntries: Number(maxEntries) || 8000,
+      });
+      auditOk(agent, "tree", {
+        path: real,
+        count: entries.length,
+        maxDepth: Number(maxDepth) || 3,
+      });
+      return { path: real, entries, maxDepth: Number(maxDepth) || 3 };
+    } catch (err) {
+      auditFail(agent, "tree", err, { path: inputPath });
       throw err;
     }
   });

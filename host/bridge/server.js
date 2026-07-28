@@ -90,7 +90,37 @@ const mountFsApi = (app) => {
 
   app.get("/v1/fs/list", authAgent, async (req, res) => {
     try {
-      const result = await dataApi.list(req.agent, req.query.path);
+      // Default shallow: names + types only (no per-file lstat). Clients that
+      // need size/mtime call /v1/fs/stat when the user opens that entry.
+      const shallow =
+        req.query.shallow !== "0" &&
+        req.query.shallow !== "false" &&
+        req.query.deep !== "1" &&
+        req.query.deep !== "true";
+      const result = await dataApi.list(req.agent, req.query.path, { shallow });
+      res.setHeader("X-OneBridge-FS", FS_VERSION);
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      sendFsError(res, err);
+    }
+  });
+
+  app.get("/v1/fs/tree", authAgent, async (req, res) => {
+    try {
+      const maxDepth = req.query.maxDepth != null ? Number(req.query.maxDepth) : 6;
+      const maxEntries =
+        req.query.maxEntries != null ? Number(req.query.maxEntries) : 25000;
+      const exclude = req.query.exclude
+        ? String(req.query.exclude)
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : undefined;
+      const result = await dataApi.tree(req.agent, req.query.path, {
+        maxDepth,
+        exclude,
+        maxEntries,
+      });
       res.setHeader("X-OneBridge-FS", FS_VERSION);
       res.json({ ok: true, ...result });
     } catch (err) {

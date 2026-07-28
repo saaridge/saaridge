@@ -21,15 +21,33 @@ export const statPath = async (absPath) => {
   };
 };
 
-export const listDir = async (absPath) => {
-  const names = await fsp.readdir(absPath);
+export const listDir = async (absPath, { shallow = true } = {}) => {
+  // Shallow (default): one readdir(withFileTypes) — names + types only.
+  // No per-entry lstat and no recursion. Full size/mtime come from stat on demand.
+  const dirents = await fsp.readdir(absPath, { withFileTypes: true });
   const out = [];
-  for (const name of names) {
-    const full = path.join(absPath, name);
+  for (const d of dirents) {
+    const full = path.join(absPath, d.name);
+    const isSymbolicLink = d.isSymbolicLink();
+    const isDirectory = d.isDirectory();
+    const isFile = d.isFile() || (!isDirectory && !isSymbolicLink);
+    if (shallow) {
+      out.push({
+        name: d.name,
+        path: full,
+        isFile,
+        isDirectory,
+        isSymbolicLink,
+        size: 0,
+        mtimeMs: 0,
+        shallow: true,
+      });
+      continue;
+    }
     try {
       const st = await fsp.lstat(full);
       out.push({
-        name,
+        name: d.name,
         path: full,
         isFile: st.isFile(),
         isDirectory: st.isDirectory(),
@@ -38,9 +56,83 @@ export const listDir = async (absPath) => {
         mtimeMs: st.mtimeMs,
       });
     } catch {
-      out.push({ name, path: full, error: true });
+      out.push({ name: d.name, path: full, error: true });
     }
   }
+  return out;
+};
+
+/**
+ * Breadth-first tree (no file bodies). Includes size/mtime so FUSE placeholders
+ * report real sizes (editors need this to open files). Progressive clients use
+ * small maxDepth (e.g. 3) and expand as the user drills down.
+ */
+export const walkTree = async (
+  absPath,
+  {
+    maxDepth = 3,
+    exclude = [
+      "node_modules",
+      ".git",
+      "Library",
+      ".cache",
+      "dist",
+      "build",
+      ".next",
+      "target",
+      ".npm",
+      "__pycache__",
+      ".turbo",
+    ],
+    maxEntries = 8000,
+  } = {},
+) => {
+  const excludeSet = new Set(exclude);
+  const out = [];
+  const walk = async (dir, depth, relBase) => {
+    if (out.length >= maxEntries) return;
+    let dirents;
+    try {
+      dirents = await fsp.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const d of dirents) {
+      if (excludeSet.has(d.name)) continue;
+      if (d.name === ".DS_Store" || d.name.startsWith(".onebridge-")) continue;
+      const full = path.join(dir, d.name);
+      const rel = relBase ? `${relBase}/${d.name}` : d.name;
+      let isDirectory = d.isDirectory();
+      let isFile = d.isFile() || (!isDirectory && !d.isSymbolicLink());
+      let isSymbolicLink = d.isSymbolicLink();
+      let size = 0;
+      let mtimeMs = 0;
+      try {
+        const st = await fsp.lstat(full);
+        isDirectory = st.isDirectory();
+        isFile = st.isFile();
+        isSymbolicLink = st.isSymbolicLink();
+        size = st.size;
+        mtimeMs = st.mtimeMs;
+      } catch {
+        /* keep dirent defaults */
+      }
+      out.push({
+        rel,
+        name: d.name,
+        isDirectory,
+        isFile,
+        isSymbolicLink,
+        size,
+        mtimeMs,
+      });
+      if (out.length >= maxEntries) return;
+      if (isDirectory && depth < maxDepth) {
+        await walk(full, depth + 1, rel);
+      }
+    }
+  };
+  await walk(absPath, 1, "");
   return out;
 };
 
