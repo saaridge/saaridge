@@ -62,19 +62,26 @@ if command -v xdg-settings >/dev/null 2>&1; then
     xdg-settings set default-web-browser chromium.desktop 2>/dev/null || true
 fi
 
-# Clear Desktop clutter but keep Install Assistant launcher
-find "$HOME/Desktop" -mindepth 1 -maxdepth 1 \
-  ! -name 'Install Assistant.desktop' \
-  -exec rm -rf {} + 2>/dev/null || true
+# Clear Desktop clutter but keep Install Assistant and any apps we installed
+# (tagged with X-OneBridge-Package=). Never wipe user-installed app icons.
+mkdir -p "$HOME/Desktop"
+find "$HOME/Desktop" -mindepth 1 -maxdepth 1 | while IFS= read -r entry; do
+  base="$(basename "$entry")"
+  [[ "$base" == "Install Assistant.desktop" ]] && continue
+  if [[ -f "$entry" && "$entry" == *.desktop ]] && grep -q '^X-OneBridge-Package=' "$entry" 2>/dev/null; then
+    continue
+  fi
+  rm -rf "$entry"
+done
 
 cat > "$HOME/.local/share/applications/onebridge-install-assistant.desktop" <<'EOF'
 [Desktop Entry]
 Version=1.0
 Type=Application
 Name=Install Assistant
-Comment=Choose an installer package and install it
+Comment=Install or uninstall packages
 Exec=/bin/bash /opt/bridge/open-install-assistant.sh
-Icon=system-software-install
+Icon=/usr/share/icons/Adwaita/48x48/legacy/system-software-install.png
 Terminal=false
 Categories=Utility;
 StartupNotify=true
@@ -87,9 +94,9 @@ cat > "$HOME/Desktop/Install Assistant.desktop" <<'EOF'
 Version=1.0
 Type=Application
 Name=Install Assistant
-Comment=Choose an installer package and install it
+Comment=Install or uninstall packages
 Exec=/bin/bash /opt/bridge/open-install-assistant.sh
-Icon=system-software-install
+Icon=/usr/share/icons/Adwaita/48x48/legacy/system-software-install.png
 Terminal=false
 Categories=Utility;
 StartupNotify=false
@@ -98,6 +105,24 @@ chmod +x "$HOME/Desktop/Install Assistant.desktop"
 if command -v gio >/dev/null 2>&1; then
   gio set "$HOME/Desktop/Install Assistant.desktop" metadata::trusted true 2>/dev/null || true
 fi
+
+# Re-seed desktop icons for apps installed via Install Assistant
+# (copies live under ~/.local/share/applications/onebridge-*.desktop).
+for app in "$HOME"/.local/share/applications/onebridge-*.desktop; do
+  [[ -f "$app" ]] || continue
+  case "$(basename "$app")" in
+    onebridge-install-assistant.desktop|onebridge-browser.desktop) continue ;;
+  esac
+  grep -q '^X-OneBridge-Package=' "$app" 2>/dev/null || continue
+  name="$(grep -m1 '^Name=' "$app" | sed 's/^Name=//' || true)"
+  [[ -z "$name" ]] && continue
+  dest="$HOME/Desktop/${name}.desktop"
+  cp -f "$app" "$dest"
+  chmod +x "$dest"
+  if command -v gio >/dev/null 2>&1; then
+    gio set "$dest" metadata::trusted true 2>/dev/null || true
+  fi
+done
 
 # Do not start the old install-assistant Chromium UI server
 

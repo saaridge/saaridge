@@ -5,7 +5,7 @@ import { getAgents, saveAgents } from "./state.js";
 import { dockerCp, dockerExec, containerRunning } from "./docker.js";
 import { logStep, logError } from "./logger.js";
 import { ROOT, CONTAINER_NAME } from "./paths.js";
-import { clearDesktopKeepInstall } from "./desktop-launchers.js";
+import { clearDesktopKeepInstall, restoreInstalledAppIcons } from "./desktop-launchers.js";
 
 export const DESKTOP_AGENT_ID = "workspace-desktop";
 export const DESKTOP_PROXY_PORT = 17999;
@@ -293,7 +293,12 @@ export const provisionDesktopSession = async () => {
           "StartupNotify=true",
           "EOF",
           "chmod +x \"$HOME/.local/share/applications/onebridge-browser.desktop\"",
-          "find \"$HOME/Desktop\" -mindepth 1 -maxdepth 1 ! -name 'Install Assistant.desktop' -exec rm -rf {} +",
+          "find \"$HOME/Desktop\" -mindepth 1 -maxdepth 1 | while IFS= read -r entry; do",
+          "  base=\"$(basename \"$entry\")\"",
+          "  [[ \"$base\" == 'Install Assistant.desktop' ]] && continue",
+          "  if [[ -f \"$entry\" && \"$entry\" == *.desktop ]] && grep -q '^X-OneBridge-Package=' \"$entry\" 2>/dev/null; then continue; fi",
+          "  rm -rf \"$entry\"",
+          "done",
           "xfconf-query -c xfce4-desktop -p /desktop-icons/file-icons/show-home -n -t bool -s false 2>/dev/null || xfconf-query -c xfce4-desktop -p /desktop-icons/file-icons/show-home -s false 2>/dev/null || true",
           "xfconf-query -c xfce4-desktop -p /desktop-icons/file-icons/show-trash -n -t bool -s false 2>/dev/null || xfconf-query -c xfce4-desktop -p /desktop-icons/file-icons/show-trash -s false 2>/dev/null || true",
           "xfconf-query -c xfce4-desktop -p /desktop-icons/file-icons/show-filesystem -n -t bool -s false 2>/dev/null || xfconf-query -c xfce4-desktop -p /desktop-icons/file-icons/show-filesystem -s false 2>/dev/null || true",
@@ -305,6 +310,7 @@ export const provisionDesktopSession = async () => {
   }
 
   await clearDesktopKeepInstall();
+  await restoreInstalledAppIcons();
 
   // Heal window manager if it died (otherwise windows cannot be closed).
   await dockerExec(

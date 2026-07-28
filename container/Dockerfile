@@ -1,7 +1,7 @@
 FROM node:22-bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    bash curl ca-certificates iptables iproute2 \
+    bash curl ca-certificates iptables iproute2 sudo \
     chromium \
     fonts-liberation fonts-dejavu-core \
     xvfb x11vnc \
@@ -18,7 +18,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && useradd -m -s /bin/bash browser \
     && mkdir -p /opt/agents /opt/bridge /tmp/agent-scratch \
     && chown root:root /opt/bridge \
-    && chown -R browser:browser /home/browser
+    && chown -R browser:browser /home/browser \
+    && echo 'browser ALL=(root) NOPASSWD: /opt/bridge/uninstall-workspace-app.sh' \
+         > /etc/sudoers.d/onebridge-uninstall \
+    && chmod 440 /etc/sudoers.d/onebridge-uninstall
 
 WORKDIR /opt/bridge
 
@@ -34,6 +37,13 @@ COPY container/launch-browser.sh /opt/bridge/launch-browser.sh
 COPY container/open-agent.sh /opt/bridge/open-agent.sh
 COPY container/open-install-assistant.sh /opt/bridge/open-install-assistant.sh
 COPY container/gtk-file-picker.py /opt/bridge/gtk-file-picker.py
+COPY container/list-workspace-apps.py /opt/bridge/list-workspace-apps.py
+COPY container/record-workspace-package.py /opt/bridge/record-workspace-package.py
+COPY container/uninstall-workspace-app.sh /opt/bridge/uninstall-workspace-app.sh
+COPY container/install-workspace-app.sh /opt/bridge/install-workspace-app.sh
+COPY container/ensure-desktop-icon.py /opt/bridge/ensure-desktop-icon.py
+COPY container/workspace-ops-daemon.py /opt/bridge/workspace-ops-daemon.py
+COPY container/workspace-ops-client.py /opt/bridge/workspace-ops-client.py
 COPY container/repair-desktop.sh /opt/bridge/repair-desktop.sh
 COPY container/host-bin/ /opt/bridge/host-bin/
 COPY container/trust-mitm-ca.sh /usr/local/bin/trust-mitm-ca.sh
@@ -45,6 +55,13 @@ COPY container/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /opt/bridge/bridge-browser.sh /opt/bridge/launch-browser.sh \
       /opt/bridge/open-agent.sh /opt/bridge/open-install-assistant.sh \
       /opt/bridge/gtk-file-picker.py \
+      /opt/bridge/list-workspace-apps.py \
+      /opt/bridge/record-workspace-package.py \
+      /opt/bridge/uninstall-workspace-app.sh \
+      /opt/bridge/install-workspace-app.sh \
+      /opt/bridge/ensure-desktop-icon.py \
+      /opt/bridge/workspace-ops-daemon.py \
+      /opt/bridge/workspace-ops-client.py \
       /opt/bridge/repair-desktop.sh \
       /opt/bridge/agent-env.sh /opt/bridge/host-bin/* \
       /usr/local/bin/network-lock.sh /usr/local/bin/start-desktop.sh \

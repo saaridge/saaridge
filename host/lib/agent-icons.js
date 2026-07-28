@@ -54,8 +54,13 @@ export const installAgentDesktopIcon = async (agent) => {
 
   const script = `
 mkdir -p ${JSON.stringify(htmlDir)}
-# Keep Desktop clean — leave Install Assistant launcher alone
-find /home/browser/Desktop -mindepth 1 -maxdepth 1 ! -name 'Install Assistant.desktop' -exec rm -rf {} + 2>/dev/null || true
+# Keep Desktop clean — leave Install Assistant + OneBridge-installed apps
+find /home/browser/Desktop -mindepth 1 -maxdepth 1 | while IFS= read -r entry; do
+  base="$(basename "$entry")"
+  [[ "$base" == 'Install Assistant.desktop' ]] && continue
+  if [[ -f "$entry" && "$entry" == *.desktop ]] && grep -q '^X-OneBridge-Package=' "$entry" 2>/dev/null; then continue; fi
+  rm -rf "$entry"
+done 2>/dev/null || true
 cat > ${JSON.stringify(htmlFile)} <<'HTML_EOF'
 ${html}
 HTML_EOF

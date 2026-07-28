@@ -11,6 +11,11 @@ rm -f /opt/bridge/token
 
 if [[ "$(id -u)" -eq 0 ]]; then
   /usr/local/bin/network-lock.sh || true
+  mkdir -p /var/run/bridge
+  if [[ -x /opt/bridge/workspace-ops-daemon.py ]]; then
+    pkill -f 'workspace-ops-daemon.py' 2>/dev/null || true
+    nohup python3 /opt/bridge/workspace-ops-daemon.py >/tmp/workspace-ops-daemon.log 2>&1 &
+  fi
 fi
 
 mkdir -p /opt/agents /tmp/agent-scratch /var/run/bridge /home/browser

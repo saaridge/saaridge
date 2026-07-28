@@ -435,6 +435,9 @@ const installDebInWorkspace = async (workspacePath, base) => {
   const pkgName = await readDebPackageName(workspacePath);
   const icon = await ensureDesktopIconForDeb(pkgName, base);
   const displayName = icon?.name || pkgName || base.replace(/\.deb$/i, "");
+  if (pkgName) {
+    await recordWorkspacePackage(pkgName, displayName, "deb");
+  }
   logStep("Installed .deb in workspace", { file: base, desktop: icon?.desktopName });
   return {
     ok: true,
@@ -451,6 +454,29 @@ const readDebPackageName = async (workspacePath) => {
     { timeoutMs: 15_000 },
   );
   return (res.stdout || "").trim() || null;
+};
+
+const recordWorkspacePackage = async (pkg, displayName, kind = "deb") => {
+  if (!pkg) return;
+  await dockerExec(
+    [
+      "python3",
+      "/opt/bridge/record-workspace-package.py",
+      "add",
+      pkg,
+      displayName || pkg,
+      kind,
+    ],
+    { user: "browser", timeoutMs: 15_000 },
+  );
+};
+
+const removeWorkspacePackageRecord = async (pkg) => {
+  if (!pkg) return;
+  await dockerExec(
+    ["python3", "/opt/bridge/record-workspace-package.py", "remove", pkg],
+    { user: "browser", timeoutMs: 15_000 },
+  );
 };
 
 /**
@@ -504,27 +530,55 @@ SAFE_NAME="$(echo "$NAME" | tr -cd 'A-Za-z0-9 ._-' | sed 's/  */ /g' | sed 's/^ 
 DEST_APP="$HOME/.local/share/applications/onebridge-\${SAFE_NAME// /_}.desktop"
 DEST_DESKTOP="$HOME/Desktop/\${SAFE_NAME}.desktop"
 
-# Rewrite Exec for container X; tag with package id for uninstall.
+# Rewrite Exec for container X; resolve Icon to absolute path; tag for uninstall.
+# Emit only the main [Desktop Entry] (drop Actions) so XFCE always shows the icon.
 python3 - "$SRC" "$DEST_APP" "$PKG" <<'PY'
+import os
 import sys
 src, dest, pkg = sys.argv[1], sys.argv[2], sys.argv[3]
 text = open(src, encoding="utf-8", errors="replace").read().splitlines()
 out = []
+in_action = False
 saw_pkg = False
 for line in text:
+    if line.startswith("[Desktop Action"):
+        in_action = True
+        continue
+    if line.startswith("[") and line.endswith("]"):
+        in_action = False
+    if in_action:
+        continue
+    if line.startswith("Actions="):
+        continue
     if line.startswith("Exec="):
         cmd = line[5:]
         parts = cmd.split()
         if parts:
             bin0 = parts[0]
-            rest = parts[1:]
+            rest = [p for p in parts[1:] if not p.startswith("%")]
             flags = []
             low = bin0.lower()
             if any(x in low for x in ("cursor", "chrom", "code", "electron")):
                 for f in ("--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"):
                     if f not in rest:
                         flags.append(f)
-            line = "Exec=" + " ".join([bin0, *flags, *rest])
+            # Keep field codes like %F at the end for desktop launchers
+            codes = [p for p in parts[1:] if p.startswith("%")]
+            line = "Exec=" + " ".join([bin0, *flags, *rest, *codes])
+    if line.startswith("Icon="):
+        icon = line[5:].strip()
+        if icon and not icon.startswith("/"):
+            for p in (
+                f"/usr/share/pixmaps/{icon}.png",
+                f"/usr/share/pixmaps/{icon}.svg",
+                f"/usr/share/pixmaps/{icon}.xpm",
+                f"/usr/share/icons/hicolor/48x48/apps/{icon}.png",
+                f"/usr/share/icons/hicolor/128x128/apps/{icon}.png",
+                f"/usr/share/icons/hicolor/256x256/apps/{icon}.png",
+            ):
+                if os.path.isfile(p):
+                    line = f"Icon={p}"
+                    break
     if line.startswith("X-OneBridge-Package="):
         saw_pkg = True
         if pkg:
@@ -532,7 +586,7 @@ for line in text:
     out.append(line)
 if pkg and not saw_pkg:
     out.append(f"X-OneBridge-Package={pkg}")
-open(dest, "w", encoding="utf-8").write("\n".join(out) + "\n")
+open(dest, "w", encoding="utf-8").write("\\n".join(out) + "\\n")
 PY
 
 chmod +x "$DEST_APP"
@@ -543,9 +597,12 @@ if command -v gio >/dev/null 2>&1; then
   gio set "$DEST_DESKTOP" metadata::trusted true 2>/dev/null || true
 fi
 chown browser:browser "$DEST_APP" "$DEST_DESKTOP" 2>/dev/null || true
-# Refresh desktop icons if xfdesktop is running
+# Force XFCE to pick up the new icon (reload is often not enough)
+export DISPLAY=:1
 if pgrep -x xfdesktop >/dev/null 2>&1; then
   xfdesktop --reload 2>/dev/null || true
+  # Nudge by touching Desktop so the file monitor fires
+  touch "$HOME/Desktop" "$DEST_DESKTOP" 2>/dev/null || true
 fi
 echo "OK|$SAFE_NAME|$DEST_DESKTOP"
 `;
@@ -556,6 +613,12 @@ echo "OK|$SAFE_NAME|$DEST_DESKTOP"
   });
   const line = (res.stdout || "").trim().split("\n").pop() || "";
   if (!line.startsWith("OK|")) {
+    logError("Desktop icon creation failed", {
+      pkg: pkgName,
+      code: res.code,
+      stdout: (res.stdout || "").trim().slice(-400),
+      stderr: (res.stderr || "").trim().slice(-400),
+    });
     return null;
   }
   const parts = line.split("|");
@@ -605,6 +668,7 @@ const installAppImageInWorkspace = async (workspacePath, base) => {
       error: (res.stderr || res.stdout || "AppImage install failed").trim().slice(-500),
     };
   }
+  await recordWorkspacePackage(`appimage:${name}`, name, "appimage");
   return {
     ok: true,
     displayName: name,
@@ -620,46 +684,7 @@ export const listWorkspaceInstalledApps = async () => {
   if (!(await containerRunning())) {
     return { ok: false, error: "Workspace is not running", apps: [] };
   }
-  const script = `
-export HOME=/home/browser
-python3 - <<'PY'
-import glob, os, json
-apps = []
-for path in sorted(glob.glob("/home/browser/Desktop/*.desktop")):
-    name = os.path.basename(path)
-    if name == "Install Assistant.desktop":
-        continue
-    pkg = ""
-    label = os.path.splitext(name)[0]
-    in_action = False
-    try:
-        for line in open(path, encoding="utf-8", errors="replace"):
-            line = line.strip()
-            if line.startswith("[Desktop Action"):
-                in_action = True
-                continue
-            if line.startswith("[") and line.endswith("]"):
-                in_action = False
-                continue
-            if in_action:
-                continue
-            if line.startswith("Name=") and not line.startswith("Name["):
-                label = line.split("=", 1)[1].strip() or label
-            if line.startswith("X-OneBridge-Package="):
-                pkg = line.split("=", 1)[1].strip()
-    except OSError:
-        continue
-    if not pkg:
-        low = label.lower()
-        if low == "cursor":
-            pkg = "cursor"
-        else:
-            continue
-    apps.append({"name": label, "package": pkg, "desktop": path})
-print(json.dumps(apps))
-PY
-`;
-  const res = await dockerExec(["bash", "-lc", script], {
+  const res = await dockerExec(["python3", "/opt/bridge/list-workspace-apps.py"], {
     user: "browser",
     timeoutMs: 15_000,
   });
@@ -706,6 +731,7 @@ export const uninstallWorkspaceApp = async (packageId) => {
     if (res.code !== 0) {
       return { ok: false, error: (res.stderr || res.stdout || "Uninstall failed").trim().slice(-500) };
     }
+    await removeWorkspacePackageRecord(pkg);
     return { ok: true, displayName: name, package: pkg };
   }
 
@@ -748,6 +774,7 @@ export const uninstallWorkspaceApp = async (packageId) => {
   }
 
   logStep("Uninstalled workspace app", { package: pkg });
+  await removeWorkspacePackageRecord(pkg);
   return { ok: true, displayName: pkg, package: pkg };
 };
 
