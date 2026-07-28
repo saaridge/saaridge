@@ -101,6 +101,14 @@ export const defaultDataPolicy = (agentId) => ({
   maxWriteBytes: DEFAULT_MAX_BYTES,
   transforms: {
     readRedact: [],
+    writeRedact: [],
     writeBlockGlobs: [".env", "**/*.pem", "**/*.key"],
+    // Content rewrite/extract: edit host/bridge/control/lib.js only.
+    // Helpers (e.g. extractSecretsToVault) live in control/helpers.js.
+    vaultExtract: [],
+    net: {
+      requestRedact: [],
+      responseRedact: [],
+    },
   },
 });

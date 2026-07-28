@@ -51,6 +51,14 @@ b64 = sys.argv[1].strip()
 policy = {
     "CACertificates": [b64],
     "CACertificateManagementAllowed": 1,
+    # Force Google omnibox search (Debian Chromium often defaults to DuckDuckGo,
+    # whose SERP is fragile under MITM). Not a network allowlist — search UI only.
+    "DefaultSearchProviderEnabled": True,
+    "DefaultSearchProviderName": "Google",
+    "DefaultSearchProviderKeyword": "google.com",
+    "DefaultSearchProviderSearchURL": "https://www.google.com/search?q={searchTerms}",
+    "DefaultSearchProviderSuggestURL": "https://www.google.com/complete/search?client=chrome&q={searchTerms}",
+    "DefaultSearchProviderNewTabURL": "https://www.google.com/",
 }
 for path in (
     "/etc/chromium/policies/managed/onebridge-mitm.json",

@@ -6,7 +6,7 @@ import {
   maxWriteBytes,
   effectiveRoots,
 } from "./policy.js";
-import { transformRead, transformWrite } from "./transform.js";
+import { transformRead, transformWrite, transformList } from "./transform.js";
 import { audit } from "./audit.js";
 import { acquire, release } from "./limits.js";
 import * as store from "./store.js";
@@ -64,7 +64,8 @@ export const list = async (agent, inputPath = ".") => {
   return withLimit(agent, "list", async () => {
     try {
       const { real } = assertReadable(agent, inputPath);
-      const entries = await store.listDir(real);
+      let entries = await store.listDir(real);
+      entries = await transformList(agent, real, entries);
       auditOk(agent, "list", { path: real, count: entries.length });
       return { path: real, entries };
     } catch (err) {
@@ -118,7 +119,7 @@ export const read = async (
         throw err;
       }
       let buf = await store.readChunk(real, offset, len);
-      buf = transformRead(agent, real, buf);
+      buf = await transformRead(agent, real, buf);
       if (!Buffer.isBuffer(buf)) buf = Buffer.from(String(buf), "utf8");
       auditOk(agent, "read", { path: real, offset, bytes: buf.length });
       if (encoding === "buffer") return { path: real, data: buf, bytes: buf.length };
@@ -148,7 +149,7 @@ export const write = async (
           : encoding === "base64"
             ? Buffer.from(String(content), "base64")
             : Buffer.from(String(content ?? ""), "utf8");
-      data = transformWrite(agent, real, data);
+      data = await transformWrite(agent, real, data);
       if (!Buffer.isBuffer(data)) data = Buffer.from(data);
       const max = maxWriteBytes(agent);
       if (data.length > max) {

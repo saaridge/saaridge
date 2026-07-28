@@ -1,0 +1,21 @@
+---
+description: OneBridge mediation guarantee — never weaken vault/host data control or add URL passthrough lists
+alwaysApply: true
+---
+
+# OneBridge mediation guarantee
+
+Read and obey [`CONSTRAINTS.md`](../../CONSTRAINTS.md) for this repo.
+
+## Never do
+
+- Add hostname/URL allowlists or static MITM passthrough entries (e.g. `linkedin.com`) to “fix” browsing.
+- Soft-open container egress or re-enable host `terminal_exec`.
+- Bypass [`host/bridge/control/lib.js`](../../host/bridge/control/lib.js) for host or network text the agent sees.
+
+## Always preserve
+
+- Host FS virtualization via Data API + control lib.
+- Bridge-owned handling of `vault://` (lib → resolve → upstream → lib on response).
+- Fail-closed network lock.
+- Adaptive (runtime) MITM passthrough only — no checked-in site lists. See `CONSTRAINTS.md`.

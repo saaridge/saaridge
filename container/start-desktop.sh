@@ -9,6 +9,16 @@ export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
 export BRIDGE_CREDENTIALS_FILE="${BRIDGE_CREDENTIALS_FILE:-$HOME/.bridge-credentials}"
 
+# Exactly one start-desktop may run. Entrypoint + host used to race and each
+# spawn an xfce4-session → two systrays → "notification area lost selection".
+LOCK_FILE="${ONEBRIDGE_DESKTOP_LOCK:-/tmp/onebridge-start-desktop.lock}"
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  echo "[start-desktop] another instance already running — exit"
+  exit 0
+fi
+echo $$ >"${ONEBRIDGE_DESKTOP_PIDFILE:-/tmp/onebridge-start-desktop.pid}"
+
 # Mediated host projects via /host FUSE
 if [[ -f /opt/bridge/agent-env.sh ]]; then
   # shellcheck source=/dev/null
@@ -123,7 +133,7 @@ EOF
   chmod +x "$dest"
 }
 
-# Apps menu launcher only — no browser icon on the Desktop by default
+# Apps menu launcher (Desktop icon written after clutter clear below)
 write_browser_launcher "$HOME/.local/share/applications/onebridge-browser.desktop"
 write_browser_launcher "$HOME/.local/share/applications/chromium.desktop"
 
@@ -133,17 +143,24 @@ if command -v xdg-settings >/dev/null 2>&1; then
     xdg-settings set default-web-browser chromium.desktop 2>/dev/null || true
 fi
 
-# Clear Desktop clutter but keep Install Assistant and any apps we installed
+# Clear Desktop clutter but keep Install Assistant, Web Browser, and installed apps
 # (tagged with X-OneBridge-Package=). Never wipe user-installed app icons.
 mkdir -p "$HOME/Desktop"
 find "$HOME/Desktop" -mindepth 1 -maxdepth 1 | while IFS= read -r entry; do
   base="$(basename "$entry")"
   [[ "$base" == "Install Assistant.desktop" ]] && continue
+  [[ "$base" == "Web Browser.desktop" ]] && continue
   if [[ -f "$entry" && "$entry" == *.desktop ]] && grep -q '^X-OneBridge-Package=' "$entry" 2>/dev/null; then
     continue
   fi
   rm -rf "$entry"
 done
+
+# Proxied Chromium on the Desktop (fail-closed via launch-browser.sh → local auth-proxy)
+write_browser_launcher "$HOME/Desktop/Web Browser.desktop"
+if command -v gio >/dev/null 2>&1; then
+  gio set "$HOME/Desktop/Web Browser.desktop" metadata::trusted true 2>/dev/null || true
+fi
 
 cat > "$HOME/.local/share/applications/onebridge-install-assistant.desktop" <<'EOF'
 [Desktop Entry]
@@ -233,8 +250,12 @@ is_live_proc() {
   return 1
 }
 
-# Start desktop environment (no auto terminal)
+# Start desktop environment (no auto terminal). Only one xfce4-session ever.
 if command -v startxfce4 >/dev/null 2>&1; then
+  # Drop duplicate sessions left by prior races (keep oldest live pid).
+  if [[ -x /opt/bridge/dedupe-xfce-panel.sh ]]; then
+    /opt/bridge/dedupe-xfce-panel.sh >/tmp/dedupe-panel-pre.log 2>&1 || true
+  fi
   if ! is_live_proc xfce4-session; then
     dbus-launch --exit-with-session startxfce4 >/tmp/xfce.log 2>&1 &
     sleep 3
@@ -278,12 +299,22 @@ if [[ -x /opt/bridge/dedupe-xfce-panel.sh ]]; then
   /opt/bridge/dedupe-xfce-panel.sh >/tmp/dedupe-panel.log 2>&1 || true
 fi
 
-# Virtual speakers + audio stream to host viewer (ws://host:6082)
+# Virtual speakers + audio stream to host viewer (ws://host:6082), kept alive by watchdog
+chmod 755 /usr/local/bin/start-audio.sh /opt/bridge/audio-watchdog.sh 2>/dev/null || true
 if [[ -x /usr/local/bin/start-audio.sh ]]; then
   /usr/local/bin/start-audio.sh >/tmp/start-audio.log 2>&1 || {
     echo "[start-desktop] audio failed — see /tmp/start-audio.log" >&2
     cat /tmp/start-audio.log >&2 || true
   }
+fi
+if [[ -x /opt/bridge/audio-watchdog.sh ]]; then
+  if [[ -f /tmp/audio-watchdog.pid ]]; then
+    kill "$(cat /tmp/audio-watchdog.pid)" 2>/dev/null || true
+    rm -f /tmp/audio-watchdog.pid /tmp/audio-watchdog.lock
+  fi
+  sleep 0.2
+  setsid /opt/bridge/audio-watchdog.sh </dev/null >/tmp/audio-watchdog.log 2>&1 &
+  echo "[start-desktop] audio-watchdog pid $!"
 fi
 
 # Do NOT auto-open browser / Install Assistant / file manager.

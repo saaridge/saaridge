@@ -80,6 +80,12 @@ export ONEBRIDGE_HOST_NAME="${ONEBRIDGE_HOST_NAME:-Host}"
 # Cursor / editors: open projects under this path (not container-local copies)
 export CURSOR_PROJECT_DIR="${CURSOR_PROJECT_DIR:-$ONEBRIDGE_PROJECTS}"
 
+# Force all HTTP(S) clients (Node fetch, Python requests if configured, MCP servers)
+# through the local auth-proxy → host MITM. Fail-closed iptables blocks non-proxy egress.
+export REQUESTS_CA_BUNDLE="${REQUESTS_CA_BUNDLE:-/opt/bridge/certs/onebridge-mitm-ca.crt}"
+export SSL_CERT_FILE="${SSL_CERT_FILE:-/opt/bridge/certs/onebridge-mitm-ca.crt}"
+export NODE_EXTRA_CA_CERTS="${NODE_EXTRA_CA_CERTS:-/opt/bridge/certs/onebridge-mitm-ca.crt}"
+
 # Durable host-home link once FUSE is up (safe to re-run). Drop legacy Projects/Host aliases.
 _HOME_DIR="${HOME:-/home/browser}"
 rm -f "${_HOME_DIR}/Projects" "${_HOME_DIR}/Host Home" "${_HOME_DIR}/host-home" \

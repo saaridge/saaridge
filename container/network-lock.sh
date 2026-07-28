@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Allow only host bridge MCP (:7331), inspecting proxy (:7332),
-# and control plane (:3847) for Install Assistant callbacks.
+# Allow only host bridge MCP/Data API (:7331), inspecting proxy (:7332),
+# and control plane (:3847). FAIL CLOSED — no soft-open egress.
 set -euo pipefail
 
 BRIDGE_HOST="${BRIDGE_HOST:-host.docker.internal}"
@@ -9,14 +9,14 @@ BRIDGE_PROXY_PORT="${BRIDGE_PROXY_PORT:-7332}"
 CONTROL_PORT="${CONTROL_PORT:-3847}"
 
 if ! command -v iptables >/dev/null 2>&1; then
-  echo "[network-lock] iptables not available"
-  exit 0
+  echo "[network-lock] FATAL: iptables not available — refusing open egress" >&2
+  exit 1
 fi
 
 BRIDGE_IP="$(getent hosts "$BRIDGE_HOST" | awk '{print $1}' | head -n1 || true)"
 if [[ -z "${BRIDGE_IP}" ]]; then
-  echo "[network-lock] could not resolve $BRIDGE_HOST"
-  exit 0
+  echo "[network-lock] FATAL: could not resolve $BRIDGE_HOST — refusing open egress" >&2
+  exit 1
 fi
 
 iptables -F OUTPUT || true

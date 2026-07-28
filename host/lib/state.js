@@ -49,13 +49,13 @@ export const BUILTIN_TOOLS = [
   {
     name: "terminal_exec",
     description:
-      "Run a shell command on the HOST (not in the container). cwd defaults to the host home directory. Paths are host paths.",
+      "DISABLED: host shell is not available. Use Data API file tools and vault_http for mediated host/network access.",
     inputSchema: {
       type: "object",
       properties: {
-        command: { type: "string", description: "Shell command to run on host" },
-        cwd: { type: "string", description: "Optional working directory on host (~ allowed)" },
-        timeoutMs: { type: "number", description: "Timeout in ms (default 60000)" },
+        command: { type: "string" },
+        cwd: { type: "string" },
+        timeoutMs: { type: "number" },
       },
       required: ["command"],
     },
@@ -64,7 +64,7 @@ export const BUILTIN_TOOLS = [
   {
     name: "read_file",
     description:
-      "Read a file from the HOST filesystem (paths like ~/Documents/... resolve on the host).",
+      "Read a file via the OneBridge data plane (virtualized host view). Paths under /host map to ~/OneBridge or host home.",
     inputSchema: {
       type: "object",
       properties: {
@@ -77,7 +77,7 @@ export const BUILTIN_TOOLS = [
   },
   {
     name: "write_file",
-    description: "Write a file on the HOST filesystem.",
+    description: "Write a file via the OneBridge data plane (policy + write processors).",
     inputSchema: {
       type: "object",
       properties: {
@@ -91,7 +91,7 @@ export const BUILTIN_TOOLS = [
   },
   {
     name: "list_dir",
-    description: "List a directory on the HOST.",
+    description: "List a directory via the OneBridge data plane.",
     inputSchema: {
       type: "object",
       properties: {
@@ -103,7 +103,7 @@ export const BUILTIN_TOOLS = [
   },
   {
     name: "stat_file",
-    description: "Stat a file or directory on the HOST.",
+    description: "Stat a file or directory via the OneBridge data plane.",
     inputSchema: {
       type: "object",
       properties: {
@@ -115,7 +115,7 @@ export const BUILTIN_TOOLS = [
   },
   {
     name: "delete_path",
-    description: "Delete a file or empty directory on the HOST.",
+    description: "Delete a file or empty directory via the OneBridge data plane.",
     inputSchema: {
       type: "object",
       properties: {
@@ -126,9 +126,9 @@ export const BUILTIN_TOOLS = [
     kind: "builtin",
   },
   {
-    name: "http_request",
+    name: "vault_http",
     description:
-      "Perform an HTTP(S) request FROM THE HOST network. Prefer this for agent HTTP; container egress is locked to the bridge proxy.",
+      "Bridge-owned HTTP(S) call. Optionally attach a vault secret (vaultId). Response text is processed before return — secrets never enter the container.",
     inputSchema: {
       type: "object",
       properties: {
@@ -136,6 +136,35 @@ export const BUILTIN_TOOLS = [
         method: { type: "string" },
         headers: { type: "object" },
         body: { type: "string" },
+        vaultId: { type: "string", description: "Vault secret id to attach as auth" },
+        authHeader: { type: "string", description: "Header name (default Authorization)" },
+        authPrefix: { type: "string", description: "Prefix before secret (default 'Bearer ')" },
+      },
+      required: ["url"],
+    },
+    kind: "builtin",
+  },
+  {
+    name: "vault_list",
+    description: "List vault secret metadata for this agent (ids/names only — never values).",
+    inputSchema: {
+      type: "object",
+      properties: {},
+    },
+    kind: "builtin",
+  },
+  {
+    name: "http_request",
+    description:
+      "Mediated HTTP(S) via the bridge (same processors as vault_http). Prefer vault_http when using host-derived secrets.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string" },
+        method: { type: "string" },
+        headers: { type: "object" },
+        body: { type: "string" },
+        vaultId: { type: "string" },
       },
       required: ["url"],
     },
@@ -143,8 +172,7 @@ export const BUILTIN_TOOLS = [
   },
   {
     name: "open_url",
-    description:
-      "Fetch a URL from the HOST (returns response text). Same network as if the agent ran on the host.",
+    description: "Fetch a URL via the bridge-owned mediated path (processed response).",
     inputSchema: {
       type: "object",
       properties: {

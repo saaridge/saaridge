@@ -150,6 +150,8 @@ export const provisionDesktopSession = async () => {
     "mouse-pump.sh",
     "hostfs-fuse.py",
     "hostfs-watchdog.sh",
+    "audio-watchdog.sh",
+    "restart-browser.sh",
     "ensure-desktop-icon.py",
   ]) {
     await dockerCp(
@@ -172,11 +174,25 @@ export const provisionDesktopSession = async () => {
     path.join(ROOT, "container", "start-audio.sh"),
     `${CONTAINER_NAME}:/usr/local/bin/start-audio.sh`,
   );
+  await dockerCp(
+    path.join(ROOT, "container", "entrypoint.sh"),
+    `${CONTAINER_NAME}:/usr/local/bin/entrypoint.sh`,
+  );
+  // dockerCp from macOS often drops +x — fix before any start-desktop / browser launch.
   await dockerExec([
     "bash",
     "-lc",
     [
-      "chmod 755 /opt/bridge/bridge-browser.sh /opt/bridge/launch-browser.sh /opt/bridge/open-agent.sh /opt/bridge/open-install-assistant.sh /opt/bridge/gtk-file-picker.py /opt/bridge/repair-desktop.sh /opt/bridge/dedupe-xfce-panel.sh /opt/bridge/ensure-x-modes.sh /opt/bridge/resize-display.sh /opt/bridge/fit-windows.sh /opt/bridge/fix-vnc-stack.py /opt/bridge/key-pump.sh /opt/bridge/mouse-pump.sh /opt/bridge/agent-env.sh /opt/bridge/hostfs-fuse.py /opt/bridge/hostfs-watchdog.sh /opt/bridge/ensure-desktop-icon.py /opt/bridge/host-bin/* /usr/local/bin/start-desktop.sh /usr/local/bin/start-audio.sh",
+      "chmod 755 /usr/local/bin/start-desktop.sh /usr/local/bin/start-audio.sh /usr/local/bin/entrypoint.sh",
+      "chmod 755 /opt/bridge/*.sh /opt/bridge/host-bin/* 2>/dev/null || true",
+      "chmod 755 /opt/bridge/gtk-file-picker.py /opt/bridge/hostfs-fuse.py /opt/bridge/ensure-desktop-icon.py 2>/dev/null || true",
+    ].join("; "),
+  ]);
+  await dockerExec([
+    "bash",
+    "-lc",
+    [
+            "chmod 755 /opt/bridge/bridge-browser.sh /opt/bridge/launch-browser.sh /opt/bridge/restart-browser.sh /opt/bridge/open-agent.sh /opt/bridge/open-install-assistant.sh /opt/bridge/gtk-file-picker.py /opt/bridge/repair-desktop.sh /opt/bridge/dedupe-xfce-panel.sh /opt/bridge/ensure-x-modes.sh /opt/bridge/resize-display.sh /opt/bridge/fit-windows.sh /opt/bridge/fix-vnc-stack.py /opt/bridge/key-pump.sh /opt/bridge/mouse-pump.sh /opt/bridge/agent-env.sh /opt/bridge/hostfs-fuse.py /opt/bridge/hostfs-watchdog.sh /opt/bridge/audio-watchdog.sh /opt/bridge/ensure-desktop-icon.py /opt/bridge/host-bin/* /usr/local/bin/start-desktop.sh /usr/local/bin/start-audio.sh /usr/local/bin/entrypoint.sh",
       "chmod 644 /opt/bridge/*.mjs 2>/dev/null || true",
       "mkdir -p /host",
       // Keep RANDR modes available so viewer resize maps 1:1 (accurate clicks).
@@ -299,7 +315,16 @@ export const provisionDesktopSession = async () => {
     await dockerExec([
       "bash",
       "-lc",
-      "pkill -u browser -f start-desktop || true; rm -f /home/browser/.config/onebridge-browser-opened-this-session",
+      [
+        // Tear down any raced sessions/panels before a clean start.
+        "pkill -u browser -f '/usr/local/bin/start-desktop.sh' || true",
+        "pkill -u browser -x xfce4-session || true",
+        "pkill -u browser -x xfce4-panel || true",
+        "pkill -u browser -f '/xfce4/panel/wrapper' || true",
+        "rm -f /home/browser/.config/onebridge-browser-opened-this-session",
+        "rm -f /tmp/onebridge-start-desktop.lock /tmp/onebridge-start-desktop.pid",
+        "sleep 0.5",
+      ].join("; "),
     ]);
     const start = await dockerExec(
       [
@@ -343,12 +368,13 @@ export const provisionDesktopSession = async () => {
           "pkill -u browser -f xfce4-terminal || true",
           "pkill -u browser -f 'xterm' || true",
           "mkdir -p \"$HOME/Desktop\" \"$HOME/.local/share/applications\"",
+          "chmod 755 /opt/bridge/launch-browser.sh /opt/bridge/bridge-browser.sh 2>/dev/null || true",
           "cat > \"$HOME/.local/share/applications/onebridge-browser.desktop\" <<'EOF'",
           "[Desktop Entry]",
           "Version=1.0",
           "Type=Application",
           "Name=Web Browser",
-          "Comment=Browse the internet",
+          "Comment=Browse the internet via OneBridge proxy",
           "Exec=/opt/bridge/launch-browser.sh %u",
           "Icon=web-browser",
           "Terminal=false",
@@ -356,9 +382,13 @@ export const provisionDesktopSession = async () => {
           "StartupNotify=true",
           "EOF",
           "chmod +x \"$HOME/.local/share/applications/onebridge-browser.desktop\"",
+          "cp -f \"$HOME/.local/share/applications/onebridge-browser.desktop\" \"$HOME/Desktop/Web Browser.desktop\"",
+          "chmod +x \"$HOME/Desktop/Web Browser.desktop\"",
+          "gio set \"$HOME/Desktop/Web Browser.desktop\" metadata::trusted true 2>/dev/null || true",
           "find \"$HOME/Desktop\" -mindepth 1 -maxdepth 1 | while IFS= read -r entry; do",
           "  base=\"$(basename \"$entry\")\"",
           "  [[ \"$base\" == 'Install Assistant.desktop' ]] && continue",
+          "  [[ \"$base\" == 'Web Browser.desktop' ]] && continue",
           "  if [[ -f \"$entry\" && \"$entry\" == *.desktop ]] && grep -q '^X-OneBridge-Package=' \"$entry\" 2>/dev/null; then continue; fi",
           "  rm -rf \"$entry\"",
           "done",
@@ -389,7 +419,7 @@ export const provisionDesktopSession = async () => {
     { user: "browser" },
   );
 
-  // Always (re)start audio — Pulse is fragile across display restarts
+  // Pulse + audio-stream, then a watchdog so they stay up across crashes.
   const audio = await dockerExec(
     [
       "bash",
@@ -399,17 +429,25 @@ export const provisionDesktopSession = async () => {
         "export DISPLAY=:1",
         "export XDG_RUNTIME_DIR=/tmp/runtime-browser",
         "export PULSE_RUNTIME_PATH=/tmp/runtime-browser/pulse",
+        "chmod 755 /usr/local/bin/start-audio.sh /opt/bridge/audio-watchdog.sh 2>/dev/null || true",
         "/usr/local/bin/start-audio.sh >/tmp/start-audio.log 2>&1",
         "echo AUDIO_EXIT:$?",
         "tail -20 /tmp/start-audio.log || true",
+        // Stop prior watchdog via pidfile only (pkill -f matches this -c string).
+        "if [[ -f /tmp/audio-watchdog.pid ]]; then kill \"$(cat /tmp/audio-watchdog.pid)\" 2>/dev/null || true; rm -f /tmp/audio-watchdog.pid /tmp/audio-watchdog.lock; fi",
+        "sleep 0.2",
+        "setsid /opt/bridge/audio-watchdog.sh </dev/null >/tmp/audio-watchdog.log 2>&1 &",
+        "echo AUDIO_WATCHDOG:$!",
       ].join("\n"),
     ],
     { user: "browser" },
   );
-  if (!(audio.stdout || "").includes("OK pulse")) {
+  if (!(audio.stdout || "").includes("OK pulse") && !(audio.stdout || "").includes("OK already")) {
     logError("Audio stream failed to start", {
       detail: (audio.stdout || "") + (audio.stderr || ""),
     });
+  } else {
+    logStep("Audio pulse + watchdog running");
   }
 
   // Do not place agent/demo icons on the desktop at startup — Install Assistant only.
@@ -469,10 +507,12 @@ export const ensureWorkspaceBrowserOpen = async (agent) => {
         "export DISPLAY=:1",
         "export XDG_RUNTIME_DIR=/tmp/runtime-browser",
         "export PULSE_RUNTIME_PATH=/tmp/runtime-browser/pulse",
+        "export PULSE_SERVER=unix:/tmp/runtime-browser/pulse/native",
         "export BRIDGE_CREDENTIALS_FILE=/home/browser/.bridge-credentials",
         `export LOCAL_PROXY_PORT=${agent.localProxyPort}`,
         "if [[ ! -f /home/browser/.bridge-credentials ]]; then echo MISSING_CREDS; exit 2; fi",
         `for i in $(seq 1 30); do ss -lnt 2>/dev/null | grep -q ':${agent.localProxyPort} ' && break; sleep 0.2; done`,
+        "/usr/local/bin/start-audio.sh >/tmp/start-audio-from-browser.log 2>&1 || true",
         "nohup /opt/bridge/launch-browser.sh https://www.google.com >/tmp/chromium-desktop.log 2>&1 &",
         "for i in $(seq 1 30); do pgrep -u browser -f 'chromium-bridge-profile' >/dev/null && echo OPENED && exit 0; sleep 0.2; done",
         "echo FAIL; tail -30 /tmp/chromium-desktop.log 2>/dev/null; exit 1",

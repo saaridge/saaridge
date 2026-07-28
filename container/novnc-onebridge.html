@@ -133,6 +133,9 @@
     };
 
     const playPcmChunk = (arrayBuffer) => {
+      if (!arrayBuffer) return;
+      // Auto-arm when PCM arrives if the context is already created/resumed.
+      if (audioCtx && audioCtx.state === "running") audioArmed = true;
       if (!audioCtx || !audioArmed) return;
       const int16 = new Int16Array(arrayBuffer);
       if (!int16.length) return;
@@ -168,9 +171,10 @@
       }
       audioWs.binaryType = "arraybuffer";
       audioWs.onmessage = (ev) => {
-        if (typeof ev.data === "string") {
+        let data = ev.data;
+        if (typeof data === "string") {
           try {
-            const msg = JSON.parse(ev.data);
+            const msg = JSON.parse(data);
             if (msg.type === "hello") {
               audioRate = msg.rate || 48000;
               audioChannels = msg.channels || 2;
@@ -178,7 +182,21 @@
           } catch (_) {}
           return;
         }
-        playPcmChunk(ev.data);
+        // Some embeds deliver text frames as ArrayBuffer when binaryType=arraybuffer.
+        if (data instanceof ArrayBuffer && data.byteLength < 256) {
+          try {
+            const text = new TextDecoder().decode(data);
+            if (text.startsWith("{")) {
+              const msg = JSON.parse(text);
+              if (msg.type === "hello") {
+                audioRate = msg.rate || 48000;
+                audioChannels = msg.channels || 2;
+                return;
+              }
+            }
+          } catch (_) {}
+        }
+        playPcmChunk(data);
       };
       audioWs.onclose = () => setTimeout(connectAudio, 1500);
       audioWs.onerror = () => {};

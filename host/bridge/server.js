@@ -18,6 +18,8 @@ import { openInstallAssistantInDesktop } from "../lib/ui-commands.js";
 import * as dataApi from "./data/api.js";
 import { readAudit, auditMetrics } from "./data/audit.js";
 import { limitsSnapshot } from "./data/limits.js";
+import * as vault from "./vault/index.js";
+import { vaultFetch } from "./vault/fetch.js";
 
 const FS_VERSION = "1";
 
@@ -211,6 +213,26 @@ const mountFsApi = (app) => {
       events: readAudit(limit, agentId),
       metrics: auditMetrics(),
     });
+  });
+
+  // Vault — metadata + bridge-owned fetch (secrets never leave the host bridge)
+  app.get("/v1/vault", authAgent, (req, res) => {
+    res.json({ ok: true, secrets: vault.listMeta(req.agent.id) });
+  });
+
+  app.post("/v1/vault/fetch", authAgent, async (req, res) => {
+    try {
+      const result = await vaultFetch(req.agent, req.body || {});
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      const status =
+        err.code === "EACCES" ? 403 : err.code === "ENOENT" ? 404 : 400;
+      res.status(status).json({
+        ok: false,
+        error: err.message || String(err),
+        code: err.code,
+      });
+    }
   });
 };
 

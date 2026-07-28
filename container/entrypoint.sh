@@ -10,7 +10,8 @@ export DISPLAY="${DISPLAY:-:1}"
 rm -f /opt/bridge/token
 
 if [[ "$(id -u)" -eq 0 ]]; then
-  /usr/local/bin/network-lock.sh || true
+  # Fail-closed: do not continue with open egress if lock cannot be applied.
+  /usr/local/bin/network-lock.sh
   mkdir -p /var/run/bridge /host
   if [[ -x /opt/bridge/workspace-ops-daemon.py ]]; then
     pkill -f 'workspace-ops-daemon.py' 2>/dev/null || true
@@ -73,7 +74,27 @@ fi
     websockify --web=/usr/share/novnc 0.0.0.0:6080 localhost:5900 >/tmp/novnc.log 2>&1 &
   fi
 
-  # Placeholder desktop until host provisions bridge credentials + full session
+  # Audio from container boot: Pulse + :6082 stream, kept alive by watchdog.
+  # Must run as browser (Pulse runtime lives under browser's XDG_RUNTIME_DIR).
+  chmod 755 /usr/local/bin/start-audio.sh /opt/bridge/audio-watchdog.sh 2>/dev/null || true
+  mkdir -p /tmp/runtime-browser /home/browser/.config/pulse
+  chown -R browser:browser /tmp/runtime-browser /home/browser/.config/pulse 2>/dev/null || true
+  su -s /bin/bash browser -c '
+    export HOME=/home/browser DISPLAY=:1
+    export XDG_RUNTIME_DIR=/tmp/runtime-browser
+    export PULSE_RUNTIME_PATH=/tmp/runtime-browser/pulse
+    if [[ -f /tmp/audio-watchdog.pid ]]; then
+      kill "$(cat /tmp/audio-watchdog.pid)" 2>/dev/null || true
+      rm -f /tmp/audio-watchdog.pid
+    fi
+    /usr/local/bin/start-audio.sh >/tmp/start-audio.log 2>&1 || true
+    setsid /opt/bridge/audio-watchdog.sh </dev/null >/tmp/audio-watchdog.log 2>&1 &
+  ' || true
+
+  # Placeholder desktop until host provisions bridge credentials + full session.
+  # Do NOT start XFCE here — host provisionDesktopSession owns start-desktop.
+  # Starting it in both places races two xfce4-session → duplicate systray
+  # ("notification area lost selection").
   if [[ -f /home/browser/.bridge-credentials ]]; then
     su -s /bin/bash browser -c '
       export HOME=/home/browser DISPLAY=:1
@@ -81,8 +102,9 @@ fi
       export LOCAL_PROXY_PORT="$(python3 -c "import json; print(json.load(open(\"/home/browser/.bridge-credentials\"))[\"localProxyPort\"])")"
       export BRIDGE_TOKEN="$(python3 -c "import json; print(json.load(open(\"/home/browser/.bridge-credentials\"))[\"token\"])")"
       export BRIDGE_PROXY_HOST=host.docker.internal BRIDGE_PROXY_PORT=7332
-      nohup node /opt/bridge/auth-proxy.mjs >/tmp/desktop-auth-proxy.log 2>&1 &
-      nohup /usr/local/bin/start-desktop.sh >/tmp/desktop.log 2>&1 &
+      if ! ss -lnt 2>/dev/null | grep -q ":${LOCAL_PROXY_PORT} "; then
+        nohup node /opt/bridge/auth-proxy.mjs >/tmp/desktop-auth-proxy.log 2>&1 &
+      fi
     ' || true
   else
     # Minimal visible desktop until host provisions credentials (no terminal)
@@ -100,6 +122,22 @@ fi
           -noncache -modtweak -xkb -noxdamage -noscrollcopyrect \
           -always_inject -xrandr resize \
           >/tmp/x11vnc.log 2>&1 &
+      fi
+      # Keep audio watchdog alive across crashes (pidfile + flock; no pkill -f).
+      aw_pid=""
+      if [[ -f /tmp/audio-watchdog.pid ]]; then
+        aw_pid="$(cat /tmp/audio-watchdog.pid 2>/dev/null || true)"
+      fi
+      if [[ -z "$aw_pid" ]] || ! kill -0 "$aw_pid" 2>/dev/null; then
+        chmod 755 /usr/local/bin/start-audio.sh /opt/bridge/audio-watchdog.sh 2>/dev/null || true
+        rm -f /tmp/audio-watchdog.pid /tmp/audio-watchdog.lock
+        su -s /bin/bash browser -c '
+          export HOME=/home/browser DISPLAY=:1
+          export XDG_RUNTIME_DIR=/tmp/runtime-browser
+          export PULSE_RUNTIME_PATH=/tmp/runtime-browser/pulse
+          /usr/local/bin/start-audio.sh >/tmp/start-audio.log 2>&1 || true
+          setsid /opt/bridge/audio-watchdog.sh </dev/null >/tmp/audio-watchdog.log 2>&1 &
+        ' || true
       fi
     done
   ) >/tmp/desktop-watchdog.log 2>&1 &

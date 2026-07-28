@@ -52,6 +52,7 @@ COPY container/dedupe-xfce-panel.sh /opt/bridge/dedupe-xfce-panel.sh
 COPY container/host-bin/ /opt/bridge/host-bin/
 COPY container/hostfs-fuse.py /opt/bridge/hostfs-fuse.py
 COPY container/hostfs-watchdog.sh /opt/bridge/hostfs-watchdog.sh
+COPY container/audio-watchdog.sh /opt/bridge/audio-watchdog.sh
 COPY container/trust-mitm-ca.sh /usr/local/bin/trust-mitm-ca.sh
 COPY container/start-audio.sh /usr/local/bin/start-audio.sh
 COPY container/novnc-onebridge.html /usr/share/novnc/novnc-onebridge.html
@@ -72,6 +73,7 @@ RUN chmod +x /opt/bridge/bridge-browser.sh /opt/bridge/launch-browser.sh \
       /opt/bridge/dedupe-xfce-panel.sh \
       /opt/bridge/hostfs-fuse.py \
       /opt/bridge/hostfs-watchdog.sh \
+      /opt/bridge/audio-watchdog.sh \
       /opt/bridge/agent-env.sh /opt/bridge/host-bin/* \
       /usr/local/bin/network-lock.sh /usr/local/bin/start-desktop.sh \
       /usr/local/bin/start-audio.sh /usr/local/bin/trust-mitm-ca.sh \
@@ -85,5 +87,7 @@ ENV BROWSER=/opt/bridge/bridge-browser.sh
 ENV DISPLAY=:1
 ENV RESOLUTION=1920x1080x24
 ENV XDG_RUNTIME_DIR=/tmp/runtime-browser
+ENV PULSE_RUNTIME_PATH=/tmp/runtime-browser/pulse
+ENV PULSE_SERVER=unix:/tmp/runtime-browser/pulse/native
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

@@ -1,10 +1,11 @@
 import os from "node:os";
-import { run } from "../lib/docker.js";
 import { logBridge } from "../lib/logger.js";
 import { getTools, listAllTools } from "../lib/state.js";
 import * as dataApi from "./data/api.js";
 import { audit } from "./data/audit.js";
 import { getRoots } from "./data/api.js";
+import * as vault from "./vault/index.js";
+import { vaultFetch } from "./vault/fetch.js";
 
 const textResult = (text, isError = false) => ({
   content: [{ type: "text", text }],
@@ -35,21 +36,6 @@ const assertUrlAllowed = (agent, url) => {
   }
 };
 
-const runShell = async (command, cwd, timeoutMs = 60_000) => {
-  const result = await run("bash", ["-lc", command], {
-    cwd: cwd || os.homedir(),
-    timeoutMs,
-  });
-  const body = [
-    `exit=${result.code}`,
-    "----- stdout -----",
-    result.stdout || "",
-    "----- stderr -----",
-    result.stderr || "",
-  ].join("\n");
-  return textResult(body, result.code !== 0);
-};
-
 export const invokeTool = async (name, args = {}, meta = {}) => {
   const agent = meta.agent || null;
   const agentId = agent?.id || meta.agentId || null;
@@ -73,12 +59,22 @@ export const invokeTool = async (name, args = {}, meta = {}) => {
 
   try {
     if (tool.kind === "custom") {
-      return await invokeCustom(tool, args, agent);
+      audit({
+        plane: "data",
+        op: "custom_tool_denied",
+        agentId,
+        ok: false,
+        tool: name,
+      });
+      return textResult(
+        "Custom shell tools are disabled. Use file tools and vault_http / http_request (bridge-mediated).",
+        true,
+      );
     }
     return await invokeBuiltin(name, args, agent);
   } catch (err) {
     logBridge("tool_error", { tool: name, agentId, error: String(err) });
-    return textResult(String(err), true);
+    return textResult(String(err?.message || err), true);
   }
 };
 
@@ -89,11 +85,10 @@ const invokeBuiltin = async (name, args, agent) => {
       return textResult(
         JSON.stringify(
           {
-            platform: process.platform,
-            arch: process.arch,
-            homedir: os.homedir(),
             hostname: os.hostname(),
-            cwd: process.cwd(),
+            platform: os.platform(),
+            arch: os.arch(),
+            homedir: os.homedir(),
             oneBridge: roots
               ? {
                   workspace: roots.workspace,
@@ -103,7 +98,7 @@ const invokeBuiltin = async (name, args, agent) => {
                 }
               : null,
             note:
-              "File tools use the OneBridge data plane (~/OneBridge/...). Container apps use /host via FUSE. Network goes through the bridge proxy.",
+              "File tools use the OneBridge data plane (virtualized). Network: vault_http / http_request via bridge processors. Host shell disabled.",
           },
           null,
           2,
@@ -111,20 +106,18 @@ const invokeBuiltin = async (name, args, agent) => {
       );
     }
     case "terminal_exec": {
-      // Privileged: cwd must stay under allowlisted OneBridge roots.
-      const cwd = dataApi.assertCwdAllowed(
-        agent,
-        args.cwd || getRoots(agent).workspace,
-      );
       audit({
         plane: "data",
         op: "terminal_exec",
         agentId: agent?.id,
-        ok: true,
-        cwd,
-        command: String(args.command || "").slice(0, 500),
+        ok: false,
+        denied: true,
+        command: String(args.command || "").slice(0, 200),
       });
-      return runShell(args.command, cwd, args.timeoutMs || 60_000);
+      return textResult(
+        "terminal_exec is disabled. Host shell bypasses mediation. Use read_file/write_file/list_dir and vault_http.",
+        true,
+      );
     }
     case "read_file": {
       const result = await dataApi.read(agent, args.path, {
@@ -172,47 +165,28 @@ const invokeBuiltin = async (name, args, agent) => {
       const result = await dataApi.unlink(agent, args.path);
       return textResult(`Deleted ${result.path}`);
     }
+    case "vault_list": {
+      const rows = vault.listMeta(agent?.id);
+      return textResult(JSON.stringify(rows, null, 2));
+    }
+    case "vault_http":
     case "http_request":
     case "open_url": {
       assertUrlAllowed(agent, args.url);
-      const method = (args.method || "GET").toUpperCase();
-      const res = await fetch(args.url, {
-        method,
+      const result = await vaultFetch(agent, {
+        url: args.url,
+        method: args.method || "GET",
         headers: args.headers || {},
         body: args.body,
+        vaultId: args.vaultId,
+        authHeader: args.authHeader,
+        authPrefix: args.authPrefix,
       });
-      const body = await res.text();
-      return textResult(
-        JSON.stringify(
-          {
-            status: res.status,
-            headers: Object.fromEntries(res.headers.entries()),
-            body: body.slice(0, 200_000),
-            via: "host",
-          },
-          null,
-          2,
-        ),
-        res.status >= 400,
-      );
+      return textResult(JSON.stringify(result, null, 2), result.status >= 400);
     }
     default:
       return textResult(`Builtin not implemented: ${name}`, true);
   }
-};
-
-const invokeCustom = async (tool, args, agent) => {
-  let command = tool.commandTemplate || "";
-  for (const [key, value] of Object.entries(args || {})) {
-    command = command.replaceAll(`{{${key}}}`, String(value));
-  }
-  if (!command.trim()) {
-    return textResult("Custom tool missing commandTemplate", true);
-  }
-  const cwd = agent
-    ? dataApi.assertCwdAllowed(agent, tool.cwd || getRoots(agent).workspace)
-    : tool.cwd || os.homedir();
-  return runShell(command, cwd, tool.timeoutMs || 60_000);
 };
 
 export const mcpToolList = (agent = null) => {
@@ -221,6 +195,7 @@ export const mcpToolList = (agent = null) => {
     const allow = new Set(agent.policy.tools);
     tools = tools.filter((t) => allow.has(t.name));
   }
+  tools = tools.filter((t) => t.name !== "terminal_exec");
   return tools.map((t) => ({
     name: t.name,
     description: t.description || "",
