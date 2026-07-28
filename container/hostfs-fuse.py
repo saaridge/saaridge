@@ -22,6 +22,7 @@ import os
 import stat
 import sys
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -178,18 +179,28 @@ class DataApi:
         return f"~/OneBridge/{rel}"
 
 
-def _mk_stat(is_dir: bool, size: int = 0, mtime: int = 0) -> "fuse.Stat":
+def _mk_stat(is_dir: bool, size: int = 0, mtime: int = 0, ino: int = 0) -> "fuse.Stat":
     st = fuse.Stat()
     st.st_mode = (stat.S_IFDIR | 0o755) if is_dir else (stat.S_IFREG | 0o644)
-    st.st_nlink = 2 if is_dir else 1
+    # Non-empty dirs: nlink>2 so clients don't treat the folder as vacant.
+    st.st_nlink = 3 if is_dir else 1
     st.st_size = int(size or 0)
     st.st_uid = FS_UID
     st.st_gid = FS_GID
+    st.st_ino = (int(ino) & 0xFFFFFFFF) or 1
     now = int(mtime or 0) or 1
     st.st_atime = now
     st.st_mtime = now
     st.st_ctime = now
     return st
+
+
+def _ino_for(path: str) -> int:
+    # Stable non-zero inode per path (Electron/Node file trees break on inode 0 collisions).
+    h = 0
+    for ch in path:
+        h = ((h * 131) + ord(ch)) & 0xFFFFFFFF
+    return h or 1
 
 
 class HostFS(Fuse):
@@ -200,6 +211,9 @@ class HostFS(Fuse):
         self.fd_map: Dict[int, str] = {}
         self.next_fd = 3
         self._fd_lock = threading.Lock()
+        self._getattr_cache: Dict[str, Tuple[float, object]] = {}
+        self._getattr_lock = threading.Lock()
+        self._getattr_ttl = 2.0
 
     def _path(self, path: str) -> str:
         return self.api.host_path(path)
@@ -214,8 +228,17 @@ class HostFS(Fuse):
 
     def getattr(self, path):
         p = self._norm(path)
+        now = time.time()
+        with self._getattr_lock:
+            hit = self._getattr_cache.get(p)
+            if hit and now - hit[0] < self._getattr_ttl:
+                return hit[1]
+
         if p in ("/", "/workspaces", "/shared", "/home"):
-            return _mk_stat(True)
+            st = _mk_stat(True, ino=_ino_for(p))
+            with self._getattr_lock:
+                self._getattr_cache[p] = (now, st)
+            return st
         if p.startswith("/workspaces/") and not (
             p == f"/workspaces/{self.agent_id}"
             or p.startswith(f"/workspaces/{self.agent_id}/")
@@ -225,11 +248,15 @@ class HostFS(Fuse):
             info = self.api.request("GET", "/v1/fs/stat", {"path": self._path(path)})
         except OSError as err:
             return self._err(err)
-        return _mk_stat(
+        st = _mk_stat(
             bool(info.get("isDirectory")),
             int(info.get("size") or 0),
             int((info.get("mtimeMs") or 0) / 1000),
+            ino=_ino_for(p),
         )
+        with self._getattr_lock:
+            self._getattr_cache[p] = (now, st)
+        return st
 
     def access(self, path, mode):
         # allow_other + browser ownership: permit read/write/exec checks for desktop user
@@ -256,23 +283,36 @@ class HostFS(Fuse):
 
     def readdir(self, path, offset):
         p = self._norm(path)
-        names = [".", ".."]
+        # (name, type_mode or None) — include type so Node/Cursor withFileTypes
+        # does not fire a getattr storm (which wedges single-thread FUSE).
+        entries = [(".", stat.S_IFDIR), ("..", stat.S_IFDIR)]
         if p == "/":
-            names += ["workspaces", "shared", "home"]
+            entries += [
+                ("workspaces", stat.S_IFDIR),
+                ("shared", stat.S_IFDIR),
+                ("home", stat.S_IFDIR),
+            ]
         elif p == "/workspaces":
-            names += [self.agent_id]
+            entries += [(self.agent_id, stat.S_IFDIR)]
         else:
             try:
                 result = self.api.request("GET", "/v1/fs/list", {"path": self._path(path)})
                 for e in result.get("entries") or []:
                     name = e.get("name")
-                    if name:
-                        names.append(name)
+                    if not name:
+                        continue
+                    if e.get("isDirectory"):
+                        mode = stat.S_IFDIR
+                    elif e.get("isSymbolicLink"):
+                        mode = stat.S_IFLNK
+                    else:
+                        mode = stat.S_IFREG
+                    entries.append((name, mode))
             except OSError as err:
                 yield -int(err.errno or errno.EIO)
                 return
-        for name in names:
-            yield fuse.Direntry(name)
+        for name, mode in entries:
+            yield fuse.Direntry(name, type=mode)
 
     def open(self, path, flags):
         return 0
@@ -412,8 +452,10 @@ def main():
         agent_id,
         version="%prog OneBridge hostfs",
         usage="hostfs-fuse MOUNTPOINT",
+        # Multithreaded: Cursor/Node issue many parallel getattr/readdir calls.
         dash_s_do="setsingle",
     )
+    server.multithreaded = True
     server.parser.add_option(
         mountopt="allow_other",
         metavar="allow_other",
@@ -433,6 +475,11 @@ def main():
         pass
     try:
         server.fuse_args.add("nonempty")
+    except Exception:
+        pass
+    # Prefer multi-threaded request handling when libfuse supports it.
+    try:
+        server.fuse_args.add("max_readahead=131072")
     except Exception:
         pass
     server.main()
