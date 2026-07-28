@@ -45,6 +45,7 @@ COPY container/ensure-desktop-icon.py /opt/bridge/ensure-desktop-icon.py
 COPY container/workspace-ops-daemon.py /opt/bridge/workspace-ops-daemon.py
 COPY container/workspace-ops-client.py /opt/bridge/workspace-ops-client.py
 COPY container/repair-desktop.sh /opt/bridge/repair-desktop.sh
+COPY container/dedupe-xfce-panel.sh /opt/bridge/dedupe-xfce-panel.sh
 COPY container/host-bin/ /opt/bridge/host-bin/
 COPY container/trust-mitm-ca.sh /usr/local/bin/trust-mitm-ca.sh
 COPY container/start-audio.sh /usr/local/bin/start-audio.sh
@@ -63,6 +64,7 @@ RUN chmod +x /opt/bridge/bridge-browser.sh /opt/bridge/launch-browser.sh \
       /opt/bridge/workspace-ops-daemon.py \
       /opt/bridge/workspace-ops-client.py \
       /opt/bridge/repair-desktop.sh \
+      /opt/bridge/dedupe-xfce-panel.sh \
       /opt/bridge/agent-env.sh /opt/bridge/host-bin/* \
       /usr/local/bin/network-lock.sh /usr/local/bin/start-desktop.sh \
       /usr/local/bin/start-audio.sh /usr/local/bin/trust-mitm-ca.sh \

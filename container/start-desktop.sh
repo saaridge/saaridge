@@ -191,9 +191,9 @@ if ! is_live_proc xfdesktop && command -v xfdesktop >/dev/null 2>&1; then
   nohup xfdesktop >/tmp/xfdesktop.log 2>&1 &
   sleep 0.5
 fi
-if ! is_live_proc xfce4-panel && command -v xfce4-panel >/dev/null 2>&1; then
-  nohup xfce4-panel >/tmp/xfce4-panel.log 2>&1 &
-  sleep 0.5
+# Panel is started by xfce4-session only — never spawn a second panel here.
+if [[ -x /opt/bridge/dedupe-xfce-panel.sh ]]; then
+  /opt/bridge/dedupe-xfce-panel.sh >/tmp/dedupe-panel.log 2>&1 || true
 fi
 
 # Virtual speakers + audio stream to host viewer (ws://host:6082)

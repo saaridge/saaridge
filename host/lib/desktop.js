@@ -105,6 +105,7 @@ export const provisionDesktopSession = async () => {
     "open-install-assistant.sh",
     "gtk-file-picker.py",
     "repair-desktop.sh",
+    "dedupe-xfce-panel.sh",
     "ensure-x-modes.sh",
     "resize-display.sh",
     "fix-vnc-stack.py",
@@ -137,7 +138,7 @@ export const provisionDesktopSession = async () => {
     "bash",
     "-lc",
     [
-      "chmod 755 /opt/bridge/bridge-browser.sh /opt/bridge/launch-browser.sh /opt/bridge/open-agent.sh /opt/bridge/open-install-assistant.sh /opt/bridge/gtk-file-picker.py /opt/bridge/repair-desktop.sh /opt/bridge/ensure-x-modes.sh /opt/bridge/resize-display.sh /opt/bridge/fit-windows.sh /opt/bridge/fix-vnc-stack.py /opt/bridge/key-pump.sh /opt/bridge/agent-env.sh /opt/bridge/host-bin/* /usr/local/bin/start-desktop.sh /usr/local/bin/start-audio.sh",
+      "chmod 755 /opt/bridge/bridge-browser.sh /opt/bridge/launch-browser.sh /opt/bridge/open-agent.sh /opt/bridge/open-install-assistant.sh /opt/bridge/gtk-file-picker.py /opt/bridge/repair-desktop.sh /opt/bridge/dedupe-xfce-panel.sh /opt/bridge/ensure-x-modes.sh /opt/bridge/resize-display.sh /opt/bridge/fit-windows.sh /opt/bridge/fix-vnc-stack.py /opt/bridge/key-pump.sh /opt/bridge/agent-env.sh /opt/bridge/host-bin/* /usr/local/bin/start-desktop.sh /usr/local/bin/start-audio.sh",
       "chmod 644 /opt/bridge/*.mjs 2>/dev/null || true",
       // Keep RANDR modes available so viewer resize maps 1:1 (accurate clicks).
       "DISPLAY=:1 /opt/bridge/ensure-x-modes.sh >/tmp/ensure-x-modes.log 2>&1 || true",
@@ -312,12 +313,16 @@ export const provisionDesktopSession = async () => {
   await clearDesktopKeepInstall();
   await restoreInstalledAppIcons();
 
+  // Let start-desktop.sh finish starting xfce4-session before repair runs
+  // (repair used to spawn a stray panel and steal the notification area).
+  await new Promise((r) => setTimeout(r, 5000));
+
   // Heal window manager if it died (otherwise windows cannot be closed).
   await dockerExec(
     [
       "bash",
       "-lc",
-      "export DISPLAY=:1 HOME=/home/browser XDG_RUNTIME_DIR=/tmp/runtime-browser; /opt/bridge/repair-desktop.sh >/tmp/repair-desktop.out 2>&1 || true",
+      "export DISPLAY=:1 HOME=/home/browser XDG_RUNTIME_DIR=/tmp/runtime-browser; /opt/bridge/repair-desktop.sh >/tmp/repair-desktop.out 2>&1 || true; /opt/bridge/dedupe-xfce-panel.sh >/tmp/dedupe-panel.out 2>&1 || true",
     ],
     { user: "browser" },
   );

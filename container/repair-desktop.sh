@@ -77,22 +77,17 @@ if command -v xsetroot >/dev/null 2>&1; then
 fi
 xfconf-query -c xsettings -p /Net/IconThemeName -n -t string -s Adwaita 2>/dev/null || \
   xfconf-query -c xsettings -p /Net/IconThemeName -s Adwaita 2>/dev/null || true
-pkill -x xfdesktop >/dev/null 2>&1 || true
-pkill -x xfce4-panel >/dev/null 2>&1 || true
-sleep 0.3
-nohup xfce4-panel >>"$LOG" 2>&1 &
-sleep 0.4
-nohup xfdesktop >>"$LOG" 2>&1 &
-sleep 0.8
+
+# Do not restart xfdesktop if it is already running (second instance quits and
+# leaves a broken desktop).
 if ! pgrep -u "$(id -u)" -x xfdesktop >/dev/null 2>&1; then
-  echo "[repair] xfdesktop failed to stay up — retry" >>"$LOG"
   nohup xfdesktop >>"$LOG" 2>&1 &
-  sleep 0.5
+  sleep 0.8
 fi
-if ! pgrep -u "$(id -u)" -x xfce4-panel >/dev/null 2>&1; then
-  echo "[repair] xfce4-panel failed to stay up — retry" >>"$LOG"
-  nohup xfce4-panel >>"$LOG" 2>&1 &
-  sleep 0.5
+
+# Never start a second panel — only remove orphans not owned by xfce4-session.
+if [[ -x /opt/bridge/dedupe-xfce-panel.sh ]]; then
+  /opt/bridge/dedupe-xfce-panel.sh >>"$LOG" 2>&1 || true
 fi
 
 # Keep desktop icons below normal windows
