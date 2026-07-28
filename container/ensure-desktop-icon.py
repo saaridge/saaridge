@@ -61,6 +61,17 @@ def rewrite(src: str, dest: str, pkg: str) -> None:
                         if f not in rest:
                             flags.append(f)
                 codes = [p for p in parts[1:] if p.startswith("%")]
+                # Cursor: open mediated host workspace by default (Open Folder sees this path)
+                project = (
+                    os.environ.get("CURSOR_PROJECT_DIR")
+                    or os.environ.get("ONEBRIDGE_PROJECTS")
+                    or ""
+                ).strip()
+                if "cursor" in low and project and not any(
+                    p.startswith("/host/") or p == project for p in rest
+                ):
+                    rest.append(project)
+                    codes = []  # folder path replaces %F for the desktop launcher
                 line = "Exec=" + " ".join([bin0, *flags, *rest, *codes])
         if line.startswith("Icon="):
             icon = line[5:].strip()

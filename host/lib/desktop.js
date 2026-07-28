@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { getAgents, saveAgents } from "./state.js";
@@ -11,6 +12,12 @@ import { provisionOneBridgeRoots } from "./auth.js";
 
 export const DESKTOP_AGENT_ID = "workspace-desktop";
 export const DESKTOP_PROXY_PORT = 17999;
+
+/** Short host label for Places / Desktop (e.g. Mohits-Mac-mini). */
+export const hostDisplayName = () =>
+  String(os.hostname() || "Host")
+    .replace(/\.local$/i, "")
+    .split(".")[0] || "Host";
 
 /** Persistent bridge identity for the interactive desktop browser user. */
 export const ensureDesktopCredential = () => {
@@ -42,6 +49,14 @@ export const ensureDesktopCredential = () => {
       agent.policy.paths = defaultDataPolicy(DESKTOP_AGENT_ID).paths;
       agent.policy.pathsReadOnly =
         agent.policy.pathsReadOnly || defaultDataPolicy(DESKTOP_AGENT_ID).pathsReadOnly;
+      dirty = true;
+    }
+    // Ensure host home is listed as RO in stored policy (effectiveRoots also injects it).
+    const ro = Array.isArray(agent.policy?.pathsReadOnly)
+      ? [...agent.policy.pathsReadOnly]
+      : [];
+    if (!ro.includes("~")) {
+      agent.policy = { ...agent.policy, pathsReadOnly: [...ro, "~"] };
       dirty = true;
     }
     if (!agent.hostWorkspace) {
@@ -89,6 +104,7 @@ export const provisionDesktopSession = async () => {
   }
   agent.uid = uid;
 
+  const hostName = hostDisplayName();
   const cred = {
     agentId: agent.id,
     token: agent.token,
@@ -98,6 +114,8 @@ export const provisionDesktopSession = async () => {
     hostMount: "/host",
     hostWorkspace: `/host/workspaces/${agent.id}`,
     hostShared: "/host/shared",
+    hostHome: "/host/home",
+    hostHostname: hostName,
   };
 
   const hostCred = path.join(ROOT, "state", ".desktop-cred.json");
@@ -132,6 +150,7 @@ export const provisionDesktopSession = async () => {
     "mouse-pump.sh",
     "hostfs-fuse.py",
     "hostfs-watchdog.sh",
+    "ensure-desktop-icon.py",
   ]) {
     await dockerCp(
       path.join(ROOT, "container", file),
@@ -157,7 +176,7 @@ export const provisionDesktopSession = async () => {
     "bash",
     "-lc",
     [
-      "chmod 755 /opt/bridge/bridge-browser.sh /opt/bridge/launch-browser.sh /opt/bridge/open-agent.sh /opt/bridge/open-install-assistant.sh /opt/bridge/gtk-file-picker.py /opt/bridge/repair-desktop.sh /opt/bridge/dedupe-xfce-panel.sh /opt/bridge/ensure-x-modes.sh /opt/bridge/resize-display.sh /opt/bridge/fit-windows.sh /opt/bridge/fix-vnc-stack.py /opt/bridge/key-pump.sh /opt/bridge/mouse-pump.sh /opt/bridge/agent-env.sh /opt/bridge/hostfs-fuse.py /opt/bridge/hostfs-watchdog.sh /opt/bridge/host-bin/* /usr/local/bin/start-desktop.sh /usr/local/bin/start-audio.sh",
+      "chmod 755 /opt/bridge/bridge-browser.sh /opt/bridge/launch-browser.sh /opt/bridge/open-agent.sh /opt/bridge/open-install-assistant.sh /opt/bridge/gtk-file-picker.py /opt/bridge/repair-desktop.sh /opt/bridge/dedupe-xfce-panel.sh /opt/bridge/ensure-x-modes.sh /opt/bridge/resize-display.sh /opt/bridge/fit-windows.sh /opt/bridge/fix-vnc-stack.py /opt/bridge/key-pump.sh /opt/bridge/mouse-pump.sh /opt/bridge/agent-env.sh /opt/bridge/hostfs-fuse.py /opt/bridge/hostfs-watchdog.sh /opt/bridge/ensure-desktop-icon.py /opt/bridge/host-bin/* /usr/local/bin/start-desktop.sh /usr/local/bin/start-audio.sh",
       "chmod 644 /opt/bridge/*.mjs 2>/dev/null || true",
       "mkdir -p /host",
       // Keep RANDR modes available so viewer resize maps 1:1 (accurate clicks).
@@ -170,11 +189,29 @@ export const provisionDesktopSession = async () => {
         "cp -a /usr/bin/chromium /usr/bin/chromium.real; fi; " +
         "printf '%s\\n' '#!/bin/sh' 'exec /usr/local/bin/chromium-force-proxy.sh \"$@\"' > /usr/bin/chromium; " +
         "chmod 755 /usr/bin/chromium; fi",
-      // Host data plane FUSE mount (/host → ~/OneBridge via Data API)
+      // Host data plane FUSE mount (/host → OneBridge + /host/home → host homedir).
+      // Always remount so updated hostfs-fuse.py (statfs/uid) takes effect.
       "pkill -f hostfs-watchdog.sh 2>/dev/null || true; " +
+        "pkill -f '/opt/bridge/hostfs-fuse.py' 2>/dev/null || true; " +
+        "fusermount3 -uz /host 2>/dev/null || umount -l /host 2>/dev/null || true; " +
         "BRIDGE_CREDENTIALS_FILE=/home/browser/.bridge-credentials " +
         "BRIDGE_URL=http://host.docker.internal:7331 " +
+        "HOSTFS_UID=$(id -u browser) HOSTFS_GID=$(id -g browser) " +
         "nohup /opt/bridge/hostfs-watchdog.sh >/tmp/hostfs-watchdog.log 2>&1 &",
+      // Wait briefly then recreate host-home link + Places bookmark only.
+      `HOST_LABEL=${JSON.stringify(hostName)}; ` +
+        "for i in $(seq 1 40); do " +
+        "[[ -d /host/home ]] && break; sleep 0.25; done; " +
+        "rm -f /home/browser/Projects /home/browser/Host\\ Home /home/browser/host-home " +
+        "'/home/browser/Desktop/Host Projects' '/home/browser/Desktop/Host-Projects' 2>/dev/null || true; " +
+        'ln -sfn /host/home "/home/browser/${HOST_LABEL} Home" 2>/dev/null || true; ' +
+        'ln -sfn /host/home "/home/browser/Desktop/${HOST_LABEL} Home" 2>/dev/null || true; ' +
+        "mkdir -p /home/browser/.config/gtk-3.0; " +
+        'printf "%s\\n" "file:///host/home ${HOST_LABEL} Home" ' +
+        "> /home/browser/.config/gtk-3.0/bookmarks; " +
+        "chown -R browser:browser /home/browser/.config/gtk-3.0 " +
+        '"/home/browser/${HOST_LABEL} Home" ' +
+        '"/home/browser/Desktop/${HOST_LABEL} Home" 2>/dev/null || true',
     ].join("; "),
   ]);
   await dockerCp(

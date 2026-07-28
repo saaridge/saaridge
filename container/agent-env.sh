@@ -55,15 +55,35 @@ export BROWSER="${BROWSER:-/opt/bridge/bridge-browser.sh}"
 # Mediated host project tree (FUSE → Data API → ~/OneBridge on the host)
 export ONEBRIDGE_HOST_MOUNT="${ONEBRIDGE_HOST_MOUNT:-/host}"
 export ONEBRIDGE_SHARED="${ONEBRIDGE_SHARED:-/host/shared}"
+# Host home browse tree (FUSE → Data API → os.homedir(), read-only)
+export ONEBRIDGE_HOST_HOME="${ONEBRIDGE_HOST_HOME:-/host/home}"
 if [[ -n "$_CRED" && -f "$_CRED" ]]; then
   _AGENT_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("agentId",""))' "$_CRED" 2>/dev/null || true)"
   _WS_HINT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("hostWorkspace",""))' "$_CRED" 2>/dev/null || true)"
+  _HOME_HINT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("hostHome",""))' "$_CRED" 2>/dev/null || true)"
+  _HOST_NAME="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("hostHostname",""))' "$_CRED" 2>/dev/null || true)"
   if [[ -n "${_WS_HINT:-}" ]]; then
     export ONEBRIDGE_PROJECTS="$_WS_HINT"
   elif [[ -n "${_AGENT_ID:-}" ]]; then
     export ONEBRIDGE_PROJECTS="/host/workspaces/${_AGENT_ID}"
   fi
+  if [[ -n "${_HOME_HINT:-}" ]]; then
+    export ONEBRIDGE_HOST_HOME="$_HOME_HINT"
+  fi
+  if [[ -n "${_HOST_NAME:-}" ]]; then
+    export ONEBRIDGE_HOST_NAME="$_HOST_NAME"
+  fi
 fi
 export ONEBRIDGE_PROJECTS="${ONEBRIDGE_PROJECTS:-/host/workspaces/workspace-desktop}"
+export ONEBRIDGE_HOST_HOME="${ONEBRIDGE_HOST_HOME:-/host/home}"
+export ONEBRIDGE_HOST_NAME="${ONEBRIDGE_HOST_NAME:-Host}"
 # Cursor / editors: open projects under this path (not container-local copies)
 export CURSOR_PROJECT_DIR="${CURSOR_PROJECT_DIR:-$ONEBRIDGE_PROJECTS}"
+
+# Durable host-home link once FUSE is up (safe to re-run). Drop legacy Projects/Host aliases.
+_HOME_DIR="${HOME:-/home/browser}"
+rm -f "${_HOME_DIR}/Projects" "${_HOME_DIR}/Host Home" "${_HOME_DIR}/host-home" \
+  "${_HOME_DIR}/Desktop/Host Projects" "${_HOME_DIR}/Desktop/Host-Projects" 2>/dev/null || true
+if [[ -d "$ONEBRIDGE_HOST_HOME" ]]; then
+  ln -sfn "$ONEBRIDGE_HOST_HOME" "${_HOME_DIR}/${ONEBRIDGE_HOST_NAME} Home" 2>/dev/null || true
+fi

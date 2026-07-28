@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import {
   oneBridgeRoot,
@@ -11,13 +12,16 @@ const DEFAULT_MAX_BYTES = 50 * 1024 * 1024; // 50 MiB
 
 /**
  * Build effective path policy for an agent.
- * Strict default: only ~/OneBridge/workspaces/<id> (rw) and ~/OneBridge/shared (ro).
+ * Strict default:
+ *   RW: ~/OneBridge/workspaces/<id>
+ *   RO: ~/OneBridge/shared + host home (~) for browse-only navigation
  */
 export const effectiveRoots = (agent) => {
   const id = agent?.id || "unknown";
   const ws = workspaceRootFor(id);
   const shared = sharedRoot();
   const bridge = oneBridgeRoot();
+  const home = path.resolve(os.homedir());
 
   const custom = agent?.policy?.paths;
   let readWrite = [];
@@ -36,20 +40,33 @@ export const effectiveRoots = (agent) => {
     readOnly = [shared];
   }
 
-  // Always keep everything under OneBridge root (mass-product safety).
+  // RW stays under OneBridge only. RO may include OneBridge paths + host home.
   const underBridge = (p) => {
     const r = path.resolve(p);
     const base = path.resolve(bridge);
     return r === base || r.startsWith(base + path.sep);
   };
+  const isHostHomeRoot = (p) => path.resolve(p) === home;
   readWrite = readWrite.filter(underBridge);
-  readOnly = readOnly.filter(underBridge);
+  readOnly = readOnly.filter((p) => underBridge(p) || isHostHomeRoot(p));
+
+  // Always expose host home read-only (/host/home → os.homedir()).
+  if (!readOnly.some(isHostHomeRoot)) {
+    readOnly.push(home);
+  }
 
   if (readWrite.length === 0) {
     readWrite = [ws];
   }
 
-  return { readWrite, readOnly, bridgeRoot: bridge, workspace: ws, shared };
+  return {
+    readWrite,
+    readOnly,
+    bridgeRoot: bridge,
+    workspace: ws,
+    shared,
+    hostHome: home,
+  };
 };
 
 export const assertReadable = (agent, inputPath) => {
@@ -77,7 +94,8 @@ export const defaultDataPolicy = (agentId) => ({
   allowAllProxy: true,
   tools: null,
   paths: [`~/OneBridge/workspaces/${agentId}`],
-  pathsReadOnly: ["~/OneBridge/shared"],
+  // Host home (~) is browse-only; writes outside OneBridge remain denied.
+  pathsReadOnly: ["~/OneBridge/shared", "~"],
   urls: null,
   maxReadBytes: DEFAULT_MAX_BYTES,
   maxWriteBytes: DEFAULT_MAX_BYTES,

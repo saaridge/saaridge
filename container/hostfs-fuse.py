@@ -3,11 +3,15 @@
 OneBridge hostfs — FUSE client over the host Data API (:7331 /v1/fs/*).
 
 Mount point: /host
-Virtual layout mirrors ~/OneBridge on the host:
-  /host/workspaces/<agentId>/...
-  /host/shared/...
+Virtual layout:
+  /host/workspaces/<agentId>/...   (rw via policy)
+  /host/shared/...                 (ro via policy)
+  /host/home/...                   (ro → host os.homedir() via policy)
 
-Requires fuse3 + python3-fuse (fusepy). Auth via BRIDGE_TOKEN or credentials JSON.
+Parents (/, /workspaces, /home) are synthesized so Cursor can browse without
+API access to ~/OneBridge itself (policy denies those ancestors).
+
+Uses Debian python3-fuse (fuse-python), not fusepy.
 """
 from __future__ import annotations
 
@@ -24,53 +28,80 @@ import urllib.request
 from typing import Dict, Optional, Tuple
 
 try:
-    import fuse  # python3-fuse / fusepy
-    FuseOSError = getattr(fuse, "FuseOSError", OSError)
-    Operations = fuse.Operations
-    FUSE = fuse.FUSE
+    import fuse
+    from fuse import Fuse
 except ImportError:
-    sys.stderr.write("hostfs-fuse: python3-fuse (fuse) not installed\n")
+    sys.stderr.write("hostfs-fuse: python3-fuse not installed\n")
     sys.exit(1)
+
+if not getattr(fuse, "fuse_python_api", None):
+    fuse.fuse_python_api = (0, 2)
 
 LOG = logging.getLogger("hostfs-fuse")
 FS_VERSION = "1"
-CHUNK = 1024 * 1024  # 1 MiB
+
+# Electron/GTK file dialogs hide FUSE mounts that report 0 blocks via statvfs.
+# Present a large synthetic capacity so Open Folder can browse /host.
+_STATFS_BLOCK_SIZE = 4096
+_STATFS_TOTAL_BLOCKS = 26214400  # 100 GiB
+_STATFS_FREE_BLOCKS = 25165824  # 96 GiB
 
 
-def load_credentials() -> Tuple[str, str]:
+def _resolve_fs_owner() -> Tuple[int, int]:
+    """Map presented ownership to the desktop user (not root)."""
+    uid_s = os.environ.get("HOSTFS_UID", "").strip()
+    gid_s = os.environ.get("HOSTFS_GID", "").strip()
+    if uid_s.isdigit() and gid_s.isdigit():
+        return int(uid_s), int(gid_s)
+    try:
+        import pwd
+
+        pw = pwd.getpwnam(os.environ.get("HOSTFS_USER", "browser"))
+        return int(pw.pw_uid), int(pw.pw_gid)
+    except Exception:
+        # Fall back to current process (root when launched by watchdog)
+        return os.getuid(), os.getgid()
+
+
+FS_UID, FS_GID = _resolve_fs_owner()
+
+
+def load_credentials() -> Tuple[str, str, str]:
     token = os.environ.get("BRIDGE_TOKEN", "").strip()
     bridge = os.environ.get("BRIDGE_URL", "http://host.docker.internal:7331").rstrip("/")
+    agent_id = os.environ.get("AGENT_ID", "").strip()
     cred_file = os.environ.get("BRIDGE_CREDENTIALS_FILE", "")
     if not cred_file:
         home = os.environ.get("HOME", "/home/browser")
         cand = os.path.join(home, ".bridge-credentials")
         if os.path.isfile(cand):
             cred_file = cand
+    if not cred_file and os.path.isfile("/home/browser/.bridge-credentials"):
+        cred_file = "/home/browser/.bridge-credentials"
     if cred_file and os.path.isfile(cred_file):
         with open(cred_file, "r", encoding="utf-8") as f:
             data = json.load(f)
         token = token or data.get("token", "")
         bridge = (data.get("bridgeUrl") or bridge).rstrip("/")
+        agent_id = agent_id or str(data.get("agentId") or data.get("id") or "")
     if not token:
         raise SystemExit("hostfs-fuse: missing BRIDGE_TOKEN / credentials")
-    return bridge, token
+    if not agent_id:
+        agent_id = "workspace-desktop"
+    return bridge, token, agent_id
 
 
 class DataApi:
     def __init__(self, base: str, token: str):
         self.base = base.rstrip("/")
         self.token = token
-        self._lock = threading.Lock()
 
-    def _headers(self, extra: Optional[dict] = None) -> dict:
-        h = {
+    def _headers(self) -> dict:
+        return {
             "Authorization": f"Bearer {self.token}",
             "Accept": "*/*",
             "X-OneBridge-FS-Client": FS_VERSION,
         }
-        if extra:
-            h.update(extra)
-        return h
 
     def request(
         self,
@@ -94,9 +125,6 @@ class DataApi:
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
             with urllib.request.urlopen(req, timeout=120) as resp:
-                ver = resp.headers.get("X-OneBridge-FS", "")
-                if ver and ver != FS_VERSION:
-                    LOG.warning("Data API version mismatch: server=%s client=%s", ver, FS_VERSION)
                 raw = resp.read()
                 ctype = resp.headers.get("Content-Type", "")
                 if "application/json" in ctype or path.endswith("/health") or method in (
@@ -136,87 +164,163 @@ class DataApi:
         return errno.EIO
 
     def host_path(self, rel: str) -> str:
-        """Map FUSE path under /host to host OneBridge path."""
+        """Map FUSE path under /host to a host Data API path.
+
+        /home → ~ (host homedir, RO via policy)
+        everything else → ~/OneBridge/...
+        """
         rel = rel.lstrip("/")
+        if rel == "home" or rel.startswith("home/"):
+            rest = rel[len("home") :].lstrip("/")
+            return "~" if not rest else f"~/{rest}"
         if not rel or rel == ".":
             return "~/OneBridge"
         return f"~/OneBridge/{rel}"
 
 
-class HostFS(Operations):
-    def __init__(self, api: DataApi):
+def _mk_stat(is_dir: bool, size: int = 0, mtime: int = 0) -> "fuse.Stat":
+    st = fuse.Stat()
+    st.st_mode = (stat.S_IFDIR | 0o755) if is_dir else (stat.S_IFREG | 0o644)
+    st.st_nlink = 2 if is_dir else 1
+    st.st_size = int(size or 0)
+    st.st_uid = FS_UID
+    st.st_gid = FS_GID
+    now = int(mtime or 0) or 1
+    st.st_atime = now
+    st.st_mtime = now
+    st.st_ctime = now
+    return st
+
+
+class HostFS(Fuse):
+    def __init__(self, api: DataApi, agent_id: str, *args, **kw):
+        Fuse.__init__(self, *args, **kw)
         self.api = api
+        self.agent_id = agent_id
         self.fd_map: Dict[int, str] = {}
         self.next_fd = 3
         self._fd_lock = threading.Lock()
 
-    def _alloc_fd(self, path: str) -> int:
-        with self._fd_lock:
-            fd = self.next_fd
-            self.next_fd += 1
-            self.fd_map[fd] = path
-            return fd
-
     def _path(self, path: str) -> str:
         return self.api.host_path(path)
 
-    def _raise(self, err: BaseException):
-        if isinstance(err, OSError):
-            raise FuseOSError(err.errno or errno.EIO)
-        raise FuseOSError(errno.EIO)
+    def _norm(self, path: str) -> str:
+        return path.rstrip("/") or "/"
 
-    def getattr(self, path, fh=None):
-        if path == "/":
-            st = dict(
-                st_mode=(stat.S_IFDIR | 0o755),
-                st_nlink=2,
-                st_size=0,
-                st_ctime=0,
-                st_mtime=0,
-                st_atime=0,
-                st_uid=os.getuid(),
-                st_gid=os.getgid(),
-            )
-            return st
+    def _err(self, err: BaseException) -> int:
+        if isinstance(err, OSError):
+            return -int(err.errno or errno.EIO)
+        return -errno.EIO
+
+    def getattr(self, path):
+        p = self._norm(path)
+        if p in ("/", "/workspaces", "/shared", "/home"):
+            return _mk_stat(True)
+        if p.startswith("/workspaces/") and not (
+            p == f"/workspaces/{self.agent_id}"
+            or p.startswith(f"/workspaces/{self.agent_id}/")
+        ):
+            return -errno.ENOENT
         try:
             info = self.api.request("GET", "/v1/fs/stat", {"path": self._path(path)})
         except OSError as err:
-            self._raise(err)
-        mode = stat.S_IFDIR | 0o755 if info.get("isDirectory") else stat.S_IFREG | 0o644
-        return dict(
-            st_mode=mode,
-            st_nlink=2 if info.get("isDirectory") else 1,
-            st_size=int(info.get("size") or 0),
-            st_ctime=int((info.get("mtimeMs") or 0) / 1000),
-            st_mtime=int((info.get("mtimeMs") or 0) / 1000),
-            st_atime=int((info.get("mtimeMs") or 0) / 1000),
-            st_uid=os.getuid(),
-            st_gid=os.getgid(),
+            return self._err(err)
+        return _mk_stat(
+            bool(info.get("isDirectory")),
+            int(info.get("size") or 0),
+            int((info.get("mtimeMs") or 0) / 1000),
         )
 
-    def readdir(self, path, fh):
-        entries = [".", ".."]
-        try:
-            result = self.api.request("GET", "/v1/fs/list", {"path": self._path(path)})
-            for e in result.get("entries") or []:
-                name = e.get("name")
-                if name:
-                    entries.append(name)
-        except OSError as err:
-            if err.errno == errno.ENOENT and path == "/":
-                return entries
-            self._raise(err)
-        return entries
+    def access(self, path, mode):
+        # allow_other + browser ownership: permit read/write/exec checks for desktop user
+        st = self.getattr(path)
+        if isinstance(st, int) and st < 0:
+            return st
+        return 0
+
+    def statfs(self, path=None):
+        # Critical for Electron/Chromium GtkFileChooser — zero blocks ⇒ mount hidden.
+        # Keep values modest so 32-bit statvfs fields never overflow.
+        return fuse.StatVfs(
+            f_bsize=_STATFS_BLOCK_SIZE,
+            f_frsize=_STATFS_BLOCK_SIZE,
+            f_blocks=_STATFS_TOTAL_BLOCKS,
+            f_bfree=_STATFS_FREE_BLOCKS,
+            f_bavail=_STATFS_FREE_BLOCKS,
+            f_files=1_000_000,
+            f_ffree=999_000,
+            f_favail=999_000,
+            f_flag=0,
+            f_namemax=255,
+        )
+
+    def readdir(self, path, offset):
+        p = self._norm(path)
+        names = [".", ".."]
+        if p == "/":
+            names += ["workspaces", "shared", "home"]
+        elif p == "/workspaces":
+            names += [self.agent_id]
+        else:
+            try:
+                result = self.api.request("GET", "/v1/fs/list", {"path": self._path(path)})
+                for e in result.get("entries") or []:
+                    name = e.get("name")
+                    if name:
+                        names.append(name)
+            except OSError as err:
+                yield -int(err.errno or errno.EIO)
+                return
+        for name in names:
+            yield fuse.Direntry(name)
 
     def open(self, path, flags):
-        if flags & getattr(os, "O_TRUNC", 512):
-            try:
-                self.truncate(path, 0)
-            except OSError:
-                pass
-        return self._alloc_fd(path)
+        return 0
 
-    def create(self, path, mode, fi=None):
+    def read(self, path, length, offset):
+        try:
+            data = self.api.request(
+                "GET",
+                "/v1/fs/read",
+                {
+                    "path": self._path(path),
+                    "offset": str(offset),
+                    "length": str(length),
+                },
+            )
+        except OSError as err:
+            return self._err(err)
+        if isinstance(data, dict) and "_raw" in data:
+            return data["_raw"]
+        if isinstance(data, (bytes, bytearray)):
+            return bytes(data)
+        return b""
+
+    def write(self, path, buf, offset):
+        data = buf if isinstance(buf, (bytes, bytearray)) else bytes(buf)
+        try:
+            self.api.request(
+                "PUT",
+                "/v1/fs/write",
+                {"path": self._path(path), "offset": str(offset), "truncate": "0"},
+                body=data,
+            )
+        except OSError as err:
+            return self._err(err)
+        return len(data)
+
+    def truncate(self, path, size):
+        try:
+            self.api.request(
+                "POST",
+                "/v1/fs/truncate",
+                json_body={"path": self._path(path), "size": int(size)},
+            )
+        except OSError as err:
+            return self._err(err)
+        return 0
+
+    def mknod(self, path, mode, dev):
         try:
             self.api.request(
                 "PUT",
@@ -225,65 +329,26 @@ class HostFS(Operations):
                 body=b"",
             )
         except OSError as err:
-            self._raise(err)
-        return self._alloc_fd(path)
-
-    def read(self, path, size, offset, fh):
-        try:
-            data = self.api.request(
-                "GET",
-                "/v1/fs/read",
-                {
-                    "path": self._path(path),
-                    "offset": str(offset),
-                    "length": str(size),
-                },
-            )
-        except OSError as err:
-            self._raise(err)
-        if isinstance(data, dict) and "_raw" in data:
-            return data["_raw"]
-        if isinstance(data, (bytes, bytearray)):
-            return bytes(data)
-        return b""
-
-    def write(self, path, data, offset, fh):
-        try:
-            self.api.request(
-                "PUT",
-                "/v1/fs/write",
-                {"path": self._path(path), "offset": str(offset), "truncate": "0"},
-                body=data if isinstance(data, (bytes, bytearray)) else bytes(data),
-            )
-        except OSError as err:
-            self._raise(err)
-        return len(data)
-
-    def truncate(self, path, length, fh=None):
-        try:
-            self.api.request(
-                "POST",
-                "/v1/fs/truncate",
-                json_body={"path": self._path(path), "size": int(length)},
-            )
-        except OSError as err:
-            self._raise(err)
+            return self._err(err)
+        return 0
 
     def mkdir(self, path, mode):
         try:
             self.api.request("POST", "/v1/fs/mkdir", json_body={"path": self._path(path)})
         except OSError as err:
-            self._raise(err)
+            return self._err(err)
+        return 0
 
     def unlink(self, path):
         try:
             q = urllib.parse.urlencode({"path": self._path(path)})
             self.api.request("DELETE", f"/v1/fs/path?{q}")
         except OSError as err:
-            self._raise(err)
+            return self._err(err)
+        return 0
 
     def rmdir(self, path):
-        self.unlink(path)
+        return self.unlink(path)
 
     def rename(self, old, new):
         try:
@@ -293,17 +358,16 @@ class HostFS(Operations):
                 json_body={"from": self._path(old), "to": self._path(new)},
             )
         except OSError as err:
-            self._raise(err)
-
-    def flush(self, path, fh):
+            return self._err(err)
         return 0
 
-    def release(self, path, fh):
-        with self._fd_lock:
-            self.fd_map.pop(fh, None)
+    def utime(self, path, times):
         return 0
 
-    def fsync(self, path, fdatasync, fh):
+    def chmod(self, path, mode):
+        return 0
+
+    def chown(self, path, uid, gid):
         return 0
 
 
@@ -313,10 +377,18 @@ def main():
         format="[hostfs-fuse] %(levelname)s %(message)s",
     )
     mount = os.environ.get("HOSTFS_MOUNT", "/host")
-    if len(sys.argv) > 1:
+    # fuse-python takes mountpoint from argv; keep optional positional for watchdog.
+    argv = [sys.argv[0]]
+    if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
         mount = sys.argv[1]
+        argv.append(mount)
+        argv.extend(sys.argv[2:])
+    else:
+        argv.append(mount)
+        argv.extend(sys.argv[1:])
+    sys.argv = argv
 
-    bridge, token = load_credentials()
+    bridge, token, agent_id = load_credentials()
     api = DataApi(bridge, token)
 
     try:
@@ -327,11 +399,43 @@ def main():
         sys.exit(2)
 
     os.makedirs(mount, exist_ok=True)
-    LOG.info("Mounting %s → ~/OneBridge via %s", mount, bridge)
+    LOG.info(
+        "Mounting %s → ~/OneBridge (agent=%s) via %s",
+        mount,
+        agent_id,
+        bridge,
+    )
+
+    LOG.info("Presenting files as uid=%s gid=%s", FS_UID, FS_GID)
+    server = HostFS(
+        api,
+        agent_id,
+        version="%prog OneBridge hostfs",
+        usage="hostfs-fuse MOUNTPOINT",
+        dash_s_do="setsingle",
+    )
+    server.parser.add_option(
+        mountopt="allow_other",
+        metavar="allow_other",
+        default=True,
+        help="allow other users to access the mount",
+    )
+    server.parse(errex=1)
+    # Ensure allow_other even if parser ignored it
     try:
-        FUSE(HostFS(api), mount, foreground=True, allow_other=True)
-    except TypeError:
-        FUSE(HostFS(api), mount, foreground=True)
+        server.fuse_args.add("allow_other")
+    except Exception:
+        pass
+    try:
+        # Avoid kernel applying root-only DAC that confuses file dialogs
+        server.fuse_args.add("default_permissions")
+    except Exception:
+        pass
+    try:
+        server.fuse_args.add("nonempty")
+    except Exception:
+        pass
+    server.main()
 
 
 if __name__ == "__main__":

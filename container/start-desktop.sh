@@ -19,14 +19,70 @@ export CURSOR_PROJECT_DIR="${CURSOR_PROJECT_DIR:-$ONEBRIDGE_PROJECTS}"
 
 mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" \
   "$HOME/Desktop" "$HOME/Downloads" "$HOME/chromium-bridge-profile" \
-  "$HOME/.local/share/applications" \
-  "$ONEBRIDGE_PROJECTS" 2>/dev/null || true
+  "$HOME/.local/share/applications" 2>/dev/null || true
 
-# Convenient Desktop link to host-mediated projects (for Cursor / file manager)
-if [[ -d /host/workspaces ]] || [[ -d "$ONEBRIDGE_PROJECTS" ]]; then
-  ln -sfn "$ONEBRIDGE_PROJECTS" "$HOME/Desktop/Host Projects" 2>/dev/null || true
-  ln -sfn "$ONEBRIDGE_PROJECTS" "$HOME/Projects" 2>/dev/null || true
+# Wait for FUSE /host (watchdog may still be mounting after credentials land)
+for _ in $(seq 1 60); do
+  if [[ -d /host/workspaces ]] || findmnt -T /host 2>/dev/null | grep -q fuse; then
+    break
+  fi
+  sleep 0.5
+done
+mkdir -p "$ONEBRIDGE_PROJECTS" 2>/dev/null || true
+
+# Host machine label for Places / Desktop (from credentials → agent-env)
+ONEBRIDGE_HOST_NAME="${ONEBRIDGE_HOST_NAME:-Host}"
+ONEBRIDGE_HOST_HOME="${ONEBRIDGE_HOST_HOME:-/host/home}"
+
+# Host home only in Places / home links (RO via Data API). Drop legacy Projects/Host entries.
+rm -f "$HOME/Projects" "$HOME/Host Home" "$HOME/host-home" \
+  "$HOME/Desktop/Host Projects" "$HOME/Desktop/Host-Projects" 2>/dev/null || true
+if [[ -d /host/home ]]; then
+  ln -sfn /host/home "$HOME/${ONEBRIDGE_HOST_NAME} Home" 2>/dev/null || true
+  mkdir -p "$HOME/.config/gtk-3.0" 2>/dev/null || true
+  echo "file:///host/home ${ONEBRIDGE_HOST_NAME} Home" > "$HOME/.config/gtk-3.0/bookmarks"
 fi
+
+# Point Cursor launchers at the mediated host workspace (also covers late installs)
+_cursor_exec_line="Exec=/usr/share/cursor/cursor --no-sandbox --disable-gpu --disable-dev-shm-usage \"${CURSOR_PROJECT_DIR}\""
+_patch_cursor_desktop() {
+  local desk="$1"
+  [[ -f "$desk" ]] || return 0
+  # Only rewrite the primary [Desktop Entry] Exec= — leave Desktop Action Exec alone
+  python3 - "$desk" "$_cursor_exec_line" <<'PY' 2>/dev/null || true
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+exec_line = sys.argv[2]
+text = path.read_text(encoding="utf-8", errors="replace").splitlines()
+out = []
+in_action = False
+main_done = False
+for line in text:
+    if line.startswith("[Desktop Action"):
+        in_action = True
+    elif line.startswith("[") and line.endswith("]"):
+        in_action = False
+    if line.startswith("Exec=") and not in_action and not main_done:
+        out.append(exec_line)
+        main_done = True
+        continue
+    out.append(line)
+if main_done:
+    path.write_text("\n".join(out) + "\n", encoding="utf-8")
+PY
+}
+for _desk in \
+  "$HOME/Desktop/Cursor.desktop" \
+  "$HOME/.local/share/applications/cursor.desktop" \
+  "$HOME/.local/share/applications/Cursor.desktop" \
+  "$HOME/.local/share/applications/onebridge-Cursor.desktop" \
+  /usr/share/applications/cursor.desktop \
+  /usr/share/applications/co.anysphere.cursor.desktop
+do
+  _patch_cursor_desktop "$_desk"
+done
+
 
 CRED_FILE="$BRIDGE_CREDENTIALS_FILE"
 PORT="${LOCAL_PROXY_PORT:-}"
@@ -119,6 +175,17 @@ EOF
 chmod +x "$HOME/Desktop/Install Assistant.desktop"
 if command -v gio >/dev/null 2>&1; then
   gio set "$HOME/Desktop/Install Assistant.desktop" metadata::trusted true 2>/dev/null || true
+fi
+
+# Host-home shortcut on Desktop (after wipe so it persists); no Host Projects link
+rm -f "$HOME/Desktop/Host Projects" "$HOME/Desktop/Host-Projects" 2>/dev/null || true
+if [[ -d /host/home ]]; then
+  ln -sfn /host/home "$HOME/Desktop/${ONEBRIDGE_HOST_NAME} Home" 2>/dev/null || true
+fi
+# Refresh GTK Places in case FUSE came up after the earlier block
+if [[ -d /host/home ]]; then
+  mkdir -p "$HOME/.config/gtk-3.0" 2>/dev/null || true
+  echo "file:///host/home ${ONEBRIDGE_HOST_NAME} Home" > "$HOME/.config/gtk-3.0/bookmarks"
 fi
 
 # Re-seed desktop icons for apps installed via Install Assistant
