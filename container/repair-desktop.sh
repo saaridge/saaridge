@@ -65,6 +65,36 @@ sleep 0.4
 nohup xfwm4 >>"$LOG" 2>&1 &
 sleep 0.8
 
+# Desktop background + icons (blank screen = xfdesktop/panel died, often due to
+# broken PNG loaders / icon theme).
+if [[ -x /usr/lib/aarch64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders ]]; then
+  /usr/lib/aarch64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders --update-cache 2>/dev/null || true
+elif [[ -x /usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders ]]; then
+  /usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders --update-cache 2>/dev/null || true
+fi
+if command -v xsetroot >/dev/null 2>&1; then
+  xsetroot -solid "#1a2f28" 2>/dev/null || true
+fi
+xfconf-query -c xsettings -p /Net/IconThemeName -n -t string -s Adwaita 2>/dev/null || \
+  xfconf-query -c xsettings -p /Net/IconThemeName -s Adwaita 2>/dev/null || true
+pkill -x xfdesktop >/dev/null 2>&1 || true
+pkill -x xfce4-panel >/dev/null 2>&1 || true
+sleep 0.3
+nohup xfce4-panel >>"$LOG" 2>&1 &
+sleep 0.4
+nohup xfdesktop >>"$LOG" 2>&1 &
+sleep 0.8
+if ! pgrep -u "$(id -u)" -x xfdesktop >/dev/null 2>&1; then
+  echo "[repair] xfdesktop failed to stay up — retry" >>"$LOG"
+  nohup xfdesktop >>"$LOG" 2>&1 &
+  sleep 0.5
+fi
+if ! pgrep -u "$(id -u)" -x xfce4-panel >/dev/null 2>&1; then
+  echo "[repair] xfce4-panel failed to stay up — retry" >>"$LOG"
+  nohup xfce4-panel >>"$LOG" 2>&1 &
+  sleep 0.5
+fi
+
 # Keep desktop icons below normal windows
 wmctrl -r Desktop -b add,below 2>/dev/null || true
 
@@ -75,5 +105,5 @@ if ! pgrep -u "$(id -u)" -x xfwm4 >/dev/null 2>&1; then
   sleep 0.5
 fi
 
-echo "[repair $(date -Is)] done wm=$(pgrep -u "$(id -u)" -x xfwm4 | tr '\n' ' ')" >>"$LOG"
+echo "[repair $(date -Is)] done wm=$(pgrep -u "$(id -u)" -x xfwm4 | tr '\n' ' ') desktop=$(pgrep -u "$(id -u)" -x xfdesktop | tr '\n' ' ') panel=$(pgrep -u "$(id -u)" -x xfce4-panel | tr '\n' ' ')" >>"$LOG"
 echo REPAIRED

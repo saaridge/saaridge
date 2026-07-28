@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install Assistant — native file picker → install the chosen package.
+# Install Assistant — Install or Uninstall packages on the workspace desktop.
 set -uo pipefail
 
 export DISPLAY="${DISPLAY:-:1}"
@@ -18,67 +18,236 @@ if [[ -n "${SESSION_PID:-}" && -r "/proc/${SESSION_PID}/environ" ]]; then
 fi
 
 LOG=/tmp/open-install-assistant.log
+DONE_FLAG=/tmp/onebridge-install-done
 mkdir -p "$HOME/Downloads"
 
 CONTROL_URL="${ONEBRIDGE_CONTROL_URL:-http://host.docker.internal:3847}"
+PICKER_PY="${ONEBRIDGE_FILE_PICKER:-/opt/bridge/gtk-file-picker.py}"
+PROGRESS_PID=""
 
-echo "[install $(date -Is)] file picker" >>"$LOG"
+echo "[install $(date -Is)] start" >>"$LOG"
 
-if ! command -v zenity >/dev/null 2>&1; then
-  zenity --error --text="File picker is not available in this workspace." 2>>"$LOG" || \
-    xmessage "File picker is not available." 2>>"$LOG" || true
-  exit 1
-fi
+cleanup_progress() {
+  if [[ -n "${PROGRESS_PID:-}" ]] && kill -0 "$PROGRESS_PID" 2>/dev/null; then
+    touch "$DONE_FLAG" 2>/dev/null || true
+    for _ in $(seq 1 20); do
+      kill -0 "$PROGRESS_PID" 2>/dev/null || break
+      sleep 0.05
+    done
+    kill "$PROGRESS_PID" 2>/dev/null || true
+    wait "$PROGRESS_PID" 2>/dev/null || true
+  fi
+  PROGRESS_PID=""
+  rm -f "$DONE_FLAG" 2>/dev/null || true
+}
+trap cleanup_progress EXIT
 
-FILE="$(
-  zenity --file-selection \
-    --title="Install assistant" \
-    --filename="$HOME/" \
-    --file-filter="Assistant packages | *.zip *.tgz *.tar.gz *.onebridge" \
-    --file-filter="All files | *" \
-    2>>"$LOG" || true
-)"
+notify() {
+  local kind="$1"
+  local msg="$2"
+  cleanup_progress
+  if [[ -f "$PICKER_PY" ]] && command -v python3 >/dev/null 2>&1; then
+    python3 "$PICKER_PY" "--${kind}" "$msg" 2>>"$LOG" || true
+    return 0
+  fi
+  echo "$msg" >>"$LOG"
+}
 
-if [[ -z "${FILE:-}" ]]; then
-  echo "[install] cancelled" >>"$LOG"
-  exit 0
-fi
+start_progress() {
+  local msg="${1:-Working…}"
+  rm -f "$DONE_FLAG" 2>/dev/null || true
+  if [[ -f "$PICKER_PY" ]] && command -v python3 >/dev/null 2>&1; then
+    python3 "$PICKER_PY" --progress "$msg" >>"$LOG" 2>&1 &
+    PROGRESS_PID=$!
+  fi
+}
 
-if [[ ! -e "$FILE" ]]; then
-  zenity --error --text="That file was not found." 2>>"$LOG" || true
-  exit 1
-fi
+choose_action() {
+  local out ec
+  rm -f /tmp/onebridge-menu-action 2>/dev/null || true
+  set +e
+  out="$(python3 "$PICKER_PY" --menu 2>>"$LOG")"
+  ec=$?
+  set -e
+  if [[ -z "$out" && -f /tmp/onebridge-menu-action ]]; then
+    out="$(cat /tmp/onebridge-menu-action 2>/dev/null || true)"
+  fi
+  rm -f /tmp/onebridge-menu-action 2>/dev/null || true
+  echo "[install] menu out='$out' ec=$ec" >>"$LOG"
+  case "$out" in
+    install|uninstall)
+      printf '%s' "$out"
+      return 0
+      ;;
+  esac
+  return 1
+}
 
-echo "[install] selected $FILE" >>"$LOG"
+do_install() {
+  local out ec FILE pick_ec
+  set +e
+  out="$(python3 "$PICKER_PY" --pick "Install" "$HOME/Downloads/" 2>>"$LOG")"
+  ec=$?
+  set -e
+  if [[ -z "$out" && -f /tmp/onebridge-picked-path ]]; then
+    out="$(cat /tmp/onebridge-picked-path 2>/dev/null || true)"
+    rm -f /tmp/onebridge-picked-path 2>/dev/null || true
+  fi
+  if [[ -z "$out" ]]; then
+    echo "[install] cancelled" >>"$LOG"
+    exit 0
+  fi
+  FILE="$out"
+  if [[ ! -e "$FILE" ]]; then
+    notify error "That file was not found."
+    exit 1
+  fi
 
-# JSON-escape the path for curl
-PAYLOAD="$(python3 -c 'import json,sys; print(json.dumps({"path": sys.argv[1]}))' "$FILE")"
-RESP="$(curl -sS -X POST "${CONTROL_URL}/api/agents/install-from-workspace-path" \
-  -H 'Content-Type: application/json' \
-  -d "$PAYLOAD" 2>>"$LOG" || true)"
+  local BASE PAYLOAD RESP curl_ec OK NAME ICON ERR
+  BASE="$(basename "$FILE")"
+  echo "[install] selected $FILE" >>"$LOG"
+  start_progress "Installing ${BASE}…"
 
-echo "[install] response $RESP" >>"$LOG"
+  PAYLOAD="$(python3 -c 'import json,sys; print(json.dumps({"path": sys.argv[1]}))' "$FILE")"
+  set +e
+  RESP="$(curl -sS --connect-timeout 5 --max-time 600 \
+    -X POST "${CONTROL_URL}/api/agents/install-from-workspace-path" \
+    -H 'Content-Type: application/json' \
+    -d "$PAYLOAD" 2>>"$LOG")"
+  curl_ec=$?
+  set -e
+  echo "[install] curl_ec=$curl_ec response $RESP" >>"$LOG"
+  cleanup_progress
 
-OK="$(python3 -c 'import json,sys
+  if [[ $curl_ec -ne 0 || -z "${RESP:-}" ]]; then
+    notify error "Could not reach the install service. Is OneBridge running?"
+    exit 1
+  fi
+
+  OK="$(python3 -c 'import json,sys
 try:
   print("1" if json.loads(sys.argv[1]).get("ok") else "0")
 except Exception:
   print("0")' "$RESP" 2>/dev/null || echo 0)"
 
-if [[ "$OK" == "1" ]]; then
-  NAME="$(python3 -c 'import json,sys
+  if [[ "$OK" == "1" ]]; then
+    NAME="$(python3 -c 'import json,sys
 try:
-  j=json.loads(sys.argv[1]); print(j.get("displayName") or j.get("agentId") or "Assistant")
+  j=json.loads(sys.argv[1]); print(j.get("displayName") or j.get("agentId") or "package")
 except Exception:
-  print("Assistant")' "$RESP" 2>/dev/null || echo Assistant)"
-  zenity --info --text="Installed: ${NAME}" 2>>"$LOG" || true
-  exit 0
-fi
+  print("package")' "$RESP" 2>/dev/null || echo package)"
+    notify info "Installed: ${NAME}"
+    exit 0
+  fi
 
-ERR="$(python3 -c 'import json,sys
+  ERR="$(python3 -c 'import json,sys
 try:
   print(json.loads(sys.argv[1]).get("error") or "Install failed")
 except Exception:
   print("Install failed")' "$RESP" 2>/dev/null || echo "Install failed")"
-zenity --error --text="$ERR" 2>>"$LOG" || true
-exit 1
+  notify error "$ERR"
+  exit 1
+}
+
+do_uninstall() {
+  local LIST RESP curl_ec PKG NAME OK ERR
+  set +e
+  LIST="$(curl -sS --connect-timeout 5 --max-time 30 \
+    "${CONTROL_URL}/api/agents/workspace-apps" 2>>"$LOG")"
+  curl_ec=$?
+  set -e
+  if [[ $curl_ec -ne 0 || -z "${LIST:-}" ]]; then
+    notify error "Could not load installed apps. Is OneBridge running?"
+    exit 1
+  fi
+
+  APPS_JSON="$(python3 -c 'import json,sys
+try:
+  j=json.loads(sys.argv[1]); print(json.dumps(j.get("apps") or []))
+except Exception:
+  print("[]")' "$LIST" 2>/dev/null || echo '[]')"
+
+  COUNT="$(python3 -c 'import json,sys; print(len(json.loads(sys.argv[1])))' "$APPS_JSON")"
+  if [[ "$COUNT" == "0" ]]; then
+    notify info "No applications to uninstall."
+    exit 0
+  fi
+
+  echo "$APPS_JSON" >/tmp/onebridge-uninstall-apps.json
+  rm -f /tmp/onebridge-uninstall-pkg 2>/dev/null || true
+  set +e
+  PKG="$(python3 "$PICKER_PY" --choose-app "@/tmp/onebridge-uninstall-apps.json" 2>>"$LOG")"
+  pick_ec=$?
+  set -e
+  if [[ -z "$PKG" && -f /tmp/onebridge-uninstall-pkg ]]; then
+    PKG="$(cat /tmp/onebridge-uninstall-pkg 2>/dev/null || true)"
+  fi
+  rm -f /tmp/onebridge-uninstall-apps.json /tmp/onebridge-uninstall-pkg
+  if [[ $pick_ec -ne 0 || -z "$PKG" ]]; then
+    echo "[uninstall] cancelled" >>"$LOG"
+    exit 0
+  fi
+
+  echo "[uninstall] package $PKG" >>"$LOG"
+  start_progress "Uninstalling ${PKG}…"
+
+  PAYLOAD="$(python3 -c 'import json,sys; print(json.dumps({"package": sys.argv[1]}))' "$PKG")"
+  set +e
+  RESP="$(curl -sS --connect-timeout 5 --max-time 300 \
+    -X POST "${CONTROL_URL}/api/agents/uninstall-workspace-app" \
+    -H 'Content-Type: application/json' \
+    -d "$PAYLOAD" 2>>"$LOG")"
+  curl_ec=$?
+  set -e
+  echo "[uninstall] curl_ec=$curl_ec response $RESP" >>"$LOG"
+  cleanup_progress
+
+  if [[ $curl_ec -ne 0 || -z "${RESP:-}" ]]; then
+    notify error "Could not reach the uninstall service."
+    exit 1
+  fi
+
+  OK="$(python3 -c 'import json,sys
+try:
+  print("1" if json.loads(sys.argv[1]).get("ok") else "0")
+except Exception:
+  print("0")' "$RESP" 2>/dev/null || echo 0)"
+
+  if [[ "$OK" == "1" ]]; then
+    NAME="$(python3 -c 'import json,sys
+try:
+  j=json.loads(sys.argv[1]); print(j.get("displayName") or j.get("package") or "app")
+except Exception:
+  print("app")' "$RESP" 2>/dev/null || echo app)"
+    notify info "Uninstalled: ${NAME}"
+    exit 0
+  fi
+
+  ERR="$(python3 -c 'import json,sys
+try:
+  print(json.loads(sys.argv[1]).get("error") or "Uninstall failed")
+except Exception:
+  print("Uninstall failed")' "$RESP" 2>/dev/null || echo "Uninstall failed")"
+  notify error "$ERR"
+  exit 1
+}
+
+if [[ ! -f "$PICKER_PY" ]]; then
+  notify error "File picker is not available in this workspace."
+  exit 1
+fi
+
+set +e
+ACTION="$(choose_action)"
+action_ec=$?
+set -e
+if [[ $action_ec -ne 0 || -z "${ACTION:-}" ]]; then
+  echo "[install] cancelled at menu" >>"$LOG"
+  exit 0
+fi
+
+case "$ACTION" in
+  install) do_install ;;
+  uninstall) do_uninstall ;;
+  *) echo "[install] unknown action $ACTION" >>"$LOG"; exit 1 ;;
+esac

@@ -33,6 +33,7 @@ COPY container/bridge-browser.sh /opt/bridge/bridge-browser.sh
 COPY container/launch-browser.sh /opt/bridge/launch-browser.sh
 COPY container/open-agent.sh /opt/bridge/open-agent.sh
 COPY container/open-install-assistant.sh /opt/bridge/open-install-assistant.sh
+COPY container/gtk-file-picker.py /opt/bridge/gtk-file-picker.py
 COPY container/repair-desktop.sh /opt/bridge/repair-desktop.sh
 COPY container/host-bin/ /opt/bridge/host-bin/
 COPY container/trust-mitm-ca.sh /usr/local/bin/trust-mitm-ca.sh
@@ -43,6 +44,7 @@ COPY container/start-desktop.sh /usr/local/bin/start-desktop.sh
 COPY container/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /opt/bridge/bridge-browser.sh /opt/bridge/launch-browser.sh \
       /opt/bridge/open-agent.sh /opt/bridge/open-install-assistant.sh \
+      /opt/bridge/gtk-file-picker.py \
       /opt/bridge/repair-desktop.sh \
       /opt/bridge/agent-env.sh /opt/bridge/host-bin/* \
       /usr/local/bin/network-lock.sh /usr/local/bin/start-desktop.sh \

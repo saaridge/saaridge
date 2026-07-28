@@ -26,6 +26,8 @@ import {
   installAgentFromWorkspaceDownload,
   installAgentFromHostArchive,
   installAgentFromWorkspacePath,
+  listWorkspaceInstalledApps,
+  uninstallWorkspaceApp,
 } from "../lib/workspace-install.js";
 import {
   requestOpenInstallAssistant,
@@ -132,6 +134,20 @@ export const startControlPlane = ({ port = 3847 } = {}) => {
       return res.status(400).json({ ok: false, error: "path required" });
     }
     const result = await installAgentFromWorkspacePath(workspacePath);
+    res.status(result.ok ? 200 : 500).json(result);
+  });
+
+  app.get("/api/agents/workspace-apps", async (_req, res) => {
+    const result = await listWorkspaceInstalledApps();
+    res.status(result.ok ? 200 : 500).json(result);
+  });
+
+  app.post("/api/agents/uninstall-workspace-app", async (req, res) => {
+    const packageId = req.body?.package || req.body?.packageId;
+    if (!packageId) {
+      return res.status(400).json({ ok: false, error: "package required" });
+    }
+    const result = await uninstallWorkspaceApp(packageId);
     res.status(result.ok ? 200 : 500).json(result);
   });
 

@@ -1,6 +1,8 @@
 #!/bin/bash
 # Launch OneBridge into the interactive macOS GUI session.
-# Ensures the host control plane (:3847) is up before starting Electron.
+# 1) Require Docker (prompt if missing; start daemon if stopped)
+# 2) Ensure the host control plane (:3847) is up
+# 3) Start Electron
 # (Background launches from Cursor/IDE often start Electron with no visible window.)
 set -euo pipefail
 
@@ -14,6 +16,10 @@ SUPERVISOR_LOG="${ONEBRIDGE_SUPERVISOR_LOG:-/tmp/onebridge-host-supervisor.log}"
 
 export ELECTRON_RUN_AS_NODE=
 unset ELECTRON_RUN_AS_NODE
+
+# shellcheck source=../scripts/ensure-docker.sh
+source "$ROOT/scripts/ensure-docker.sh"
+ensure_docker
 
 control_plane_ok() {
   curl -sf --connect-timeout 1 --max-time 2 \

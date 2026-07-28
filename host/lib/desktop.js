@@ -103,6 +103,7 @@ export const provisionDesktopSession = async () => {
     "launch-browser.sh",
     "open-agent.sh",
     "open-install-assistant.sh",
+    "gtk-file-picker.py",
     "repair-desktop.sh",
     "ensure-x-modes.sh",
     "resize-display.sh",
@@ -136,7 +137,7 @@ export const provisionDesktopSession = async () => {
     "bash",
     "-lc",
     [
-      "chmod 755 /opt/bridge/bridge-browser.sh /opt/bridge/launch-browser.sh /opt/bridge/open-agent.sh /opt/bridge/open-install-assistant.sh /opt/bridge/repair-desktop.sh /opt/bridge/ensure-x-modes.sh /opt/bridge/resize-display.sh /opt/bridge/fit-windows.sh /opt/bridge/fix-vnc-stack.py /opt/bridge/key-pump.sh /opt/bridge/agent-env.sh /opt/bridge/host-bin/* /usr/local/bin/start-desktop.sh /usr/local/bin/start-audio.sh",
+      "chmod 755 /opt/bridge/bridge-browser.sh /opt/bridge/launch-browser.sh /opt/bridge/open-agent.sh /opt/bridge/open-install-assistant.sh /opt/bridge/gtk-file-picker.py /opt/bridge/repair-desktop.sh /opt/bridge/ensure-x-modes.sh /opt/bridge/resize-display.sh /opt/bridge/fit-windows.sh /opt/bridge/fix-vnc-stack.py /opt/bridge/key-pump.sh /opt/bridge/agent-env.sh /opt/bridge/host-bin/* /usr/local/bin/start-desktop.sh /usr/local/bin/start-audio.sh",
       "chmod 644 /opt/bridge/*.mjs 2>/dev/null || true",
       // Keep RANDR modes available so viewer resize maps 1:1 (accurate clicks).
       "DISPLAY=:1 /opt/bridge/ensure-x-modes.sh >/tmp/ensure-x-modes.log 2>&1 || true",

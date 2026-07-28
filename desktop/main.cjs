@@ -13,7 +13,6 @@ const {
   ipcMain,
   shell,
   Menu,
-  dialog,
 } = require("electron");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
@@ -532,56 +531,6 @@ ipcMain.handle("onebridge:focus-desktop", async () => {
   focusDesktop();
   return { ok: true };
 });
-
-const installPackageFromDialog = async () => {
-  if (!mainWindow || mainWindow.isDestroyed()) {
-    return { ok: false, error: "Window not ready" };
-  }
-  // Hide titlebar overlay so the native dialog is usable.
-  hideTitleBar();
-  try {
-    const picked = await dialog.showOpenDialog(mainWindow, {
-      title: "Install assistant",
-      buttonLabel: "Install",
-      properties: ["openFile"],
-      filters: [
-        {
-          name: "Assistant packages",
-          extensions: ["zip", "tgz", "gz", "onebridge"],
-        },
-        { name: "All files", extensions: ["*"] },
-      ],
-    });
-    if (picked.canceled || !picked.filePaths?.[0]) {
-      return { ok: false, cancelled: true };
-    }
-    const hostPath = picked.filePaths[0];
-    const r = await fetchJson(
-      `${CONTROL}/api/agents/install-from-file`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ hostPath }),
-      },
-      120_000,
-    );
-    if (!r.ok || !r.body?.ok) {
-      return {
-        ok: false,
-        error: r.body?.error || r.error?.message || "Install failed",
-      };
-    }
-    return { ok: true, ...(r.body || {}) };
-  } finally {
-    if (desktopLive) {
-      showTitleBar();
-      focusDesktop();
-    }
-  }
-};
-
-ipcMain.handle("onebridge:open-install", async () => installPackageFromDialog());
-ipcMain.handle("onebridge:install-package", async () => installPackageFromDialog());
 
 ipcMain.handle("onebridge:open-api-key", async () => {
   // Load shell API-key page in a small modal window so desktop keeps main focus path.

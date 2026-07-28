@@ -344,7 +344,10 @@ export const installAgentFromHostArchive = async (hostFilePath) => {
 
 /**
  * Install a package that lives inside the workspace container filesystem
- * (e.g. zenity file picker under /home/browser).
+ * (zenity/GTK file picker under /home/browser).
+ * Supports:
+ *  - .deb → dpkg install inside the workspace
+ *  - .zip / .tgz / .onebridge → OneBridge assistant package
  */
 export const installAgentFromWorkspacePath = async (workspacePath) => {
   const raw = String(workspacePath || "").trim();
@@ -361,6 +364,15 @@ export const installAgentFromWorkspacePath = async (workspacePath) => {
   }
 
   const base = path.basename(raw);
+  const lower = base.toLowerCase();
+
+  // Native Linux installer packages — install inside the workspace.
+  if (lower.endsWith(".deb")) {
+    return installDebInWorkspace(raw, base);
+  }
+  if (lower.endsWith(".appimage")) {
+    return installAppImageInWorkspace(raw, base);
+  }
 
   const stagingRoot = path.join(STATE_DIR, "staging");
   fs.mkdirSync(stagingRoot, { recursive: true });
@@ -387,6 +399,356 @@ export const installAgentFromWorkspacePath = async (workspacePath) => {
   } finally {
     cleanupStaging(staging);
   }
+};
+
+const installDebInWorkspace = async (workspacePath, base) => {
+  logStep("Installing .deb inside workspace", { path: workspacePath });
+  const res = await dockerExec(
+    [
+      "bash",
+      "-lc",
+      [
+        "set +e",
+        `FILE=${JSON.stringify(workspacePath)}`,
+        'if [[ ! -f "$FILE" ]]; then echo "File not found"; exit 1; fi',
+        "export DEBIAN_FRONTEND=noninteractive",
+        'OUT=$(dpkg -i "$FILE" 2>&1)',
+        "CODE=$?",
+        'echo "$OUT"',
+        "if [[ $CODE -ne 0 ]]; then",
+        "  apt-get install -y -f -qq 2>&1",
+        '  OUT=$(dpkg -i "$FILE" 2>&1)',
+        "  CODE=$?",
+        '  echo "$OUT"',
+        "fi",
+        "exit $CODE",
+      ].join("\n"),
+    ],
+    { user: "root", timeoutMs: 300_000 },
+  );
+  if (res.code !== 0) {
+    const detail = (res.stderr || res.stdout || "dpkg failed").trim().slice(-800);
+    logError("dpkg install failed", { file: base, detail });
+    return { ok: false, error: detail || "Failed to install .deb package" };
+  }
+
+  const pkgName = await readDebPackageName(workspacePath);
+  const icon = await ensureDesktopIconForDeb(pkgName, base);
+  const displayName = icon?.name || pkgName || base.replace(/\.deb$/i, "");
+  logStep("Installed .deb in workspace", { file: base, desktop: icon?.desktopName });
+  return {
+    ok: true,
+    displayName,
+    agentId: null,
+    kind: "deb",
+    desktopIcon: icon?.desktopName || null,
+  };
+};
+
+const readDebPackageName = async (workspacePath) => {
+  const res = await dockerExec(
+    ["bash", "-lc", `dpkg-deb -f ${JSON.stringify(workspacePath)} Package 2>/dev/null`],
+    { timeoutMs: 15_000 },
+  );
+  return (res.stdout || "").trim() || null;
+};
+
+/**
+ * Copy the package's .desktop launcher onto the XFCE desktop and mark trusted.
+ * Electron/Chromium-based apps get --no-sandbox for the container X session.
+ */
+const ensureDesktopIconForDeb = async (pkgName, debBase) => {
+  const script = `
+set -e
+export HOME=/home/browser
+mkdir -p "$HOME/Desktop" "$HOME/.local/share/applications"
+
+PKG=${JSON.stringify(pkgName || "")}
+DEB_BASE=${JSON.stringify(debBase || "")}
+
+# Find a real application .desktop from the installed package (skip url-handlers).
+SRC=""
+if [[ -n "$PKG" ]]; then
+  while IFS= read -r f; do
+    [[ -z "$f" || ! -f "$f" ]] && continue
+    case "$f" in
+      *url-handler*) continue ;;
+    esac
+    if grep -q '^Type=Application' "$f" 2>/dev/null; then
+      SRC="$f"
+      break
+    fi
+  done < <(dpkg -L "$PKG" 2>/dev/null | grep '\\.desktop$' || true)
+fi
+
+if [[ -z "$SRC" ]]; then
+  # Fallback: match by name under applications
+  for cand in /usr/share/applications/*.desktop; do
+    [[ -f "$cand" ]] || continue
+    case "$cand" in *url-handler*) continue ;; esac
+    base="$(basename "$cand" .desktop)"
+    if [[ -n "$PKG" && "$base" == "$PKG" ]]; then SRC="$cand"; break; fi
+  done
+fi
+
+if [[ -z "$SRC" || ! -f "$SRC" ]]; then
+  echo "NO_DESKTOP"
+  exit 0
+fi
+
+NAME="$(grep -m1 '^Name=' "$SRC" | sed 's/^Name=//' || true)"
+[[ -z "$NAME" ]] && NAME="$PKG"
+[[ -z "$NAME" ]] && NAME="\${DEB_BASE%.deb}"
+SAFE_NAME="$(echo "$NAME" | tr -cd 'A-Za-z0-9 ._-' | sed 's/  */ /g' | sed 's/^ *//;s/ *$//')"
+[[ -z "$SAFE_NAME" ]] && SAFE_NAME="App"
+DEST_APP="$HOME/.local/share/applications/onebridge-\${SAFE_NAME// /_}.desktop"
+DEST_DESKTOP="$HOME/Desktop/\${SAFE_NAME}.desktop"
+
+# Rewrite Exec for container X; tag with package id for uninstall.
+python3 - "$SRC" "$DEST_APP" "$PKG" <<'PY'
+import sys
+src, dest, pkg = sys.argv[1], sys.argv[2], sys.argv[3]
+text = open(src, encoding="utf-8", errors="replace").read().splitlines()
+out = []
+saw_pkg = False
+for line in text:
+    if line.startswith("Exec="):
+        cmd = line[5:]
+        parts = cmd.split()
+        if parts:
+            bin0 = parts[0]
+            rest = parts[1:]
+            flags = []
+            low = bin0.lower()
+            if any(x in low for x in ("cursor", "chrom", "code", "electron")):
+                for f in ("--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"):
+                    if f not in rest:
+                        flags.append(f)
+            line = "Exec=" + " ".join([bin0, *flags, *rest])
+    if line.startswith("X-OneBridge-Package="):
+        saw_pkg = True
+        if pkg:
+            line = f"X-OneBridge-Package={pkg}"
+    out.append(line)
+if pkg and not saw_pkg:
+    out.append(f"X-OneBridge-Package={pkg}")
+open(dest, "w", encoding="utf-8").write("\n".join(out) + "\n")
+PY
+
+chmod +x "$DEST_APP"
+# Desktop link as Application (XFCE does not support application:// links)
+cp -f "$DEST_APP" "$DEST_DESKTOP"
+chmod +x "$DEST_DESKTOP"
+if command -v gio >/dev/null 2>&1; then
+  gio set "$DEST_DESKTOP" metadata::trusted true 2>/dev/null || true
+fi
+chown browser:browser "$DEST_APP" "$DEST_DESKTOP" 2>/dev/null || true
+# Refresh desktop icons if xfdesktop is running
+if pgrep -x xfdesktop >/dev/null 2>&1; then
+  xfdesktop --reload 2>/dev/null || true
+fi
+echo "OK|$SAFE_NAME|$DEST_DESKTOP"
+`;
+
+  const res = await dockerExec(["bash", "-lc", script], {
+    user: "browser",
+    timeoutMs: 30_000,
+  });
+  const line = (res.stdout || "").trim().split("\n").pop() || "";
+  if (!line.startsWith("OK|")) {
+    return null;
+  }
+  const parts = line.split("|");
+  return {
+    name: parts[1] || pkgName || debBase,
+    desktopName: parts[1] || null,
+    path: parts[2] || null,
+  };
+};
+
+const installAppImageInWorkspace = async (workspacePath, base) => {
+  logStep("Installing AppImage inside workspace", { path: workspacePath });
+  const dest = `/home/browser/Applications/${base}`;
+  const name = base.replace(/\.appimage$/i, "");
+  const res = await dockerExec(
+    [
+      "bash",
+      "-lc",
+      [
+        "set -e",
+        "mkdir -p /home/browser/Applications /home/browser/Desktop /home/browser/.local/share/applications",
+        `cp -f ${JSON.stringify(workspacePath)} ${JSON.stringify(dest)}`,
+        `chmod +x ${JSON.stringify(dest)}`,
+        "chown -R browser:browser /home/browser/Applications",
+        `cat > "/home/browser/.local/share/applications/${name}.desktop" <<EOF`,
+        "[Desktop Entry]",
+        "Version=1.0",
+        "Type=Application",
+        `Name=${name}`,
+        `Exec=${dest} --no-sandbox`,
+        "Icon=application-x-executable",
+        "Terminal=false",
+        "Categories=Utility;",
+        `X-OneBridge-Package=appimage:${name}`,
+        "EOF",
+        `cp -f "/home/browser/.local/share/applications/${name}.desktop" "/home/browser/Desktop/${name}.desktop"`,
+        `chmod +x "/home/browser/Desktop/${name}.desktop"`,
+        `gio set "/home/browser/Desktop/${name}.desktop" metadata::trusted true 2>/dev/null || true`,
+        "chown browser:browser /home/browser/Desktop/*.desktop /home/browser/.local/share/applications/*.desktop 2>/dev/null || true",
+      ].join("\n"),
+    ],
+    { user: "root", timeoutMs: 120_000 },
+  );
+  if (res.code !== 0) {
+    return {
+      ok: false,
+      error: (res.stderr || res.stdout || "AppImage install failed").trim().slice(-500),
+    };
+  }
+  return {
+    ok: true,
+    displayName: name,
+    agentId: null,
+    kind: "appimage",
+    path: dest,
+    desktopIcon: name,
+  };
+};
+
+/** List apps the Install Assistant placed on the desktop (uninstallable). */
+export const listWorkspaceInstalledApps = async () => {
+  if (!(await containerRunning())) {
+    return { ok: false, error: "Workspace is not running", apps: [] };
+  }
+  const script = `
+export HOME=/home/browser
+python3 - <<'PY'
+import glob, os, json
+apps = []
+for path in sorted(glob.glob("/home/browser/Desktop/*.desktop")):
+    name = os.path.basename(path)
+    if name == "Install Assistant.desktop":
+        continue
+    pkg = ""
+    label = os.path.splitext(name)[0]
+    in_action = False
+    try:
+        for line in open(path, encoding="utf-8", errors="replace"):
+            line = line.strip()
+            if line.startswith("[Desktop Action"):
+                in_action = True
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                in_action = False
+                continue
+            if in_action:
+                continue
+            if line.startswith("Name=") and not line.startswith("Name["):
+                label = line.split("=", 1)[1].strip() or label
+            if line.startswith("X-OneBridge-Package="):
+                pkg = line.split("=", 1)[1].strip()
+    except OSError:
+        continue
+    if not pkg:
+        low = label.lower()
+        if low == "cursor":
+            pkg = "cursor"
+        else:
+            continue
+    apps.append({"name": label, "package": pkg, "desktop": path})
+print(json.dumps(apps))
+PY
+`;
+  const res = await dockerExec(["bash", "-lc", script], {
+    user: "browser",
+    timeoutMs: 15_000,
+  });
+  if (res.code !== 0) {
+    return { ok: false, error: res.stderr || res.stdout || "list failed", apps: [] };
+  }
+  try {
+    const apps = JSON.parse((res.stdout || "").trim() || "[]");
+    return { ok: true, apps: Array.isArray(apps) ? apps : [] };
+  } catch {
+    return { ok: false, error: "Could not parse app list", apps: [] };
+  }
+};
+
+/** Uninstall a workspace app (dpkg remove + desktop icon cleanup). */
+export const uninstallWorkspaceApp = async (packageId) => {
+  const pkg = String(packageId || "").trim();
+  if (!pkg || pkg.includes("\0") || pkg.includes("..") || pkg.includes("/")) {
+    return { ok: false, error: "Invalid package" };
+  }
+  if (!(await containerRunning())) {
+    return { ok: false, error: "Workspace is not running" };
+  }
+
+  logStep("Uninstalling workspace app", { package: pkg });
+
+  if (pkg.startsWith("appimage:")) {
+    const name = pkg.slice("appimage:".length);
+    const res = await dockerExec(
+      [
+        "bash",
+        "-lc",
+        [
+          "set -e",
+          `NAME=${JSON.stringify(name)}`,
+          'rm -f "/home/browser/Applications/${NAME}.AppImage" "/home/browser/Applications/${NAME}.appimage" "/home/browser/Applications/$NAME" 2>/dev/null || true',
+          'rm -f "/home/browser/Desktop/${NAME}.desktop" "/home/browser/.local/share/applications/${NAME}.desktop" 2>/dev/null || true',
+          'find /home/browser/Desktop /home/browser/.local/share/applications -maxdepth 1 -name "*.desktop" 2>/dev/null | while read -r f; do grep -q "X-OneBridge-Package=appimage:${NAME}" "$f" 2>/dev/null && rm -f "$f"; done',
+          "chown browser:browser /home/browser/Desktop 2>/dev/null || true",
+        ].join("\n"),
+      ],
+      { user: "root", timeoutMs: 60_000 },
+    );
+    if (res.code !== 0) {
+      return { ok: false, error: (res.stderr || res.stdout || "Uninstall failed").trim().slice(-500) };
+    }
+    return { ok: true, displayName: name, package: pkg };
+  }
+
+  const res = await dockerExec(
+    [
+      "bash",
+      "-lc",
+      [
+        "set +e",
+        `PKG=${JSON.stringify(pkg)}`,
+        "export DEBIAN_FRONTEND=noninteractive",
+        'OUT=$(dpkg --purge "$PKG" 2>&1 || apt-get remove -y --purge "$PKG" 2>&1)',
+        "CODE=$?",
+        'echo "$OUT"',
+        "python3 - <<'PY'",
+        "import glob, os, sys",
+        `pkg = ${JSON.stringify(pkg)}`,
+        "for path in glob.glob('/home/browser/Desktop/*.desktop') + glob.glob('/home/browser/.local/share/applications/*.desktop'):",
+        "    try:",
+        "        text = open(path, encoding='utf-8', errors='replace').read()",
+        "    except OSError:",
+        "        continue",
+        "    if f'X-OneBridge-Package={pkg}' in text or (pkg == 'cursor' and 'Name=Cursor' in text):",
+        "        os.remove(path)",
+        "        print('removed', path)",
+        "PY",
+        "chown -R browser:browser /home/browser/Desktop /home/browser/.local/share/applications 2>/dev/null || true",
+        "if pgrep -x xfdesktop >/dev/null 2>&1; then xfdesktop --reload 2>/dev/null || true; fi",
+        "exit $CODE",
+      ].join("\n"),
+    ],
+    { user: "root", timeoutMs: 180_000 },
+  );
+
+  if (res.code !== 0) {
+    const detail = (res.stderr || res.stdout || "Uninstall failed").trim().slice(-800);
+    // Still try to remove icons even if purge partially failed
+    logError("Uninstall workspace app failed", { package: pkg, detail });
+    return { ok: false, error: detail || "Uninstall failed" };
+  }
+
+  logStep("Uninstalled workspace app", { package: pkg });
+  return { ok: true, displayName: pkg, package: pkg };
 };
 
 /** True if filename looks like an installable assistant package. */

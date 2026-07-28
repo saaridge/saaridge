@@ -6,7 +6,6 @@
   const bootPhase = document.getElementById("bootPhase");
   const uiActions = document.getElementById("uiActions");
   const btnApiKey = document.getElementById("btnApiKey");
-  const btnInstall = document.getElementById("btnInstall");
   const osBadge = document.getElementById("osBadge");
   const osLabel = document.getElementById("osLabel");
 
@@ -47,7 +46,6 @@
   // Hide titlebar controls during boot — real chrome is a BrowserView later.
   if (uiActions) uiActions.style.display = "none";
   if (btnApiKey) btnApiKey.style.display = "none";
-  if (btnInstall) btnInstall.style.display = "none";
 
   (async () => {
     try {

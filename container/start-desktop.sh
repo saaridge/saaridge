@@ -139,6 +139,38 @@ elif command -v openbox >/dev/null 2>&1; then
   fi
 fi
 
+# Ensure desktop wallpaper + icons (blank black screen means xfdesktop died)
+if command -v xsetroot >/dev/null 2>&1; then
+  xsetroot -solid "#1a2f28" 2>/dev/null || true
+fi
+# Refresh pixbuf loader cache so PNG icons work (panel/desktop crash without it)
+if [[ -x /usr/lib/aarch64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders ]]; then
+  /usr/lib/aarch64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders --update-cache 2>/dev/null || true
+elif [[ -x /usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders ]]; then
+  /usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders --update-cache 2>/dev/null || true
+fi
+if command -v xfconf-query >/dev/null 2>&1; then
+  xfconf-query -c xfce4-desktop -p /desktop-icons/style -n -t int -s 2 2>/dev/null || \
+    xfconf-query -c xfce4-desktop -p /desktop-icons/style -s 2 2>/dev/null || true
+  xfconf-query -c xsettings -p /Net/IconThemeName -n -t string -s Adwaita 2>/dev/null || \
+    xfconf-query -c xsettings -p /Net/IconThemeName -s Adwaita 2>/dev/null || true
+  for mon in monitor0 monitorVNC-0 monitorscreen; do
+    base="/backdrop/screen0/${mon}/workspace0"
+    xfconf-query -c xfce4-desktop -p "${base}/image-style" -n -t int -s 0 2>/dev/null || \
+      xfconf-query -c xfce4-desktop -p "${base}/image-style" -s 0 2>/dev/null || true
+    xfconf-query -c xfce4-desktop -p "${base}/color-style" -n -t int -s 0 2>/dev/null || \
+      xfconf-query -c xfce4-desktop -p "${base}/color-style" -s 0 2>/dev/null || true
+  done
+fi
+if ! is_live_proc xfdesktop && command -v xfdesktop >/dev/null 2>&1; then
+  nohup xfdesktop >/tmp/xfdesktop.log 2>&1 &
+  sleep 0.5
+fi
+if ! is_live_proc xfce4-panel && command -v xfce4-panel >/dev/null 2>&1; then
+  nohup xfce4-panel >/tmp/xfce4-panel.log 2>&1 &
+  sleep 0.5
+fi
+
 # Virtual speakers + audio stream to host viewer (ws://host:6082)
 if [[ -x /usr/local/bin/start-audio.sh ]]; then
   /usr/local/bin/start-audio.sh >/tmp/start-audio.log 2>&1 || {
