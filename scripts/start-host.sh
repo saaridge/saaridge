@@ -5,16 +5,28 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 LOG="${ONEBRIDGE_HOST_LOG:-/tmp/onebridge-host.log}"
 PIDFILE="${ONEBRIDGE_HOST_PIDFILE:-/tmp/onebridge-host.pid}"
+CONTROL_URL="${ONEBRIDGE_CONTROL_URL:-http://127.0.0.1:3847}"
+
+control_plane_ok() {
+  curl -sf --connect-timeout 1 --max-time 2 \
+    "${CONTROL_URL}/api/health" >/dev/null 2>&1
+}
 
 if [[ -f "$PIDFILE" ]]; then
   old="$(cat "$PIDFILE" 2>/dev/null || true)"
   if [[ -n "${old}" ]] && kill -0 "$old" 2>/dev/null; then
-    # Already supervised by another start-host.sh
+    # Already supervised / host process alive
     if ps -p "$old" -o args= 2>/dev/null | grep -q "host/index.js"; then
       echo "[start-host] host already running pid=$old"
       exit 0
     fi
   fi
+fi
+
+# Healthy control plane from a prior start — do not kill it.
+if control_plane_ok; then
+  echo "[start-host] control plane already healthy at $CONTROL_URL"
+  exit 0
 fi
 
 # Free our ports once at startup (do not do this on every restart loop)

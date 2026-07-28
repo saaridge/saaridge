@@ -286,15 +286,29 @@ const startHostIfNeeded = async () => {
   }
   const logPath = "/tmp/onebridge-desktop-host.log";
   const out = fs.openSync(logPath, "a");
-  hostChild = spawn("node", ["host/index.js"], {
+  const nodeBin = process.env.NODE_BINARY || "node";
+  const env = { ...process.env };
+  delete env.ELECTRON_RUN_AS_NODE;
+  hostChild = spawn(nodeBin, ["host/index.js"], {
     cwd: ROOT,
     detached: true,
     stdio: ["ignore", out, out],
-    env: process.env,
+    env,
   });
   hostChild.unref();
   await waitFor(`${CONTROL}/api/health`, "control plane");
   return { already: false, logPath };
+};
+
+/** Ensure control plane is reachable; restart it if it died mid-boot. */
+const ensureControlPlane = async () => {
+  if (await fetchOk(`${CONTROL}/api/health`)) return;
+  sendBoot({
+    phase: "host",
+    progress: 4,
+    message: "Control plane stopped — restarting…",
+  });
+  await startHostIfNeeded();
 };
 
 const pollBootStatus = () => {
@@ -330,11 +344,29 @@ const ensureWorkspace = async () => {
   });
   pollBootStatus();
 
-  const ensure = await fetchJson(
+  await ensureControlPlane();
+
+  let ensure = await fetchJson(
     `${CONTROL}/api/container/ensure`,
     { method: "POST" },
     45 * 60_000,
   );
+
+  // Host may have died between health check and ensure — one restart+retry.
+  if (!ensure.ok && /fetch failed|abort|ECONNREFUSED/i.test(String(ensure.error?.message || ""))) {
+    sendBoot({
+      phase: "host",
+      progress: 5,
+      message: "Reconnecting to control plane…",
+    });
+    await startHostIfNeeded();
+    await ensureControlPlane();
+    ensure = await fetchJson(
+      `${CONTROL}/api/container/ensure`,
+      { method: "POST" },
+      45 * 60_000,
+    );
+  }
 
   if (!ensure.ok) {
     const detail =

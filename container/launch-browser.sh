@@ -31,7 +31,6 @@ for _ in $(seq 1 15); do
 done
 
 exec /usr/lib/chromium/chromium \
-  --no-sandbox \
   --disable-dev-shm-usage \
   --disable-gpu \
   --window-size=1280,800 \
