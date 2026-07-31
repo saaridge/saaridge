@@ -6,3 +6,4 @@ state/
 examples/sample-agent/mcp.json
 desktop/node_modules/
 examples/bridge-proof-agent/node_modules/
+container/hostfs-rust/target/

@@ -86,7 +86,25 @@ export const listAgentsPublic = () =>
       installedAt: a.installedAt,
       localProxyPort: a.localProxyPort,
       tokenFingerprint: a.token ? a.token.slice(0, 8) : null,
+      hostHomeWrite: Boolean(a.policy?.hostHomeWrite),
+      hostHomeWriteAt: a.policy?.hostHomeWriteAt || null,
     }));
+
+/** Desktop/Cursor identity for host-home write consent UI (not listed as an “assistant”). */
+export const getDesktopAgentPublic = () => {
+  const a =
+    getAgentById("workspace-desktop") ||
+    (getAgents().agents || []).find((x) => x.kind === "desktop");
+  if (!a) return null;
+  return {
+    id: a.id,
+    name: a.name || "Workspace Desktop",
+    kind: "desktop",
+    status: a.status || "desktop",
+    hostHomeWrite: Boolean(a.policy?.hostHomeWrite),
+    hostHomeWriteAt: a.policy?.hostHomeWriteAt || null,
+  };
+};
 
 export const parseBearer = (header = "") => {
   if (header.startsWith("Bearer ")) return header.slice(7).trim();

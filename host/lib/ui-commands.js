@@ -9,13 +9,16 @@ const UI_FILE = path.join(STATE_DIR, "ui-commands.json");
 
 const readUi = () => {
   try {
-    if (!fs.existsSync(UI_FILE)) return { openInstallAt: null };
+    if (!fs.existsSync(UI_FILE)) {
+      return { openInstallAt: null, hostHomeWriteConsent: null };
+    }
     return {
       openInstallAt: null,
+      hostHomeWriteConsent: null,
       ...JSON.parse(fs.readFileSync(UI_FILE, "utf8")),
     };
   } catch {
-    return { openInstallAt: null };
+    return { openInstallAt: null, hostHomeWriteConsent: null };
   }
 };
 
@@ -40,6 +43,46 @@ export const consumeOpenInstallAssistant = () => {
   data.openInstallAt = null;
   writeUi(data);
   return { open: true, openInstallAt: at };
+};
+
+/**
+ * Ask the host desktop user to grant home write for an agent.
+ * Keeps a single pending prompt (refreshes path/timestamp if same agent).
+ */
+export const requestHostHomeWriteConsentPrompt = ({
+  agentId,
+  agentName,
+  path: deniedPath,
+} = {}) => {
+  if (!agentId) return { ok: false };
+  const data = readUi();
+  const prev = data.hostHomeWriteConsent;
+  if (
+    prev &&
+    prev.agentId === agentId &&
+    prev.at &&
+    Date.now() - Date.parse(prev.at) < 15_000
+  ) {
+    // Debounce spam from Cursor save retries.
+    return { ok: true, debounced: true, hostHomeWriteConsent: prev };
+  }
+  data.hostHomeWriteConsent = {
+    agentId,
+    agentName: agentName || agentId,
+    path: deniedPath || "",
+    at: new Date().toISOString(),
+  };
+  writeUi(data);
+  return { ok: true, hostHomeWriteConsent: data.hostHomeWriteConsent };
+};
+
+export const consumeHostHomeWriteConsentPrompt = () => {
+  const data = readUi();
+  const pending = data.hostHomeWriteConsent;
+  if (!pending) return { open: false };
+  data.hostHomeWriteConsent = null;
+  writeUi(data);
+  return { open: true, ...pending };
 };
 
 /** Open Install Assistant inside the XFCE desktop (not on the host). */

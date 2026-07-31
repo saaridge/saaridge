@@ -5,3 +5,5 @@ export * as transform from "./transform.js";
 export * as audit from "./audit.js";
 export * as limits from "./limits.js";
 export * as api from "./api.js";
+export * as agentFsExcludes from "./agent-fs-excludes.js";
+export * as fsMemo from "./fs-memo.js";

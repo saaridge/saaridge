@@ -14,7 +14,7 @@ import {
   containerRunning,
   getContainerBootStatus,
 } from "../lib/docker.js";
-import { listAgentsPublic } from "../lib/auth.js";
+import { listAgentsPublic, getAgentById, getDesktopAgentPublic } from "../lib/auth.js";
 import {
   getLlmSettingsPublic,
   saveLlmSettings,
@@ -33,11 +33,12 @@ import {
   requestOpenInstallAssistant,
   getUiCommands,
   consumeOpenInstallAssistant,
+  consumeHostHomeWriteConsentPrompt,
   openInstallAssistantInDesktop,
   resizeDesktopDisplay,
   injectDesktopMouse,
 } from "../lib/ui-commands.js";
-
+import { setHostHomeWriteGrant } from "../lib/host-home-grant.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -94,7 +95,10 @@ export const startControlPlane = ({ port = 3847 } = {}) => {
   });
 
   app.get("/api/agents", (_req, res) => {
-    res.json({ agents: listInstalledAgents() });
+    res.json({
+      agents: listInstalledAgents(),
+      desktop: getDesktopAgentPublic(),
+    });
   });
 
   app.post("/api/agents/install", async (req, res) => {
@@ -176,6 +180,24 @@ export const startControlPlane = ({ port = 3847 } = {}) => {
 
   app.post("/api/ui/consume-open-install", (_req, res) => {
     res.json({ ok: true, ...consumeOpenInstallAssistant() });
+  });
+
+  app.post("/api/ui/consume-host-home-consent", (_req, res) => {
+    res.json({ ok: true, ...consumeHostHomeWriteConsentPrompt() });
+  });
+
+  /** Host-user grant: agent may write under host home (~). Never uses container sudo. */
+  app.post("/api/agents/:id/host-home-write", (req, res) => {
+    try {
+      const grant = req.body?.grant !== false && req.body?.grant !== 0;
+      if (!getAgentById(req.params.id)) {
+        return res.status(404).json({ ok: false, error: "unknown agent" });
+      }
+      const result = setHostHomeWriteGrant(req.params.id, grant);
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err?.message || String(err) });
+    }
   });
 
   app.post("/api/agents/:id/uninstall", async (req, res) => {

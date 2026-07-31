@@ -279,6 +279,7 @@ export const installAgentFromHostPath = async (hostPath) => {
       `export BRIDGE_URL=http://host.docker.internal:7331`,
       `export BRIDGE_PROXY_HOST=host.docker.internal`,
       `export BRIDGE_PROXY_PORT=7332`,
+      `export HOSTFS_IPC_PORT=7333`,
       `export BRIDGE_CREDENTIALS_FILE=${JSON.stringify(credPath)}`,
       `export LOCAL_PROXY_PORT=${agent.localProxyPort}`,
       `export BRIDGE_TOKEN="$(python3 -c 'import json,os; print(json.load(open(os.environ["BRIDGE_CREDENTIALS_FILE"]))["token"])')"`,

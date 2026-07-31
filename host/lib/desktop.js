@@ -52,11 +52,16 @@ export const ensureDesktopCredential = () => {
       dirty = true;
     }
     // Ensure host home is listed as RO in stored policy (effectiveRoots also injects it).
+    // Do not clear hostHomeWrite if the host user already granted write.
     const ro = Array.isArray(agent.policy?.pathsReadOnly)
       ? [...agent.policy.pathsReadOnly]
       : [];
     if (!ro.includes("~")) {
       agent.policy = { ...agent.policy, pathsReadOnly: [...ro, "~"] };
+      dirty = true;
+    }
+    if (typeof agent.policy.hostHomeWrite !== "boolean") {
+      agent.policy = { ...agent.policy, hostHomeWrite: false, hostHomeWriteAt: null };
       dirty = true;
     }
     if (!agent.hostWorkspace) {
@@ -291,6 +296,7 @@ export const provisionDesktopSession = async () => {
           "export AGENT_ID=workspace-desktop",
           "export BRIDGE_PROXY_HOST=host.docker.internal",
           "export BRIDGE_PROXY_PORT=7332",
+          "export HOSTFS_IPC_PORT=7333",
           "export BRIDGE_CREDENTIALS_FILE=/home/browser/.bridge-credentials",
           `export LOCAL_PROXY_PORT=${agent.localProxyPort}`,
           // Pass token from host state — avoids nested-quote breakage inside the container.
@@ -337,6 +343,7 @@ export const provisionDesktopSession = async () => {
           "export BRIDGE_URL=http://host.docker.internal:7331",
           "export BRIDGE_PROXY_HOST=host.docker.internal",
           "export BRIDGE_PROXY_PORT=7332",
+          "export HOSTFS_IPC_PORT=7333",
           "export BRIDGE_CREDENTIALS_FILE=/home/browser/.bridge-credentials",
           `export LOCAL_PROXY_PORT=${agent.localProxyPort}`,
           `export BRIDGE_TOKEN=${JSON.stringify(agent.token)}`,

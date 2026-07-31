@@ -7,6 +7,7 @@ import {
   resolveHostPath,
   resolveUnderRoots,
 } from "./paths.js";
+import { notifyHostHomeWriteDenied } from "../../lib/host-home-grant.js";
 
 const DEFAULT_MAX_BYTES = 50 * 1024 * 1024; // 50 MiB
 
@@ -15,6 +16,7 @@ const DEFAULT_MAX_BYTES = 50 * 1024 * 1024; // 50 MiB
  * Strict default:
  *   RW: ~/OneBridge/workspaces/<id>
  *   RO: ~/OneBridge/shared + host home (~) for browse-only navigation
+ * Host-home WRITE requires policy.hostHomeWrite (host-user consent).
  */
 export const effectiveRoots = (agent) => {
   const id = agent?.id || "unknown";
@@ -22,6 +24,7 @@ export const effectiveRoots = (agent) => {
   const shared = sharedRoot();
   const bridge = oneBridgeRoot();
   const home = path.resolve(os.homedir());
+  const hostHomeWrite = Boolean(agent?.policy?.hostHomeWrite);
 
   const custom = agent?.policy?.paths;
   let readWrite = [];
@@ -40,18 +43,24 @@ export const effectiveRoots = (agent) => {
     readOnly = [shared];
   }
 
-  // RW stays under OneBridge only. RO may include OneBridge paths + host home.
+  // RW stays under OneBridge only — unless host user granted home write.
   const underBridge = (p) => {
     const r = path.resolve(p);
     const base = path.resolve(bridge);
     return r === base || r.startsWith(base + path.sep);
   };
   const isHostHomeRoot = (p) => path.resolve(p) === home;
-  readWrite = readWrite.filter(underBridge);
+  readWrite = readWrite.filter(
+    (p) => underBridge(p) || (hostHomeWrite && isHostHomeRoot(p)),
+  );
   readOnly = readOnly.filter((p) => underBridge(p) || isHostHomeRoot(p));
 
-  // Always expose host home read-only (/host/home → os.homedir()).
-  if (!readOnly.some(isHostHomeRoot)) {
+  if (hostHomeWrite) {
+    if (!readWrite.some(isHostHomeRoot)) readWrite.push(home);
+    // RW supersedes RO for the same root.
+    readOnly = readOnly.filter((p) => !isHostHomeRoot(p));
+  } else if (!readOnly.some(isHostHomeRoot)) {
+    // Always expose host home read-only (/host/home → os.homedir()).
     readOnly.push(home);
   }
 
@@ -66,6 +75,7 @@ export const effectiveRoots = (agent) => {
     workspace: ws,
     shared,
     hostHome: home,
+    hostHomeWrite,
   };
 };
 
@@ -75,8 +85,35 @@ export const assertReadable = (agent, inputPath) => {
 };
 
 export const assertWritable = (agent, inputPath) => {
-  const { readWrite } = effectiveRoots(agent);
-  return resolveUnderRoots(inputPath, readWrite);
+  const roots = effectiveRoots(agent);
+  try {
+    return resolveUnderRoots(inputPath, roots.readWrite);
+  } catch (err) {
+    if (err?.code !== "EACCES") throw err;
+    let resolved;
+    try {
+      resolved = resolveHostPath(inputPath);
+    } catch {
+      throw err;
+    }
+    const home = roots.hostHome;
+    const underHome =
+      resolved === home || String(resolved).startsWith(home + path.sep);
+    if (underHome && !roots.hostHomeWrite) {
+      try {
+        notifyHostHomeWriteDenied(agent, resolved);
+      } catch {
+        /* best-effort prompt */
+      }
+      const e = new Error(
+        "Host home is read-only until the host user grants write access in OneBridge. Do not use sudo — approve “Allow home write” in the desktop app or control plane.",
+      );
+      e.code = "EROFS";
+      e.needHostHomeWrite = true;
+      throw e;
+    }
+    throw err;
+  }
 };
 
 export const maxReadBytes = (agent) =>
@@ -94,8 +131,10 @@ export const defaultDataPolicy = (agentId) => ({
   allowAllProxy: true,
   tools: null,
   paths: [`~/OneBridge/workspaces/${agentId}`],
-  // Host home (~) is browse-only; writes outside OneBridge remain denied.
+  // Host home (~) is browse-only until hostHomeWrite consent.
   pathsReadOnly: ["~/OneBridge/shared", "~"],
+  hostHomeWrite: false,
+  hostHomeWriteAt: null,
   urls: null,
   maxReadBytes: DEFAULT_MAX_BYTES,
   maxWriteBytes: DEFAULT_MAX_BYTES,

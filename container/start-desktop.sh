@@ -111,42 +111,37 @@ if not isinstance(cur, dict):
 watcher = cur.get("files.watcherExclude") or {}
 if not isinstance(watcher, dict):
     watcher = {}
+# Keep in sync with host/bridge/data/agent-fs-excludes.js (exact basenames).
+_AGENT_FS = (
+    "node_modules", ".npm", ".yarn", ".pnpm-store", ".parcel-cache", ".eslintcache",
+    ".next", ".nuxt", ".turbo", ".vercel", ".output", ".svelte-kit",
+    "dist", "build", "coverage",
+    ".venv", "venv", ".tox", "__pycache__", ".mypy_cache", ".pytest_cache",
+    ".ruff_cache", ".eggs", ".ipynb_checkpoints", "htmlcov", ".hypothesis",
+    "vendor", ".bundle",
+    "target", ".gradle", ".idea", "out", ".bloop", ".metals",
+    "Pods", "DerivedData", "xcuserdata", ".swiftpm",
+    "bin", "obj", "packages", ".vs",
+    ".dart_tool",
+    "_build", ".elixir_ls", "deps",
+    ".stack-work", "dist-newstyle",
+    ".git", ".cache", "Library",
+)
+watcher.update({f"**/{n}/**": True for n in _AGENT_FS})
 watcher.update({
-    "**/node_modules/**": True,
     "**/.git/objects/**": True,
     "**/.git/subtree-cache/**": True,
-    "**/Library/**": True,
-    "**/.cache/**": True,
-    "**/dist/**": True,
-    "**/.npm/**": True,
-    "**/build/**": True,
-    "**/.next/**": True,
-    "**/target/**": True,
 })
 cur["files.watcherExclude"] = watcher
 # Hide heavy trees from the explorer so Cursor does not recurse into them
-# on open. User can still open those paths via Open File if needed.
+# on open. FUSE also omits these; explicit path open remains possible.
 exclude = cur.get("files.exclude") if isinstance(cur.get("files.exclude"), dict) else {}
-exclude.update({
-    "**/node_modules": True,
-    "**/.git": True,
-    "**/Library": True,
-    "**/.cache": True,
-    "**/dist": True,
-    "**/.next": True,
-    "**/build": True,
-    "**/target": True,
-})
+exclude.update({f"**/{n}": True for n in _AGENT_FS})
 cur["files.exclude"] = exclude
 search = cur.get("search.exclude") or {}
 if not isinstance(search, dict):
     search = {}
-search.update({
-    "**/node_modules": True,
-    "**/Library": True,
-    "**/.git": True,
-    "**/dist": True,
-})
+search.update({f"**/{n}": True for n in _AGENT_FS})
 cur["search.exclude"] = search
 cur["search.followSymlinks"] = False
 cur["explorer.autoReveal"] = False
@@ -154,6 +149,17 @@ cur["explorer.compactFolders"] = True
 cur["git.autoRepositoryDetection"] = False
 cur["git.detectSubmodules"] = False
 cur["git.enabled"] = False
+cur["window.restoreWindows"] = "none"
+# Drop stale backup restore that reopens huge /host trees on launch.
+backup = Path.home() / ".config/Cursor/User/globalStorage/storage.json"
+try:
+    if backup.is_file():
+        data = json.loads(backup.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and "backupWorkspaces" in data:
+            data["backupWorkspaces"] = {"workspaces": [], "folders": [], "emptyWindows": []}
+            backup.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+except Exception:
+    pass
 path.write_text(json.dumps(cur, indent=2) + "\n", encoding="utf-8")
 print("[start-desktop] Cursor lazy-folder settings for FUSE host paths")
 PY

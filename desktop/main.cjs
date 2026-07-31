@@ -13,6 +13,7 @@ const {
   ipcMain,
   shell,
   Menu,
+  dialog,
 } = require("electron");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
@@ -27,6 +28,8 @@ let mainWindow = null;
 let titleBarView = null;
 let hostChild = null;
 let bootPollTimer = null;
+let consentPollTimer = null;
+let consentDialog = null;
 let desktopLive = false;
 let lastResizeKey = "";
 let forwardingKeys = false;
@@ -599,8 +602,67 @@ ipcMain.handle("onebridge:open-api-key", async () => {
   return { ok: true };
 });
 
+const openHostHomeConsent = async (pending) => {
+  if (!pending?.agentId) return;
+  // Consume so we don't re-open every poll tick.
+  await fetchJson(`${CONTROL}/api/ui/consume-host-home-consent`, {
+    method: "POST",
+  });
+
+  // Native dialog (reliable; no HTML window required).
+  const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+  const choice = await dialog.showMessageBox(win || undefined, {
+    type: "warning",
+    buttons: ["Allow home write", "Deny"],
+    defaultId: 0,
+    cancelId: 1,
+    title: "Allow write to host home?",
+    message: `${pending.agentName || pending.agentId} wants to write under your Mac home folder.`,
+    detail:
+      (pending.path ? `Path: ${pending.path}\n\n` : "") +
+      "This is a OneBridge host-user grant — not container sudo. Do not use Cursor’s “Retry as Sudo”.",
+  });
+  if (choice.response === 0) {
+    const r = await fetchJson(
+      `${CONTROL}/api/agents/${encodeURIComponent(pending.agentId)}/host-home-write`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ grant: true }),
+      },
+      5000,
+    );
+    if (!r.ok) {
+      await dialog.showMessageBox(win || undefined, {
+        type: "error",
+        message: "Could not save home-write grant",
+        detail: r.body?.error || String(r.status),
+      });
+    }
+  }
+};
+
+const startConsentPoll = () => {
+  if (consentPollTimer) return;
+  consentPollTimer = setInterval(async () => {
+    const r = await fetchJson(`${CONTROL}/api/ui/commands`, {}, 1500);
+    const pending = r.body?.hostHomeWriteConsent;
+    if (pending?.agentId) {
+      await openHostHomeConsent(pending);
+    }
+  }, 2000);
+};
+
+const stopConsentPoll = () => {
+  if (consentPollTimer) {
+    clearInterval(consentPollTimer);
+    consentPollTimer = null;
+  }
+};
+
 app.whenReady().then(() => {
   createWindow();
+  startConsentPoll();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
@@ -608,6 +670,7 @@ app.whenReady().then(() => {
 
 app.on("window-all-closed", () => {
   stopBootPoll();
+  stopConsentPoll();
   hostChild = null;
   if (process.platform !== "darwin") app.quit();
 });

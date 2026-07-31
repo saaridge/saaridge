@@ -1,5 +1,6 @@
 # Egress is blocked inside the container via iptables (network-lock.sh),
-# allowing only host.docker.internal:7331 (MCP/Data API) and :7332 (HTTP proxy).
+# allowing only host.docker.internal:7331 (MCP/Data API), :7332 (HTTP proxy),
+# and :7333 (framed FS IPC for FUSE).
 #
 # Host project data is NOT bind-mounted. Container apps use /host (FUSE → Data API).
 # Docker Desktop: requires /dev/fuse; SYS_ADMIN is needed for FUSE mounts.
@@ -23,6 +24,8 @@ services:
       BRIDGE_URL: http://host.docker.internal:7331
       BRIDGE_PORT: "7331"
       BRIDGE_PROXY_PORT: "7332"
+      BRIDGE_FS_PORT: "7333"
+      HOSTFS_IPC_PORT: "7333"
       BRIDGE_HOST: host.docker.internal
       BROWSER: /opt/bridge/bridge-browser.sh
       DISPLAY: ":1"

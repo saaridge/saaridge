@@ -218,19 +218,21 @@ except Exception:
     -d "$PAYLOAD" 2>>"$LOG")"
   curl_ec=$?
   # Fall back to local uninstall when control plane is unreachable.
+  # Do NOT use sudo here — agents must not elevate; host ops go via control plane / ops daemon.
   if [[ $curl_ec -ne 0 || -z "${RESP:-}" ]]; then
-    echo "[uninstall] control plane unreachable (curl_ec=$curl_ec); trying local" >>"$LOG"
+    echo "[uninstall] control plane unreachable (curl_ec=$curl_ec); trying local ops client" >>"$LOG"
     LOCAL_CLIENT="${ONEBRIDGE_OPS_CLIENT:-/opt/bridge/workspace-ops-client.py}"
     LOCAL_UNINSTALL="${ONEBRIDGE_UNINSTALL:-/opt/bridge/uninstall-workspace-app.sh}"
     if [[ -x "$LOCAL_CLIENT" || -f "$LOCAL_CLIENT" ]]; then
       RESP="$(python3 "$LOCAL_CLIENT" uninstall "$PKG" 2>>"$LOG")"
       curl_ec=$?
-    elif [[ -x "$LOCAL_UNINSTALL" ]] && command -v sudo >/dev/null 2>&1; then
-      RESP="$(sudo -n "$LOCAL_UNINSTALL" "$PKG" 2>>"$LOG")"
-      curl_ec=$?
     elif [[ -x "$LOCAL_UNINSTALL" && "$(id -u)" == "0" ]]; then
       RESP="$("$LOCAL_UNINSTALL" "$PKG" 2>>"$LOG")"
       curl_ec=$?
+    else
+      echo "[uninstall] no non-sudo uninstall path available" >>"$LOG"
+      RESP='{"ok":false,"error":"Control plane unreachable; sudo uninstall is disabled. Retry from OneBridge host."}'
+      curl_ec=1
     fi
   fi
   set -e

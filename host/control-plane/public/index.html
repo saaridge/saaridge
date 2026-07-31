@@ -681,20 +681,107 @@
         const j = await (await fetch("/api/agents")).json();
         const ul = $("agents");
         ul.innerHTML = "";
-        if (!j.agents?.length) {
+
+        // Cursor / workspace desktop uses a hidden identity — still needs home-write grant.
+        if (j.desktop?.id) {
+          const d = j.desktop;
+          const li = document.createElement("li");
+          li.className = "agent-card";
+          const homeWrite = !!d.hostHomeWrite;
+          li.innerHTML = `
+            <div>
+              <strong>${d.name || "Workspace Desktop"}</strong>
+              <div class="meta-line">Cursor / desktop session (not an installable assistant)</div>
+              <div class="meta-line">Host home write: ${homeWrite ? "allowed" : "read-only"}</div>
+            </div>
+          `;
+          const grantBtn = document.createElement("button");
+          grantBtn.className = "btn btn-sm";
+          grantBtn.type = "button";
+          grantBtn.textContent = homeWrite ? "Revoke home write" : "Allow home write";
+          grantBtn.onclick = async () => {
+            if (
+              !homeWrite &&
+              !confirm(
+                `Allow Cursor (workspace desktop) to WRITE under your host home?\n\nHost-user grant — not container sudo. Revoke anytime.`,
+              )
+            ) {
+              return;
+            }
+            grantBtn.disabled = true;
+            const res = await fetch(`/api/agents/${d.id}/host-home-write`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ grant: !homeWrite }),
+            });
+            const body = await res.json();
+            showToast(
+              body.ok
+                ? homeWrite
+                  ? "Desktop home write revoked"
+                  : "Desktop home write allowed — retry save in Cursor"
+                : body.error || "Could not update grant",
+              !body.ok,
+            );
+            await refreshAgents();
+          };
+          li.appendChild(grantBtn);
+          ul.appendChild(li);
+        }
+
+        if (!j.agents?.length && !j.desktop) {
           ul.innerHTML = '<li class="empty-soft">No assistants yet. Add one on the left.</li>';
           return;
         }
+        if (!j.agents?.length) return;
         for (const a of j.agents) {
           const li = document.createElement("li");
           li.className = "agent-card";
+          const homeWrite = !!a.hostHomeWrite;
           li.innerHTML = `
             <div>
               <strong>${a.name || "Assistant"}</strong>
               <div class="meta-line">Private key · ${a.tokenFingerprint || "••••"}… · Account #${a.uid ?? "—"}</div>
-              <div class="meta-line">Status: ${a.status || "ready"}</div>
+              <div class="meta-line">Status: ${a.status || "ready"} · Home write: ${homeWrite ? "allowed" : "read-only"}</div>
             </div>
           `;
+          const actions = document.createElement("div");
+          actions.style.display = "flex";
+          actions.style.flexDirection = "column";
+          actions.style.gap = "0.35rem";
+
+          const grantBtn = document.createElement("button");
+          grantBtn.className = "btn btn-sm";
+          grantBtn.type = "button";
+          grantBtn.textContent = homeWrite ? "Revoke home write" : "Allow home write";
+          grantBtn.onclick = async () => {
+            if (
+              !homeWrite &&
+              !confirm(
+                `Allow “${a.name}” to WRITE files under your host home folder?\n\nThis is a host-user grant (not container sudo). You can revoke it anytime.`,
+              )
+            ) {
+              return;
+            }
+            grantBtn.disabled = true;
+            const res = await fetch(`/api/agents/${a.id}/host-home-write`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ grant: !homeWrite }),
+            });
+            const body = await res.json();
+            showToast(
+              body.ok
+                ? homeWrite
+                  ? "Host home write revoked"
+                  : "Host home write allowed"
+                : body.error || "Could not update grant",
+              !body.ok,
+            );
+            await refreshAgents();
+          };
+          actions.appendChild(grantBtn);
+
           const btn = document.createElement("button");
           btn.className = "btn btn-danger btn-sm";
           btn.type = "button";
@@ -711,7 +798,8 @@
             await refreshHealth();
             await refreshLogs("control");
           };
-          li.appendChild(btn);
+          actions.appendChild(btn);
+          li.appendChild(actions);
           ul.appendChild(li);
         }
       };

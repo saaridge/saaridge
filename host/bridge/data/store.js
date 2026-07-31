@@ -3,6 +3,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { Readable, Writable } from "node:stream";
+import { AGENT_FS_EXCLUDES } from "./agent-fs-excludes.js";
 
 export const ensureDir = async (dirPath) => {
   await fsp.mkdir(dirPath, { recursive: true });
@@ -21,18 +22,18 @@ export const statPath = async (absPath) => {
   };
 };
 
-export const listDir = async (absPath, { shallow = true } = {}) => {
+export const listDir = async (absPath, { shallow = true, withStats = false } = {}) => {
   // Shallow (default): one readdir(withFileTypes) — names + types only.
-  // No per-entry lstat and no recursion. Full size/mtime come from stat on demand.
+  // withStats: also lstat each immediate child (parallel) for size/mtime — still
+  // one directory, no recursion. Used so FUSE placeholders report real sizes.
   const dirents = await fsp.readdir(absPath, { withFileTypes: true });
-  const out = [];
-  for (const d of dirents) {
-    const full = path.join(absPath, d.name);
-    const isSymbolicLink = d.isSymbolicLink();
-    const isDirectory = d.isDirectory();
-    const isFile = d.isFile() || (!isDirectory && !isSymbolicLink);
-    if (shallow) {
-      out.push({
+  if (!withStats && shallow) {
+    return dirents.map((d) => {
+      const full = path.join(absPath, d.name);
+      const isSymbolicLink = d.isSymbolicLink();
+      const isDirectory = d.isDirectory();
+      const isFile = d.isFile() || (!isDirectory && !isSymbolicLink);
+      return {
         name: d.name,
         path: full,
         isFile,
@@ -41,24 +42,28 @@ export const listDir = async (absPath, { shallow = true } = {}) => {
         size: 0,
         mtimeMs: 0,
         shallow: true,
-      });
-      continue;
-    }
-    try {
-      const st = await fsp.lstat(full);
-      out.push({
-        name: d.name,
-        path: full,
-        isFile: st.isFile(),
-        isDirectory: st.isDirectory(),
-        isSymbolicLink: st.isSymbolicLink(),
-        size: st.size,
-        mtimeMs: st.mtimeMs,
-      });
-    } catch {
-      out.push({ name: d.name, path: full, error: true });
-    }
+      };
+    });
   }
+  const out = await Promise.all(
+    dirents.map(async (d) => {
+      const full = path.join(absPath, d.name);
+      try {
+        const st = await fsp.lstat(full);
+        return {
+          name: d.name,
+          path: full,
+          isFile: st.isFile(),
+          isDirectory: st.isDirectory(),
+          isSymbolicLink: st.isSymbolicLink(),
+          size: st.size,
+          mtimeMs: st.mtimeMs,
+        };
+      } catch {
+        return { name: d.name, path: full, error: true };
+      }
+    }),
+  );
   return out;
 };
 
@@ -71,23 +76,11 @@ export const walkTree = async (
   absPath,
   {
     maxDepth = 3,
-    exclude = [
-      "node_modules",
-      ".git",
-      "Library",
-      ".cache",
-      "dist",
-      "build",
-      ".next",
-      "target",
-      ".npm",
-      "__pycache__",
-      ".turbo",
-    ],
+    exclude = AGENT_FS_EXCLUDES,
     maxEntries = 8000,
   } = {},
 ) => {
-  const excludeSet = new Set(exclude);
+  const excludeSet = new Set(exclude || AGENT_FS_EXCLUDES);
   const out = [];
   const walk = async (dir, depth, relBase) => {
     if (out.length >= maxEntries) return;

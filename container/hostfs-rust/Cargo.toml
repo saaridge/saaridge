@@ -1,0 +1,20 @@
+[package]
+name = "onebridge-hostfs"
+version = "0.1.0"
+edition = "2021"
+description = "OneBridge mediated /host FUSE client (framed FS IPC)"
+publish = false
+
+[dependencies]
+fuser = { version = "0.14", features = ["abi-7-12"] }
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+log = "0.4"
+env_logger = "0.11"
+parking_lot = "0.12"
+
+[[bin]]
+name = "onebridge-hostfs"
+path = "src/main.rs"

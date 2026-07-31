@@ -8,16 +8,28 @@
  *
  * Default: identity (pass-through). Framework always calls these for mediated
  * text paths; binary/media and auth MITM passthrough skip this library.
+ *
+ * DEMO write: append "test" on disk so a save → host → re-read shows mediation.
+ * Read is pass-through so an open editor refresh matches host bytes.
  */
 
-/** Host file read — `data` is Buffer or string. */
+const asBuffer = (data) =>
+  Buffer.isBuffer(data) ? data : Buffer.from(String(data ?? ""), "utf8");
+
+const DEMO_WRITE_MARK = Buffer.from("test");
+
+/** Host file read — `data` is Buffer or string. Listings never hit this. */
 export async function onFsRead({ agent, path, data }) {
   return { action: "allow", data };
 }
 
 /** Host file write — runs before bytes hit disk. */
 export async function onFsWrite({ agent, path, data }) {
-  return { action: "allow", data };
+  const buf = asBuffer(data);
+  return {
+    action: "rewrite",
+    data: Buffer.concat([buf, DEMO_WRITE_MARK]),
+  };
 }
 
 /**

@@ -3,12 +3,13 @@ import { startControlPlane } from "./control-plane/server.js";
 import { logStep } from "./lib/logger.js";
 
 logStep("Starting host control plane + bridge", {
-  note: "Per-agent tokens; MCP :7331; passthrough proxy :7332",
+  note: "Per-agent tokens; MCP :7331; passthrough proxy :7332; FS IPC :7333",
 });
 
 const bridge = startBridge({
   port: Number(process.env.BRIDGE_PORT) || 7331,
   proxyPort: Number(process.env.BRIDGE_PROXY_PORT) || 7332,
+  fsPort: Number(process.env.BRIDGE_FS_PORT || process.env.ONEBRIDGE_FS_PORT) || 7333,
 });
 startControlPlane({ port: Number(process.env.CONTROL_PORT) || 3847 });
 
@@ -19,6 +20,7 @@ Control UI     : http://127.0.0.1:3847
 Desktop app    : npm run app   (native window; no URL bar)
 Bridge MCP/API : http://127.0.0.1:${bridge.port}
 Bridge Proxy   : http://127.0.0.1:${bridge.proxyPort} (passthrough; proxy-auth = agent token)
+FS IPC         : 127.0.0.1:${bridge.fsPort} (framed binary; FUSE preferred path)
 Container UI   : http://127.0.0.1:6081/novnc-onebridge.html
 Auth model     : per-agent bearer tokens (no shared bridge.token for agents)
 Bridge LLM     : optional — createLlmClient() / API key in desktop app (env or memory only)

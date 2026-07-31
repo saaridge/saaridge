@@ -1,4 +1,3 @@
-import path from "node:path";
 import {
   assertReadable,
   assertWritable,
@@ -11,6 +10,17 @@ import { audit } from "./audit.js";
 import { acquire, release } from "./limits.js";
 import * as store from "./store.js";
 import { workspaceRootFor, sharedRoot, oneBridgeRoot } from "./paths.js";
+import {
+  AGENT_FS_EXCLUDES,
+  filterExcludedEntries,
+  pathHasExcludedComponent,
+  isExplicitExcludedAccess,
+} from "./agent-fs-excludes.js";
+import * as fsMemo from "./fs-memo.js";
+
+/** Match FUSE default tree hydrate depth. */
+const WARM_TREE_DEPTH = Number(process.env.HOSTFS_TREE_DEPTH || 4) || 4;
+const WARM_TREE_MAX = Number(process.env.HOSTFS_TREE_MAX || 8000) || 8000;
 
 const withLimit = async (agent, op, fn) => {
   const id = agent?.id;
@@ -44,6 +54,48 @@ const auditFail = (agent, op, err, detail) => {
   });
 };
 
+const warmTreeAsync = (realPath) => {
+  // Never deep-warm ignore-list trees (explicit access is shallow only).
+  if (pathHasExcludedComponent(realPath)) return;
+  // Fire-and-forget: populate tree memo so IDE FUSE hydrate is instant.
+  setImmediate(() => {
+    (async () => {
+      try {
+        const info = await store.statPath(realPath);
+        if (!info.isDirectory) return;
+        const maxDepth = WARM_TREE_DEPTH;
+        const maxEntries = WARM_TREE_MAX;
+        const includeExcluded = false;
+        const existing = fsMemo.getTreeMemo(
+          realPath,
+          maxDepth,
+          maxEntries,
+          includeExcluded,
+          info.mtimeMs,
+          info.size,
+        );
+        if (existing) return;
+        const entries = await store.walkTree(realPath, {
+          maxDepth,
+          exclude: AGENT_FS_EXCLUDES,
+          maxEntries,
+        });
+        fsMemo.setTreeMemo(
+          realPath,
+          maxDepth,
+          maxEntries,
+          includeExcluded,
+          entries,
+          info.mtimeMs,
+          info.size,
+        );
+      } catch {
+        /* warm is best-effort */
+      }
+    })();
+  });
+};
+
 export const ensureAgentWorkspace = async (agentId) => {
   const ws = workspaceRootFor(agentId);
   const shared = sharedRoot();
@@ -57,21 +109,51 @@ export const health = () => ({
   ok: true,
   version: 1,
   root: oneBridgeRoot(),
+  excludes: [...AGENT_FS_EXCLUDES],
+  memo: fsMemo.memoStats(),
   ts: new Date().toISOString(),
 });
 
-export const list = async (agent, inputPath = ".", { shallow = true } = {}) => {
+export const list = async (
+  agent,
+  inputPath = ".",
+  { shallow = true, withStats = false, includeExcluded = false } = {},
+) => {
   return withLimit(agent, "list", async () => {
     try {
       const { real } = assertReadable(agent, inputPath);
-      let entries = await store.listDir(real, { shallow: !!shallow });
+      // Path is the signal: explicit open of an ignore-list dir auto-includes
+      // that directory; nested exclude basenames are still filtered.
+      const explicitExcluded = isExplicitExcludedAccess(real);
+      const includeFlag = Boolean(includeExcluded) || explicitExcluded;
+      let entries = await store.listDir(real, {
+        shallow: !!shallow,
+        withStats: !!withStats,
+      });
       entries = await transformList(agent, real, entries);
+      // Product filter after control-lib transform — not redaction.
+      // Explicit excluded access still omits nested ignore-list basenames.
+      if (explicitExcluded || !includeFlag) {
+        entries = filterExcludedEntries(entries);
+      }
+      // Agent/IDE browse warms tree memo for FUSE folder open (non-excluded only).
+      warmTreeAsync(real);
       auditOk(agent, "list", {
         path: real,
         count: entries.length,
         shallow: !!shallow,
+        withStats: !!withStats,
+        includeExcluded: includeFlag,
+        explicitExcluded,
       });
-      return { path: real, entries, shallow: !!shallow };
+      return {
+        path: real,
+        entries,
+        shallow: !!shallow,
+        withStats: !!withStats,
+        includeExcluded: includeFlag,
+        explicitExcluded,
+      };
     } catch (err) {
       auditFail(agent, "list", err, { path: inputPath });
       throw err;
@@ -88,17 +170,56 @@ export const tree = async (
   return withLimit(agent, "tree", async () => {
     try {
       const { real } = assertReadable(agent, inputPath);
-      const entries = await store.walkTree(real, {
-        maxDepth: Number(maxDepth) || 3,
-        exclude,
-        maxEntries: Number(maxEntries) || 8000,
-      });
+      const underExcluded = pathHasExcludedComponent(real);
+      // Explicit ignore-list root: shallow only — never deep-hydrate registries.
+      let depth = Number(maxDepth) || 3;
+      if (underExcluded) depth = Math.min(depth, 1);
+      const cap = Number(maxEntries) || 8000;
+      const includeExcluded = underExcluded;
+      const info = await store.statPath(real);
+      const memoHit = fsMemo.getTreeMemo(
+        real,
+        depth,
+        cap,
+        includeExcluded,
+        info.mtimeMs,
+        info.size,
+      );
+      let entries;
+      let fromMemo = false;
+      if (memoHit) {
+        entries = memoHit;
+        fromMemo = true;
+      } else {
+        entries = await store.walkTree(real, {
+          maxDepth: depth,
+          exclude: exclude || AGENT_FS_EXCLUDES,
+          maxEntries: cap,
+        });
+        fsMemo.setTreeMemo(
+          real,
+          depth,
+          cap,
+          includeExcluded,
+          entries,
+          info.mtimeMs,
+          info.size,
+        );
+      }
       auditOk(agent, "tree", {
         path: real,
         count: entries.length,
-        maxDepth: Number(maxDepth) || 3,
+        maxDepth: depth,
+        memo: fromMemo,
+        explicitExcluded: underExcluded,
       });
-      return { path: real, entries, maxDepth: Number(maxDepth) || 3 };
+      return {
+        path: real,
+        entries,
+        maxDepth: depth,
+        memo: fromMemo,
+        explicitExcluded: underExcluded,
+      };
     } catch (err) {
       auditFail(agent, "tree", err, { path: inputPath });
       throw err;
@@ -122,7 +243,7 @@ export const stat = async (agent, inputPath) => {
 
 /**
  * Read file or chunk. For MCP convenience, encoding utf8|base64|buffer.
- * offset/length for chunked reads.
+ * offset/length for chunked reads. Body memo revalidated via host stat.
  */
 export const read = async (
   agent,
@@ -133,9 +254,9 @@ export const read = async (
     try {
       const { real } = assertReadable(agent, inputPath);
       const max = maxReadBytes(agent);
+      const info = await store.statPath(real);
       let len = length;
       if (len == null || len === "") {
-        const info = await store.statPath(real);
         if (info.size > max) {
           const err = new Error(
             `File too large (${info.size} > ${max}); use offset/length chunked reads`,
@@ -149,15 +270,72 @@ export const read = async (
         err.code = "EFBIG";
         throw err;
       }
-      let buf = await store.readChunk(real, offset, len);
-      buf = await transformRead(agent, real, buf);
-      if (!Buffer.isBuffer(buf)) buf = Buffer.from(String(buf), "utf8");
-      auditOk(agent, "read", { path: real, offset, bytes: buf.length });
-      if (encoding === "buffer") return { path: real, data: buf, bytes: buf.length };
-      if (encoding === "base64") {
-        return { path: real, encoding: "base64", content: buf.toString("base64"), bytes: buf.length };
+      const off = Number(offset) || 0;
+      const want = Number(len);
+      let buf;
+      let fromMemo = false;
+      const memoBuf = fsMemo.getBodyMemo(real, info.mtimeMs, info.size);
+      if (memoBuf) {
+        buf = memoBuf.subarray(off, off + want);
+        fromMemo = true;
+      } else {
+        // Full-file read under memo cap → transform once and store.
+        const canMemo =
+          info.size <= fsMemo.bodyMemoMaxFile() &&
+          off === 0 &&
+          want >= info.size;
+        if (canMemo) {
+          let full = await store.readChunk(real, 0, info.size);
+          full = await transformRead(agent, real, full);
+          if (!Buffer.isBuffer(full)) full = Buffer.from(String(full), "utf8");
+          fsMemo.setBodyMemo(real, full, info.mtimeMs, info.size);
+          // Whole-file reads must return the full mediated body (rewrite may
+          // change length). Chunked reads still slice by host offset/want.
+          buf =
+            off === 0 && want >= info.size
+              ? full
+              : full.subarray(off, off + want);
+        } else {
+          buf = await store.readChunk(real, off, want);
+          buf = await transformRead(agent, real, buf);
+          if (!Buffer.isBuffer(buf)) buf = Buffer.from(String(buf), "utf8");
+          // If we fetched the whole file in one go under cap, memoize.
+          if (
+            off === 0 &&
+            want >= info.size &&
+            info.size <= fsMemo.bodyMemoMaxFile()
+          ) {
+            fsMemo.setBodyMemo(real, buf, info.mtimeMs, info.size);
+          }
+        }
       }
-      return { path: real, encoding: "utf8", content: buf.toString("utf8"), bytes: buf.length };
+      // Memo hit: whole-file clients get the full mediated buffer.
+      if (fromMemo && off === 0 && want >= info.size) {
+        buf = memoBuf;
+      }
+      auditOk(agent, "read", {
+        path: real,
+        offset: off,
+        bytes: buf.length,
+        memo: fromMemo,
+      });
+      if (encoding === "buffer") return { path: real, data: buf, bytes: buf.length, memo: fromMemo };
+      if (encoding === "base64") {
+        return {
+          path: real,
+          encoding: "base64",
+          content: buf.toString("base64"),
+          bytes: buf.length,
+          memo: fromMemo,
+        };
+      }
+      return {
+        path: real,
+        encoding: "utf8",
+        content: buf.toString("utf8"),
+        bytes: buf.length,
+        memo: fromMemo,
+      };
     } catch (err) {
       auditFail(agent, "read", err, { path: inputPath });
       throw err;
@@ -192,6 +370,7 @@ export const write = async (
         offset: Number(offset) || 0,
         truncate: Boolean(truncate) && (Number(offset) || 0) === 0,
       });
+      fsMemo.bust(real, "write");
       auditOk(agent, "write", { path: real, bytes: result.bytesWritten, offset });
       return result;
     } catch (err) {
@@ -206,6 +385,7 @@ export const mkdir = async (agent, inputPath) => {
     try {
       const { real } = assertWritable(agent, inputPath);
       const result = await store.mkdirPath(real);
+      fsMemo.bust(real, "mkdir");
       auditOk(agent, "mkdir", { path: real });
       return result;
     } catch (err) {
@@ -220,6 +400,7 @@ export const unlink = async (agent, inputPath) => {
     try {
       const { real } = assertWritable(agent, inputPath);
       const result = await store.unlinkPath(real);
+      fsMemo.bust(real, "unlink");
       auditOk(agent, "unlink", { path: real });
       return result;
     } catch (err) {
@@ -235,6 +416,8 @@ export const rename = async (agent, fromPath, toPath) => {
       const from = assertWritable(agent, fromPath);
       const to = assertWritable(agent, toPath);
       const result = await store.renamePath(from.real, to.real);
+      fsMemo.bust(from.real, "rename");
+      fsMemo.bust(to.real, "rename");
       auditOk(agent, "rename", { from: from.real, to: to.real });
       return result;
     } catch (err) {
@@ -249,6 +432,7 @@ export const truncate = async (agent, inputPath, size = 0) => {
     try {
       const { real } = assertWritable(agent, inputPath);
       await store.truncatePath(real, size);
+      fsMemo.bust(real, "truncate");
       auditOk(agent, "truncate", { path: real, size });
       return { path: real, size: Number(size) || 0 };
     } catch (err) {
@@ -257,6 +441,8 @@ export const truncate = async (agent, inputPath, size = 0) => {
     }
   });
 };
+
+export const getFsEvents = (since = 0) => fsMemo.getEventsSince(since);
 
 export const getRoots = (agent) => effectiveRoots(agent);
 

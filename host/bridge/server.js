@@ -18,6 +18,7 @@ import { openInstallAssistantInDesktop } from "../lib/ui-commands.js";
 import * as dataApi from "./data/api.js";
 import { readAudit, auditMetrics } from "./data/audit.js";
 import { limitsSnapshot } from "./data/limits.js";
+import { startFsBinaryServer } from "./data/fs-binary.js";
 import * as vault from "./vault/index.js";
 import { vaultFetch } from "./vault/fetch.js";
 
@@ -55,7 +56,7 @@ const authAgent = (req, res, next) => {
 const sendFsError = (res, err) => {
   const code = err?.code;
   const status =
-    code === "EACCES" || code === "EPERM"
+    code === "EACCES" || code === "EPERM" || code === "EROFS"
       ? 403
       : code === "ENOENT"
         ? 404
@@ -69,6 +70,7 @@ const sendFsError = (res, err) => {
     ok: false,
     error: err?.message || String(err),
     code: code || "ERROR",
+    needHostHomeWrite: Boolean(err?.needHostHomeWrite),
   });
 };
 
@@ -76,6 +78,18 @@ const mountFsApi = (app) => {
   app.get("/v1/fs/health", (_req, res) => {
     res.setHeader("X-OneBridge-FS", FS_VERSION);
     res.json({ ...dataApi.health(), limits: limitsSnapshot(), audit: auditMetrics() });
+  });
+
+  /** Invalidate ring for FUSE poll — bust local metadata after MCP/agent writes. */
+  app.get("/v1/fs/events", authAgent, (req, res) => {
+    try {
+      const since = req.query.since != null ? Number(req.query.since) : 0;
+      const result = dataApi.getFsEvents(since);
+      res.setHeader("X-OneBridge-FS", FS_VERSION);
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      sendFsError(res, err);
+    }
   });
 
   app.get("/v1/fs/stat", authAgent, async (req, res) => {
@@ -92,12 +106,26 @@ const mountFsApi = (app) => {
     try {
       // Default shallow: names + types only (no per-file lstat). Clients that
       // need size/mtime call /v1/fs/stat when the user opens that entry.
+      // stats=1: lstat immediate children only (still no recursion) — FUSE browse.
+      // includeExcluded=1: return community dep/build dirs (lazy explicit open).
       const shallow =
         req.query.shallow !== "0" &&
         req.query.shallow !== "false" &&
         req.query.deep !== "1" &&
         req.query.deep !== "true";
-      const result = await dataApi.list(req.agent, req.query.path, { shallow });
+      const withStats =
+        req.query.stats === "1" ||
+        req.query.stats === "true" ||
+        req.query.withStats === "1" ||
+        req.query.withStats === "true";
+      const includeExcluded =
+        req.query.includeExcluded === "1" ||
+        req.query.includeExcluded === "true";
+      const result = await dataApi.list(req.agent, req.query.path, {
+        shallow,
+        withStats,
+        includeExcluded,
+      });
       res.setHeader("X-OneBridge-FS", FS_VERSION);
       res.json({ ok: true, ...result });
     } catch (err) {
@@ -269,6 +297,7 @@ const mountFsApi = (app) => {
 export const startBridge = ({
   port = 7331,
   proxyPort = 7332,
+  fsPort = Number(process.env.BRIDGE_FS_PORT || process.env.ONEBRIDGE_FS_PORT || 7333) || 7333,
 } = {}) => {
   const app = express();
   // JSON for most routes; /v1/fs/write uses express.raw mounted above.
@@ -280,7 +309,13 @@ export const startBridge = ({
   });
 
   app.get("/health", (_req, res) =>
-    res.json({ ok: true, service: "host-bridge", proxyPort, fs: FS_VERSION }),
+    res.json({
+      ok: true,
+      service: "host-bridge",
+      proxyPort,
+      fsPort,
+      fs: FS_VERSION,
+    }),
   );
 
   mountFsApi(app);
@@ -383,6 +418,7 @@ export const startBridge = ({
   });
 
   const proxy = startProxy({ port: proxyPort });
+  const fsIpc = startFsBinaryServer({ port: fsPort });
 
-  return { app, server, proxy, port, proxyPort };
+  return { app, server, proxy, fsIpc, port, proxyPort, fsPort };
 };
