@@ -18,6 +18,8 @@
     "test:mediation-guarantee": "node scripts/test-mediation-guarantee.mjs"
   },
   "dependencies": {
+    "@ai-policy-engine/algorithms": "file:../ai-policy-engine/packages/algorithms",
+    "@ai-policy-engine/core": "file:../ai-policy-engine/packages/core",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "cors": "^2.8.5",
     "express": "^5.1.0",

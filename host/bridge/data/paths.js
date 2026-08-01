@@ -10,6 +10,18 @@ export const sharedRoot = () => path.join(oneBridgeRoot(), "shared");
 export const workspaceRootFor = (agentId) =>
   path.join(oneBridgeRoot(), "workspaces", String(agentId || "unknown"));
 
+/** Remove an agent's host workspace tree (tests / uninstall cleanup). */
+export const removeAgentWorkspace = (agentId) => {
+  const ws = workspaceRootFor(agentId);
+  const root = path.resolve(oneBridgeRoot());
+  const resolved = path.resolve(ws);
+  if (!resolved.startsWith(root + path.sep) || resolved === root) {
+    throw new Error(`refusing to remove non-workspace path: ${resolved}`);
+  }
+  fs.rmSync(resolved, { recursive: true, force: true });
+  return resolved;
+};
+
 /**
  * Expand ~ and relative paths against the HOST home.
  * Also maps container FUSE paths (/host/...) so Cursor/MCP can pass the

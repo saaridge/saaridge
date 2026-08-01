@@ -36,10 +36,21 @@ Open projects under **`/host/workspaces/<agentId>/`** inside the workspace deskt
 
 ## Run
 
+**Primary UI:** Electron app — one **Settings** window (Policies | API key) plus the workspace desktop.
+
+```bash
+npm install
+npm run app:install   # once
+npm run app           # starts host if needed, opens OneBridge window
+```
+
+Title bar **Settings** → side panel: **Policies** (global + per-agent overrides) or **API key**.
+
+Host APIs (dev / automation) still listen on localhost only:
+
 ```bash
 npm start
-# UI http://127.0.0.1:3847
-# noVNC browsing http://127.0.0.1:6081/vnc.html?autoconnect=1
+# Control plane http://127.0.0.1:3847  (dev fallback; prefer npm run app)
 
 # Install sample agent
 curl -s -X POST http://127.0.0.1:3847/api/agents/install \
@@ -47,6 +58,7 @@ curl -s -X POST http://127.0.0.1:3847/api/agents/install \
   -d "{\"hostPath\":\"$(pwd)/examples/sample-agent\"}"
 ```
 
+AI policy config is host-private (`state/private/ai-policies.json`). Effective policy = global ∪ agent enables, with per-agent overrides winning when set.
 ## Data API (port 7331)
 
 Auth: `Authorization: Bearer <agent-token>`. Header `X-OneBridge-FS: 1`.

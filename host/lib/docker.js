@@ -271,7 +271,7 @@ const ensureContainerOnce = async () => {
 
   setBoot({
     phase: "desktop",
-    progress: 92,
+    progress: 90,
     message: "Preparing desktop session…",
   });
   const desktop = await provisionDesktopSession();
@@ -285,6 +285,35 @@ const ensureContainerOnce = async () => {
       ready: false,
     });
     return { ok: false, error: detail };
+  }
+
+  setBoot({
+    phase: "stream",
+    progress: 97,
+    message: "Checking desktop stream…",
+  });
+  // provisionDesktopSession already ensures the stream; re-check for boot UI.
+  const { getStreamHealth } = await import("./stream-stack.js");
+  const health = await getStreamHealth();
+  if (!health.ok) {
+    const { ensureStreamStack } = await import("./stream-stack.js");
+    setBoot({
+      phase: "stream",
+      progress: 98,
+      message: "Repairing desktop stream…",
+    });
+    const stream = await ensureStreamStack({ force: true });
+    if (!stream.ok) {
+      const detail = stream.error || "Desktop stream is not ready";
+      setBoot({
+        phase: "error",
+        message: detail,
+        ok: false,
+        error: detail,
+        ready: false,
+      });
+      return { ok: false, error: detail };
+    }
   }
 
   logStep("Workspace desktop is ready");

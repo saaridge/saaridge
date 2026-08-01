@@ -37,8 +37,21 @@ stream_listening() {
   ss -lnt 2>/dev/null | grep -q ":${AUDIO_WS_PORT} "
 }
 
-audio_healthy() {
+speaker_healthy() {
   is_live_pulse && has_socket && has_sink && stream_listening
+}
+
+mic_stack_ok() {
+  local mic_check="${START_MIC:-/usr/local/bin/start-mic.sh}"
+  if [[ -x "$mic_check" ]]; then
+    "$mic_check" --check >/dev/null 2>&1
+  else
+    return 0
+  fi
+}
+
+audio_healthy() {
+  speaker_healthy && mic_stack_ok
 }
 
 ensure_pulse_client_conf() {
@@ -58,14 +71,22 @@ if [[ "${1:-}" == "--check" ]]; then
 fi
 
 # Already good — refresh client.conf, do not bounce Pulse / kill the WS.
-if audio_healthy; then
+if speaker_healthy; then
   export PULSE_SERVER="unix:${PULSE_RUNTIME_PATH}/native"
   ensure_pulse_client_conf
+  # Idle suspend makes the monitor look "muted" and starves the viewer stream.
+  pactl --server="$PULSE_SERVER" unload-module module-suspend-on-idle 2>/dev/null || true
   pactl --server="$PULSE_SERVER" set-default-sink onebridge 2>/dev/null || true
   pactl --server="$PULSE_SERVER" set-sink-mute onebridge 0 2>/dev/null || true
   pactl --server="$PULSE_SERVER" set-sink-volume onebridge 100% 2>/dev/null || true
-  echo "[start-audio] OK already (PULSE_SERVER=$PULSE_SERVER :${AUDIO_WS_PORT})"
-  exit 0
+  START_MIC="${START_MIC:-/usr/local/bin/start-mic.sh}"
+  if [[ -x "$START_MIC" ]]; then
+    "$START_MIC" >>/tmp/start-mic.log 2>&1 || true
+  fi
+  if audio_healthy; then
+    echo "[start-audio] OK already (PULSE_SERVER=$PULSE_SERVER :${AUDIO_WS_PORT})"
+    exit 0
+  fi
 fi
 
 # --- heal Pulse ---
@@ -101,9 +122,11 @@ if ! has_sink; then
 fi
 
 pactl --server="$PULSE_SERVER" set-default-sink onebridge 2>/dev/null || true
-pactl --server="$PULSE_SERVER" set-default-source onebridge.monitor 2>/dev/null || true
 pactl --server="$PULSE_SERVER" set-sink-mute onebridge 0 2>/dev/null || true
 pactl --server="$PULSE_SERVER" set-sink-volume onebridge 100% 2>/dev/null || true
+# Keep capture alive for the host viewer even when nothing is playing.
+pactl --server="$PULSE_SERVER" unload-module module-suspend-on-idle 2>/dev/null || true
+# Default *source* is the virtual host mic (set by start-mic), not the speaker monitor.
 
 # So Chromium finds Pulse even if launched without PULSE_SERVER in the environment.
 ensure_pulse_client_conf
@@ -146,6 +169,15 @@ if ! stream_listening; then
   echo "[start-audio] ERROR: audio-stream did not listen on :${AUDIO_WS_PORT}" >&2
   cat /tmp/audio-stream.log >&2 || true
   exit 1
+fi
+
+# Virtual host microphone (pipe-source + :6083). Non-fatal if script missing.
+START_MIC="${START_MIC:-/usr/local/bin/start-mic.sh}"
+if [[ -x "$START_MIC" ]]; then
+  if ! "$START_MIC" >>/tmp/start-mic.log 2>&1; then
+    echo "[start-audio] WARN: start-mic failed — see /tmp/start-mic.log" >&2
+    tail -20 /tmp/start-mic.log >&2 || true
+  fi
 fi
 
 echo "[start-audio] OK pulse + audio-stream on :${AUDIO_WS_PORT} (PULSE_SERVER=$PULSE_SERVER)"

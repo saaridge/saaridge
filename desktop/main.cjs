@@ -3,17 +3,18 @@
  * OneBridge desktop shell.
  *
  * Keyboard-critical design: the workspace noVNC page is the MAIN window
- * webContents (so macOS delivers keystrokes to it). The title bar is a
- * BrowserView overlay on top. Boot UI is a temporary full-window load.
+ * webContents (so macOS delivers keystrokes to it). Chrome (Settings, etc.)
+ * is injected into that same document — BrowserView overlays are unreliable
+ * for clicks when the window is not maximized on macOS.
  */
 const {
   app,
   BrowserWindow,
-  BrowserView,
   ipcMain,
   shell,
   Menu,
   dialog,
+  session,
 } = require("electron");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
@@ -22,17 +23,104 @@ const fs = require("node:fs");
 const ROOT = path.resolve(__dirname, "..");
 const CONTROL = "http://127.0.0.1:3847";
 const DESKTOP = "http://127.0.0.1:6081/novnc-onebridge.html?titlebar=44";
-const TITLEBAR_H = 44;
+const CHROME_INJECT = fs.readFileSync(
+  path.join(__dirname, "inject-workspace-chrome.js"),
+  "utf8",
+);
 
 let mainWindow = null;
-let titleBarView = null;
 let hostChild = null;
 let bootPollTimer = null;
 let consentPollTimer = null;
 let consentDialog = null;
 let desktopLive = false;
-let lastResizeKey = "";
 let forwardingKeys = false;
+let streamHealTimer = null;
+let streamHealInFlight = false;
+let micCaptureWin = null;
+let micStatus = { state: "off", message: "Microphone sharing is off" };
+
+const micPrefsPath = () =>
+  path.join(app.getPath("userData"), "mic-prefs.json");
+
+const readMicPrefs = () => {
+  try {
+    const raw = fs.readFileSync(micPrefsPath(), "utf8");
+    const j = JSON.parse(raw);
+    return { shareMic: Boolean(j?.shareMic) };
+  } catch {
+    return { shareMic: false };
+  }
+};
+
+const writeMicPrefs = (prefs) => {
+  const next = { shareMic: Boolean(prefs?.shareMic) };
+  fs.mkdirSync(path.dirname(micPrefsPath()), { recursive: true });
+  fs.writeFileSync(micPrefsPath(), JSON.stringify(next, null, 2));
+  return next;
+};
+
+const broadcastMicStatus = (payload) => {
+  micStatus = { ...micStatus, ...payload };
+  for (const win of BrowserWindow.getAllWindows()) {
+    try {
+      win.webContents.send("onebridge:mic-status-broadcast", micStatus);
+    } catch (_) {}
+  }
+};
+
+const stopMicCapture = () => {
+  if (micCaptureWin && !micCaptureWin.isDestroyed()) {
+    try {
+      micCaptureWin.webContents.send("onebridge:mic-command", "stop");
+    } catch (_) {}
+    try {
+      micCaptureWin.destroy();
+    } catch (_) {}
+  }
+  micCaptureWin = null;
+};
+
+const startMicCapture = () => {
+  if (micCaptureWin && !micCaptureWin.isDestroyed()) {
+    try {
+      micCaptureWin.webContents.send("onebridge:mic-command", "start");
+    } catch (_) {}
+    return;
+  }
+  micCaptureWin = new BrowserWindow({
+    width: 80,
+    height: 80,
+    show: false,
+    skipTaskbar: true,
+    webPreferences: {
+      preload: path.join(__dirname, "preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  micCaptureWin.on("closed", () => {
+    micCaptureWin = null;
+  });
+  void micCaptureWin.loadFile(path.join(__dirname, "mic-capture.html"));
+};
+
+const syncMicSharing = (shareMic) => {
+  if (shareMic) {
+    broadcastMicStatus({
+      state: "waiting",
+      message: "Waiting for microphone permission…",
+    });
+    startMicCapture();
+  } else {
+    stopMicCapture();
+    broadcastMicStatus({
+      state: "off",
+      message: "Microphone sharing is off",
+    });
+  }
+};
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -75,32 +163,11 @@ const sendBoot = (payload) => {
   }
 };
 
-const layoutTitleBar = () => {
-  if (!mainWindow || mainWindow.isDestroyed() || !titleBarView) return;
-  const [w] = mainWindow.getContentSize();
-  titleBarView.setBounds({ x: 0, y: 0, width: Math.max(100, w), height: TITLEBAR_H });
-};
-
-const syncRemoteDisplay = () => {
+const injectWorkspaceChrome = async () => {
   if (!mainWindow || mainWindow.isDestroyed() || !desktopLive) return;
-  const [w, h] = mainWindow.getContentSize();
-  let width = Math.max(800, Math.floor(w));
-  let height = Math.max(600, Math.floor(h - TITLEBAR_H));
-  width -= width % 2;
-  height -= height % 2;
-  const key = `${width}x${height}`;
-  if (key === lastResizeKey) return;
-  void fetchJson(
-    `${CONTROL}/api/ui/resize-desktop`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ width, height }),
-    },
-    8000,
-  ).then((r) => {
-    if (r.ok && r.body?.ok) lastResizeKey = key;
-  });
+  try {
+    await mainWindow.webContents.executeJavaScript(CHROME_INJECT, true);
+  } catch (_) {}
 };
 
 const focusDesktop = () => {
@@ -276,43 +343,78 @@ const attachKeyBridge = (webContents) => {
   });
 };
 
-const showTitleBar = () => {
+const openDesktop = async () => {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  if (!titleBarView) {
-    titleBarView = new BrowserView({
-      webPreferences: {
-        preload: path.join(__dirname, "preload.cjs"),
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-      },
-    });
-    titleBarView.setBackgroundColor("#121a17");
-    titleBarView.webContents.setIgnoreMenuShortcuts(true);
-    void titleBarView.webContents.loadFile(path.join(__dirname, "titlebar.html"));
-    titleBarView.webContents.on("before-input-event", (event, input) => {
-      if (!desktopLive) return;
-      if (input.type !== "keyDown" && input.type !== "keyUp") return;
-      if (
-        input.key === "Shift" ||
-        input.key === "Control" ||
-        input.key === "Alt" ||
-        input.key === "Meta"
-      ) {
-        return;
-      }
-      event.preventDefault();
-      focusDesktop();
-      injectKeyToX(input);
-    });
-  }
-  mainWindow.setBrowserView(titleBarView);
-  layoutTitleBar();
+  desktopLive = false;
+  await mainWindow.loadURL(DESKTOP);
+  desktopLive = true;
+  await injectWorkspaceChrome();
+  // Titlebar inset is already applied by novnc-onebridge.html (?titlebar=44).
+  setTimeout(focusDesktop, 100);
+  setTimeout(focusDesktop, 500);
 };
 
-const hideTitleBar = () => {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  mainWindow.setBrowserView(null);
+/** Retail boot: Docker must be up before the control plane can start the workspace. */
+const ensureDocker = async () => {
+  sendBoot({
+    phase: "docker",
+    progress: 1,
+    message: "Checking Docker…",
+  });
+  const script = path.join(ROOT, "scripts", "ensure-docker.sh");
+  await new Promise((resolve, reject) => {
+    const child = spawn("bash", [script], {
+      cwd: ROOT,
+      env: process.env,
+    });
+    let err = "";
+    child.stdout?.on("data", (d) => {
+      const line = String(d)
+        .split("\n")
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .pop();
+      if (line) {
+        sendBoot({
+          phase: "docker",
+          progress: 2,
+          message: line.replace(/^\[onebridge\]\s*/i, ""),
+        });
+      }
+    });
+    child.stderr?.on("data", (d) => {
+      err += String(d);
+      const line = String(d)
+        .split("\n")
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .pop();
+      if (line && !/display dialog/i.test(line)) {
+        sendBoot({
+          phase: "docker",
+          progress: 2,
+          message: line.replace(/^\[onebridge\]\s*/i, ""),
+        });
+      }
+    });
+    child.on("error", (e) => reject(e));
+    child.on("close", (code) => {
+      if (code === 0) resolve();
+      else {
+        reject(
+          new Error(
+            (err || "").trim() ||
+              "Docker is required. Install Docker Desktop, then open OneBridge again.",
+          ),
+        );
+      }
+    });
+  });
+  sendBoot({
+    phase: "docker",
+    progress: 3,
+    message: "Docker is ready",
+  });
 };
 
 const startHostIfNeeded = async () => {
@@ -432,31 +534,62 @@ const ensureWorkspace = async () => {
   await waitFor(DESKTOP, "workspace desktop", 90);
 };
 
-const openDesktop = async () => {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  desktopLive = false;
-  hideTitleBar();
-  await mainWindow.loadURL(DESKTOP);
-  desktopLive = true;
-  showTitleBar();
-  // Leave a top margin so the titlebar doesn't cover XFCE content:
-  // remote FB is sized to (window - titlebar). noVNC scales into full window
-  // including under titlebar — add CSS padding via injection.
-  await mainWindow.webContents.executeJavaScript(
-    `(() => {
-      const s = document.getElementById('screen');
-      if (s) {
-        s.style.top = '${TITLEBAR_H}px';
-        s.style.height = 'calc(100% - ${TITLEBAR_H}px)';
-      }
-      document.documentElement.style.background = '#0b0b0b';
-    })()`,
-    true,
+/** Verify RFB stream is live (not just noVNC HTML). Heal if needed. */
+const ensureStreamReady = async () => {
+  sendBoot({
+    phase: "stream",
+    progress: 97,
+    message: "Checking desktop stream…",
+  });
+  let health = await fetchJson(`${CONTROL}/api/desktop/stream-health`, {}, 8000);
+  if (health.ok && health.body?.ok) return health.body;
+
+  sendBoot({
+    phase: "stream",
+    progress: 98,
+    message: "Starting desktop stream…",
+  });
+  const ensure = await fetchJson(
+    `${CONTROL}/api/desktop/ensure-stream`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ force: false }),
+    },
+    30_000,
   );
-  syncRemoteDisplay();
-  setTimeout(focusDesktop, 100);
-  setTimeout(focusDesktop, 500);
-  setTimeout(syncRemoteDisplay, 400);
+  if (!ensure.ok || !ensure.body?.ok) {
+    // Older control plane without the route — fall back to full ensure.
+    if (ensure.status === 404) {
+      await fetchJson(
+        `${CONTROL}/api/container/ensure`,
+        { method: "POST" },
+        45 * 60_000,
+      );
+    } else {
+      const detail =
+        ensure.body?.error ||
+        ensure.error?.message ||
+        "Desktop stream failed to start";
+      sendBoot({
+        phase: "error",
+        progress: 98,
+        message: detail,
+        error: detail,
+        ready: false,
+      });
+      throw new Error(detail);
+    }
+  }
+
+  for (let i = 0; i < 40; i++) {
+    health = await fetchJson(`${CONTROL}/api/desktop/stream-health`, {}, 5000);
+    if (health.ok && health.body?.ok) return health.body;
+    // 404 = host not yet restarted with new routes; HTML up is best-effort.
+    if (health.status === 404 && (await fetchOk(DESKTOP))) return { ok: true };
+    await sleep(250);
+  }
+  throw new Error("Timed out waiting for desktop stream");
 };
 
 const createWindow = () => {
@@ -501,17 +634,12 @@ const createWindow = () => {
 
   mainWindow.once("ready-to-show", bringFront);
   mainWindow.webContents.once("did-finish-load", bringFront);
-  mainWindow.on("resize", () => {
-    layoutTitleBar();
-    syncRemoteDisplay();
-  });
-  mainWindow.on("enter-full-screen", () => {
-    layoutTitleBar();
-    syncRemoteDisplay();
-  });
-  mainWindow.on("leave-full-screen", () => {
-    layoutTitleBar();
-    syncRemoteDisplay();
+  mainWindow.webContents.on("did-finish-load", () => {
+    if (!desktopLive || !mainWindow || mainWindow.isDestroyed()) return;
+    const url = mainWindow.webContents.getURL();
+    if (url.includes("novnc-onebridge")) {
+      void injectWorkspaceChrome();
+    }
   });
   mainWindow.on("focus", () => {
     if (desktopLive) setTimeout(focusDesktop, 30);
@@ -530,7 +658,7 @@ const createWindow = () => {
 
   mainWindow.on("closed", () => {
     stopBootPoll();
-    titleBarView = null;
+    stopStreamHeal();
     desktopLive = false;
     mainWindow = null;
   });
@@ -543,8 +671,10 @@ ipcMain.handle("onebridge:urls", () => ({
 
 ipcMain.handle("onebridge:ready", async () => {
   try {
+    await ensureDocker();
     await startHostIfNeeded();
     await ensureWorkspace();
+    await ensureStreamReady();
     sendBoot({
       phase: "ready",
       progress: 100,
@@ -558,13 +688,13 @@ ipcMain.handle("onebridge:ready", async () => {
 });
 
 ipcMain.handle("onebridge:show-desktop", async () => {
+  await ensureStreamReady().catch(() => {});
   await openDesktop();
+  startStreamHeal();
   return { ok: true };
 });
 
 ipcMain.handle("onebridge:hide-desktop", async () => {
-  // Used when opening modals — reload shell overlay by hiding titlebar only.
-  // API key dialog lives in shell; reopen shell on top if needed.
   return { ok: true };
 });
 
@@ -577,18 +707,25 @@ ipcMain.on("onebridge:mouse", (_event, payload) => {
   injectMouseToX(payload);
 });
 
-ipcMain.handle("onebridge:open-api-key", async () => {
-  // Load shell API-key page in a small modal window so desktop keeps main focus path.
+const openSettingsWindow = (pane = "policies") => {
+  const safePane =
+    pane === "apikey"
+      ? "apikey"
+      : pane === "microphone"
+        ? "microphone"
+        : "policies";
+  // Same pattern as the committed API-key dialog: child modal only —
+  // Child modal — does not affect workspace chrome in the main window.
   const dlg = new BrowserWindow({
-    width: 460,
-    height: 520,
+    width: 760,
+    height: 580,
     parent: mainWindow || undefined,
     modal: true,
     show: true,
-    resizable: false,
+    resizable: true,
     minimizable: false,
     maximizable: false,
-    title: "API key",
+    title: "Settings",
     backgroundColor: "#151f1b",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -597,10 +734,46 @@ ipcMain.handle("onebridge:open-api-key", async () => {
       sandbox: true,
     },
   });
-  void dlg.loadFile(path.join(__dirname, "apikey.html"));
+  void dlg.loadFile(path.join(__dirname, "settings.html"), {
+    query: { pane: safePane },
+  });
   dlg.on("closed", () => focusDesktop());
   return { ok: true };
+};
+
+ipcMain.handle("onebridge:open-settings", async (_event, pane) =>
+  openSettingsWindow(pane),
+);
+
+ipcMain.handle("onebridge:open-api-key", async () =>
+  openSettingsWindow("apikey"),
+);
+
+ipcMain.handle("onebridge:open-policies", async () =>
+  openSettingsWindow("policies"),
+);
+
+ipcMain.handle("onebridge:mic-prefs-get", async () => ({
+  ...readMicPrefs(),
+  status: micStatus,
+}));
+
+ipcMain.handle("onebridge:mic-prefs-set", async (_event, prefs) => {
+  const next = writeMicPrefs(prefs);
+  syncMicSharing(next.shareMic);
+  return { ok: true, ...next, status: micStatus };
 });
+
+ipcMain.on("onebridge:mic-status", (_event, payload) => {
+  broadcastMicStatus(payload || {});
+  if (payload?.state === "denied" || payload?.state === "error") {
+    // Keep preference on so user can retry; status reflects failure.
+  }
+});
+
+ipcMain.handle("onebridge:open-microphone", async () =>
+  openSettingsWindow("microphone"),
+);
 
 const openHostHomeConsent = async (pending) => {
   if (!pending?.agentId) return;
@@ -660,9 +833,68 @@ const stopConsentPoll = () => {
   }
 };
 
+/** Self-heal black screen if x11vnc dies while the app is open. */
+const startStreamHeal = () => {
+  if (streamHealTimer) return;
+  streamHealTimer = setInterval(async () => {
+    if (!desktopLive || streamHealInFlight) return;
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    streamHealInFlight = true;
+    try {
+      const health = await fetchJson(
+        `${CONTROL}/api/desktop/stream-health`,
+        {},
+        4000,
+      );
+      if (health.status === 404) return; // older host — skip
+      if (health.ok && health.body?.ok) return;
+      const ensure = await fetchJson(
+        `${CONTROL}/api/desktop/ensure-stream`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ force: false }),
+        },
+        20_000,
+      );
+      if (ensure.ok && ensure.body?.ok) {
+        await openDesktop();
+      }
+    } finally {
+      streamHealInFlight = false;
+    }
+  }, 8000);
+};
+
+const stopStreamHeal = () => {
+  if (streamHealTimer) {
+    clearInterval(streamHealTimer);
+    streamHealTimer = null;
+  }
+};
+
 app.whenReady().then(() => {
+  // Allow mic permission prompts from the capture window.
+  session.defaultSession.setPermissionRequestHandler(
+    (_wc, permission, callback) => {
+      if (permission === "media" || permission === "microphone") {
+        callback(true);
+        return;
+      }
+      callback(false);
+    },
+  );
+  session.defaultSession.setPermissionCheckHandler(
+    (_wc, permission) =>
+      permission === "media" ||
+      permission === "microphone" ||
+      permission === "mediaKeySystem",
+  );
   createWindow();
   startConsentPoll();
+  if (readMicPrefs().shareMic) {
+    syncMicSharing(true);
+  }
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
@@ -671,6 +903,11 @@ app.whenReady().then(() => {
 app.on("window-all-closed", () => {
   stopBootPoll();
   stopConsentPoll();
+  stopStreamHeal();
+  stopMicCapture();
   hostChild = null;
   if (process.platform !== "darwin") app.quit();
+});
+app.on("before-quit", () => {
+  stopMicCapture();
 });

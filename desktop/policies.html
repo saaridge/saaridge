@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src http://127.0.0.1:3847;"
+    />
+    <title>AI Policies</title>
+    <style>
+      :root {
+        --line: #24302b;
+        --text: #e7f0eb;
+        --muted: #8fa79b;
+        --accent: #3dba8a;
+        --accent-deep: #1f7a58;
+        --panel: #151f1b;
+        --danger: #c45c5c;
+        --soft: #1c2823;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        background: var(--panel);
+        color: var(--text);
+        font: 500 13px/1.35 system-ui, -apple-system, sans-serif;
+      }
+      .dlg {
+        padding: 1.1rem 1.15rem 1.25rem;
+        display: grid;
+        gap: 0.85rem;
+        max-height: 100vh;
+        overflow: auto;
+      }
+      h3 { margin: 0; font-size: 1.05rem; }
+      h4 {
+        margin: 0 0 0.45rem;
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+      }
+      p { margin: 0; color: var(--muted); font-size: 0.82rem; }
+      .meta {
+        font-size: 0.75rem;
+        color: var(--muted);
+        word-break: break-all;
+        background: var(--soft);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 0.5rem 0.65rem;
+      }
+      .section {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 0.7rem 0.75rem;
+        background: #121a17;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.6rem;
+        padding: 0.4rem 0;
+        border-top: 1px dashed var(--line);
+        font-size: 0.88rem;
+      }
+      .row:first-of-type { border-top: none; padding-top: 0; }
+      .row .sub { color: var(--muted); font-size: 0.75rem; margin-top: 0.1rem; }
+      .tag {
+        display: inline-block;
+        margin-left: 0.35rem;
+        font-size: 0.65rem;
+        font-weight: 700;
+        color: var(--accent-deep);
+        background: rgba(61, 186, 138, 0.18);
+        padding: 0.1rem 0.35rem;
+        border-radius: 999px;
+      }
+      button {
+        appearance: none;
+        border: 1px solid var(--line);
+        background: #1a2420;
+        color: var(--text);
+        border-radius: 8px;
+        padding: 0.35rem 0.65rem;
+        font: inherit;
+        cursor: pointer;
+        white-space:nowrap;
+      }
+      button:hover { border-color: var(--accent); }
+      button.on {
+        background: rgba(196, 92, 92, 0.2);
+        border-color: var(--danger);
+      }
+      button:disabled { opacity: 0.4; cursor: default; }
+      .footer {
+        display: flex;
+        justify-content: space-between;
+        gap: 0.5rem;
+        align-items: center;
+      }
+      .status { font-size: 0.78rem; color: var(--muted); min-height: 1.1em; }
+      .status.err { color: var(--danger); }
+      .agent-block { margin-top: 0.55rem; }
+      .agent-block:first-child { margin-top: 0; }
+      .agent-name { font-weight: 600; margin-bottom: 0.15rem; }
+      .agent-id { color: var(--muted); font-size: 0.72rem; margin-bottom: 0.25rem; }
+    </style>
+  </head>
+  <body>
+    <div class="dlg">
+      <div>
+        <h3>AI policies</h3>
+        <p>
+          Host-only settings. Assistants in the workspace cannot change these.
+          Empty / off = pass-through.
+        </p>
+      </div>
+      <div class="meta" id="meta">Loading…</div>
+
+      <div class="section">
+        <h4>Global (all agents)</h4>
+        <div id="globalRows"></div>
+      </div>
+
+      <div class="section">
+        <h4>Per agent</h4>
+        <div id="agentRows"></div>
+      </div>
+
+      <div class="footer">
+        <span class="status" id="status"></span>
+        <div style="display:flex;gap:0.4rem">
+          <button type="button" id="btnRefresh">Refresh</button>
+          <button type="button" id="btnClose">Close</button>
+        </div>
+      </div>
+    </div>
+    <script src="policies.js"></script>
+  </body>
+</html>

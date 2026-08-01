@@ -50,6 +50,7 @@ RUN npm install --omit=dev
 COPY container/bridge-mcp-stdio.mjs /opt/bridge/bridge-mcp-stdio.mjs
 COPY container/auth-proxy.mjs /opt/bridge/auth-proxy.mjs
 COPY container/audio-stream.mjs /opt/bridge/audio-stream.mjs
+COPY container/mic-ingress.mjs /opt/bridge/mic-ingress.mjs
 COPY container/agent-env.sh /opt/bridge/agent-env.sh
 COPY container/bridge-browser.sh /opt/bridge/bridge-browser.sh
 COPY container/launch-browser.sh /opt/bridge/launch-browser.sh
@@ -73,6 +74,7 @@ COPY --from=hostfs-builder /src/target/release/onebridge-hostfs /opt/bridge/oneb
 COPY container/audio-watchdog.sh /opt/bridge/audio-watchdog.sh
 COPY container/trust-mitm-ca.sh /usr/local/bin/trust-mitm-ca.sh
 COPY container/start-audio.sh /usr/local/bin/start-audio.sh
+COPY container/start-mic.sh /usr/local/bin/start-mic.sh
 COPY container/novnc-onebridge.html /usr/share/novnc/novnc-onebridge.html
 COPY container/network-lock.sh /usr/local/bin/network-lock.sh
 COPY container/start-desktop.sh /usr/local/bin/start-desktop.sh
@@ -96,7 +98,8 @@ RUN chmod +x /opt/bridge/bridge-browser.sh /opt/bridge/launch-browser.sh \
       /opt/bridge/audio-watchdog.sh \
       /opt/bridge/agent-env.sh /opt/bridge/host-bin/* \
       /usr/local/bin/network-lock.sh /usr/local/bin/start-desktop.sh \
-      /usr/local/bin/start-audio.sh /usr/local/bin/trust-mitm-ca.sh \
+      /usr/local/bin/start-audio.sh /usr/local/bin/start-mic.sh \
+      /usr/local/bin/trust-mitm-ca.sh \
       /usr/local/bin/entrypoint.sh \
     && chmod 644 /opt/bridge/*.mjs \
     && rm -f /opt/bridge/token

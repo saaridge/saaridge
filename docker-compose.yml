@@ -20,6 +20,7 @@ services:
     ports:
       - "6081:6080"
       - "6082:6082"
+      - "6083:6083"
     environment:
       BRIDGE_URL: http://host.docker.internal:7331
       BRIDGE_PORT: "7331"

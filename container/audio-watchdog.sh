@@ -32,7 +32,7 @@ fi
 echo $$ >"$PIDFILE"
 trap 'rm -f "$PIDFILE"' EXIT
 
-echo "[audio-watchdog] watching pulse + :${AUDIO_WS_PORT} (pid=$$ start=$START_AUDIO)"
+echo "[audio-watchdog] watching pulse + :${AUDIO_WS_PORT} + mic (pid=$$ start=$START_AUDIO)"
 while true; do
   ensure_exec
   if [[ ! -x "$START_AUDIO" ]]; then
@@ -40,7 +40,11 @@ while true; do
     sleep "$BACKOFF_SEC"
     continue
   fi
-  if ! "$START_AUDIO" --check >/dev/null 2>&1; then
+  mic_ok=1
+  if [[ -x /usr/local/bin/start-mic.sh ]]; then
+    /usr/local/bin/start-mic.sh --check >/dev/null 2>&1 || mic_ok=0
+  fi
+  if ! "$START_AUDIO" --check >/dev/null 2>&1 || [[ "$mic_ok" -eq 0 ]]; then
     echo "[audio-watchdog] audio unhealthy — repairing"
     if "$START_AUDIO" >>/tmp/start-audio.log 2>&1; then
       echo "[audio-watchdog] repaired OK"

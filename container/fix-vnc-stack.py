@@ -1,8 +1,17 @@
 #!/usr/bin/env python3
-"""Restart x11vnc/websockify; ignore zombie PIDs (State Z)."""
+"""Ensure x11vnc + websockify are alive (ignore zombie PIDs).
+
+Default is ensure-mode: leave a healthy stack alone. Pass --force to restart.
+Liveness is port-based (:5900 RFB + :6080 websockify), not pgrep — a crashed
+x11vnc can leave a zombie that still matches `pgrep -x x11vnc`.
+"""
+from __future__ import annotations
+
 import os
 import signal
+import socket
 import subprocess
+import sys
 import time
 
 
@@ -43,7 +52,44 @@ def is_target(pid: int) -> bool:
     )
 
 
-def main() -> None:
+def port_listening(port: int) -> bool:
+    out = subprocess.getoutput(f'ss -lnt 2>/dev/null | grep -E ":{port}\\s" || true')
+    return f":{port}" in out
+
+
+def rfb_banner_ok(timeout: float = 2.0) -> bool:
+    try:
+        s = socket.create_connection(("127.0.0.1", 5900), timeout)
+        s.settimeout(timeout)
+        banner = s.recv(12)
+        s.close()
+        return banner.startswith(b"RFB ")
+    except OSError:
+        return False
+
+
+def xvfb_alive() -> bool:
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        if status(pid) == "Z":
+            continue
+        if comm(pid) == "Xvfb":
+            return True
+    return False
+
+
+def stack_healthy() -> bool:
+    return (
+        xvfb_alive()
+        and port_listening(5900)
+        and port_listening(6080)
+        and rfb_banner_ok()
+    )
+
+
+def kill_targets() -> list[int]:
     killed = []
     for entry in os.listdir("/proc"):
         if not entry.isdigit():
@@ -56,9 +102,10 @@ def main() -> None:
             killed.append(pid)
         except OSError:
             pass
-    print("killed", killed)
-    time.sleep(0.6)
+    return killed
 
+
+def start_stack() -> None:
     env = os.environ.copy()
     env["DISPLAY"] = ":1"
     with open("/tmp/x11vnc.log", "w", encoding="utf-8") as log:
@@ -98,19 +145,35 @@ def main() -> None:
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
-    time.sleep(0.8)
 
-    alive = []
-    for entry in os.listdir("/proc"):
-        if not entry.isdigit():
-            continue
-        pid = int(entry)
-        if is_target(pid):
-            alive.append((pid, comm(pid), status(pid)))
-    print("alive", alive)
-    print(subprocess.getoutput('ss -lnt | grep -E ":5900|:6080" || true'))
-    print(subprocess.getoutput("DISPLAY=:1 xrandr | head -6"))
+
+def main() -> int:
+    force = "--force" in sys.argv
+    if not force and stack_healthy():
+        print("ok already-healthy")
+        return 0
+
+    if not xvfb_alive():
+        print("error xvfb-down", file=sys.stderr)
+        return 2
+
+    killed = kill_targets()
+    print("killed", killed)
+    time.sleep(0.6)
+    start_stack()
+
+    for _ in range(20):
+        time.sleep(0.25)
+        if stack_healthy():
+            print("ok repaired")
+            print(subprocess.getoutput('ss -lnt | grep -E ":5900|:6080" || true'))
+            return 0
+
+    print("error repair-failed", file=sys.stderr)
+    print(subprocess.getoutput('ss -lnt | grep -E ":5900|:6080" || true'), file=sys.stderr)
+    print(subprocess.getoutput("tail -20 /tmp/x11vnc.log || true"), file=sys.stderr)
+    return 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -39,6 +39,19 @@ import {
   injectDesktopMouse,
 } from "../lib/ui-commands.js";
 import { setHostHomeWriteGrant } from "../lib/host-home-grant.js";
+import {
+  listPolicyAlgorithms,
+  listPolicyAgents,
+  getPolicyAgent,
+  ensurePolicyAgent,
+  enablePolicy,
+  disablePolicy,
+  setPolicyOverride,
+  listGlobalPolicies,
+  setGlobalPolicy,
+  policyStatus,
+  AI_POLICY_CONFIG_PATH,
+} from "../lib/ai-policy.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -73,6 +86,7 @@ export const startControlPlane = ({ port = 3847 } = {}) => {
       agentCount: listAgentsPublic().length,
       proxyPort: Number(process.env.BRIDGE_PROXY_PORT) || 7332,
       workspaceOs: getWorkspaceOs(),
+      aiPolicy: policyStatus(),
     });
   });
 
@@ -92,6 +106,19 @@ export const startControlPlane = ({ port = 3847 } = {}) => {
       ...result,
       boot: getContainerBootStatus(),
     });
+  });
+
+  app.get("/api/desktop/stream-health", async (_req, res) => {
+    const { getStreamHealth } = await import("../lib/stream-stack.js");
+    const health = await getStreamHealth();
+    res.status(health.ok ? 200 : 503).json({ ok: health.ok, health });
+  });
+
+  app.post("/api/desktop/ensure-stream", async (req, res) => {
+    const { ensureStreamStack } = await import("../lib/stream-stack.js");
+    const force = Boolean(req.body?.force);
+    const result = await ensureStreamStack({ force });
+    res.status(result.ok ? 200 : 500).json(result);
   });
 
   app.get("/api/agents", (_req, res) => {
@@ -275,6 +302,159 @@ export const startControlPlane = ({ port = 3847 } = {}) => {
       model: req.body?.model,
     });
     res.json({ ok: true, settings });
+  });
+
+  // --- AI policy admin (host-only; store under state/private) ---
+  app.get("/api/policies/status", (_req, res) => {
+    res.json({ ok: true, ...policyStatus(), configPath: AI_POLICY_CONFIG_PATH });
+  });
+
+  app.get("/api/policies/global", (_req, res) => {
+    try {
+      res.json({ ok: true, algorithms: listGlobalPolicies() });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err?.message || String(err) });
+    }
+  });
+
+  app.post("/api/policies/global", (req, res) => {
+    try {
+      const algorithmId = String(req.body?.algorithmId || "");
+      const enabled = req.body?.enabled !== false && req.body?.enabled !== 0;
+      if (!algorithmId) {
+        return res.status(400).json({ ok: false, error: "algorithmId required" });
+      }
+      const algorithms = setGlobalPolicy(algorithmId, enabled);
+      res.json({ ok: true, algorithms });
+    } catch (err) {
+      const status = err?.code === "UNKNOWN_ALGORITHM" ? 404 : 500;
+      res.status(status).json({ ok: false, error: err?.message || String(err) });
+    }
+  });
+
+  app.get("/api/policies/algorithms", (_req, res) => {
+    try {
+      res.json({ ok: true, algorithms: listPolicyAlgorithms() });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err?.message || String(err) });
+    }
+  });
+
+  app.get("/api/policies/agents", (_req, res) => {
+    try {
+      // Merge OneBridge agents + desktop + any bindings already in the store
+      const known = new Map();
+      for (const a of listInstalledAgents()) {
+        known.set(a.id, { agentId: a.id, name: a.name || a.id, kind: "assistant" });
+      }
+      const desktop = getDesktopAgentPublic();
+      if (desktop?.id) {
+        known.set(desktop.id, {
+          agentId: desktop.id,
+          name: desktop.name || "Workspace Desktop",
+          kind: "desktop",
+        });
+      }
+      const bindings = listPolicyAgents();
+      for (const b of bindings) {
+        if (!known.has(b.agentId)) {
+          known.set(b.agentId, {
+            agentId: b.agentId,
+            name: b.agentId,
+            kind: "configured",
+          });
+        }
+      }
+      const agents = [...known.values()].map((meta) => {
+        const binding = getPolicyAgent(meta.agentId);
+        return {
+          ...meta,
+          activeAlgorithms: binding.activeAlgorithms || [],
+          configuredAlgorithms: binding.configured?.activeAlgorithms || [],
+          overrides: binding.configured?.overrides || {},
+          algorithms: binding.algorithms || [],
+        };
+      });
+      res.json({ ok: true, agents });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err?.message || String(err) });
+    }
+  });
+
+  app.get("/api/policies/agents/:id", (req, res) => {
+    try {
+      res.json({ ok: true, ...getPolicyAgent(req.params.id) });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err?.message || String(err) });
+    }
+  });
+
+  app.post("/api/policies/agents/ensure", (req, res) => {
+    try {
+      const agentId = String(req.body?.agentId || "");
+      if (!agentId) {
+        return res.status(400).json({ ok: false, error: "agentId required" });
+      }
+      res.json({ ok: true, ...ensurePolicyAgent(agentId) });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err?.message || String(err) });
+    }
+  });
+
+  app.post("/api/policies/bindings/enable", (req, res) => {
+    try {
+      const agentId = String(req.body?.agentId || "");
+      const algorithmId = String(req.body?.algorithmId || "");
+      if (!agentId || !algorithmId) {
+        return res
+          .status(400)
+          .json({ ok: false, error: "agentId and algorithmId required" });
+      }
+      const binding = enablePolicy(agentId, algorithmId);
+      res.json({ ok: true, ...binding });
+    } catch (err) {
+      const status = err?.code === "UNKNOWN_ALGORITHM" ? 404 : 500;
+      res.status(status).json({ ok: false, error: err?.message || String(err) });
+    }
+  });
+
+  app.post("/api/policies/bindings/disable", (req, res) => {
+    try {
+      const agentId = String(req.body?.agentId || "");
+      const algorithmId = String(req.body?.algorithmId || "");
+      if (!agentId || !algorithmId) {
+        return res
+          .status(400)
+          .json({ ok: false, error: "agentId and algorithmId required" });
+      }
+      const binding = disablePolicy(agentId, algorithmId);
+      res.json({ ok: true, ...binding });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err?.message || String(err) });
+    }
+  });
+
+  app.post("/api/policies/bindings/override", (req, res) => {
+    try {
+      const agentId = String(req.body?.agentId || "");
+      const algorithmId = String(req.body?.algorithmId || "");
+      const mode = String(req.body?.mode || "");
+      if (!agentId || !algorithmId) {
+        return res
+          .status(400)
+          .json({ ok: false, error: "agentId and algorithmId required" });
+      }
+      if (mode !== "follow" && mode !== "on" && mode !== "off") {
+        return res
+          .status(400)
+          .json({ ok: false, error: "mode must be follow|on|off" });
+      }
+      const binding = setPolicyOverride(agentId, algorithmId, mode);
+      res.json({ ok: true, ...binding });
+    } catch (err) {
+      const status = err?.code === "UNKNOWN_ALGORITHM" ? 404 : 500;
+      res.status(status).json({ ok: false, error: err?.message || String(err) });
+    }
   });
 
   app.listen(port, "127.0.0.1", () => {

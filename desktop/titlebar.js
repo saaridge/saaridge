@@ -1,12 +1,12 @@
 (() => {
   const uiActions = document.getElementById("uiActions");
-  const btnApiKey = document.getElementById("btnApiKey");
+  const btnSettings = document.getElementById("btnSettings");
   const osBadge = document.getElementById("osBadge");
   const osLabel = document.getElementById("osLabel");
 
   const unlock = () => {
     uiActions.classList.remove("locked");
-    btnApiKey.disabled = false;
+    btnSettings.disabled = false;
   };
 
   const showOs = (os) => {
@@ -16,8 +16,8 @@
     osBadge.hidden = false;
   };
 
-  btnApiKey?.addEventListener("click", () => {
-    void window.onebridge?.openApiKey?.();
+  btnSettings?.addEventListener("click", () => {
+    void window.onebridge?.openSettings?.("policies");
   });
 
   // Clicking the bar (non-buttons) should return keyboard to the desktop.

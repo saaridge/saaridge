@@ -20,7 +20,7 @@ const ROOT = path.resolve(__dirname, "..");
 
 const { ensureAgentWorkspace, read, write, list, unlink, health, getRoots } =
   await import("../host/bridge/data/api.js");
-const { oneBridgeRoot, workspaceRootFor } = await import(
+const { oneBridgeRoot, workspaceRootFor, removeAgentWorkspace } = await import(
   "../host/bridge/data/paths.js"
 );
 const { defaultDataPolicy } = await import("../host/bridge/data/policy.js");
@@ -38,6 +38,16 @@ const agent = {
   policy: defaultDataPolicy(agentId),
 };
 
+const cleanupTestAgent = () => {
+  try {
+    removeAgentWorkspace(agentId);
+    console.log(`  cleaned workspace ${agentId}`);
+  } catch (err) {
+    console.warn(`  cleanup warn: ${err?.message || err}`);
+  }
+};
+
+try {
 console.log("== data core ==");
 try {
   const roots = await ensureAgentWorkspace(agentId);
@@ -79,17 +89,35 @@ try {
 }
 
 try {
-  const outside = path.join(os.homedir(), "NOT-OneBridge-should-deny.txt");
+  // Under ~ but outside OneBridge: browse-only until hostHomeWrite consent.
+  const underHome = path.join(os.homedir(), "NOT-OneBridge-should-deny.txt");
+  let homeRo = false;
+  try {
+    await write(agent, underHome, "x");
+  } catch (err) {
+    homeRo =
+      err.code === "EROFS" ||
+      err.needHostHomeWrite === true ||
+      /read-only|host home/i.test(err.message);
+  }
+  if (!homeRo) throw new Error("expected host-home write blocked without consent");
+  if (fs.existsSync(underHome)) {
+    throw new Error("host-home write must not create the file");
+  }
+  ok("host-home write blocked without consent");
+
+  // Outside host home entirely: hard deny.
+  const outsideHome = path.join(os.tmpdir(), `ob-deny-${process.pid}.txt`);
   let denied = false;
   try {
-    await write(agent, outside, "x");
+    await write(agent, outsideHome, "x");
   } catch (err) {
     denied = err.code === "EACCES" || /denied/i.test(err.message);
   }
-  if (!denied) throw new Error("expected deny outside OneBridge");
-  ok("deny outside OneBridge");
+  if (!denied) throw new Error("expected deny outside host home / OneBridge");
+  ok("deny outside host home");
 } catch (e) {
-  fail("deny outside OneBridge", e);
+  fail("path write policy", e);
 }
 
 try {
@@ -237,15 +265,8 @@ if (process.env.TEST_FUSE !== "1") {
     fail("FUSE remount", e);
   }
 }
-
-// cleanup test workspace files (keep dir)
-try {
-  const ws = workspaceRootFor(agentId);
-  for (const name of fs.readdirSync(ws)) {
-    fs.rmSync(path.join(ws, name), { recursive: true, force: true });
-  }
-} catch {
-  /* ignore */
+} finally {
+  cleanupTestAgent();
 }
 
 console.log(`\nDone. root=${oneBridgeRoot()} failures=${failed}`);

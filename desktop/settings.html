@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src http://127.0.0.1:3847;"
+    />
+    <title>Settings</title>
+    <style>
+      :root {
+        --line: #24302b;
+        --text: #e7f0eb;
+        --muted: #8fa79b;
+        --accent: #3dba8a;
+        --accent-deep: #1f7a58;
+        --panel: #151f1b;
+        --side: #0f1613;
+        --danger: #c45c5c;
+        --soft: #1c2823;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: var(--panel);
+        color: var(--text);
+        font: 500 13px/1.35 system-ui, -apple-system, sans-serif;
+        overflow: hidden;
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: 168px 1fr;
+        grid-template-rows: 1fr;
+        height: 100%;
+      }
+      nav {
+        background: var(--side);
+        border-right: 1px solid var(--line);
+        padding: 1rem 0.65rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+      }
+      nav .title {
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        padding: 0 0.45rem 0.55rem;
+      }
+      nav button {
+        appearance: none;
+        text-align: left;
+        border: 1px solid transparent;
+        background: transparent;
+        color: var(--text);
+        border-radius: 8px;
+        padding: 0.55rem 0.65rem;
+        font: inherit;
+        cursor: pointer;
+      }
+      nav button:hover { background: var(--soft); }
+      nav button.active {
+        background: rgba(61, 186, 138, 0.14);
+        border-color: rgba(61, 186, 138, 0.35);
+        color: var(--accent);
+      }
+      main {
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        overflow: hidden;
+      }
+      .pane-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        padding: 0.85rem 1.15rem;
+        border-bottom: 1px solid var(--line);
+        background: #121a17;
+        flex-shrink: 0;
+      }
+      .pane-header h3 {
+        margin: 0;
+        font-size: 1.05rem;
+        font-weight: 600;
+      }
+      .pane-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+        flex-shrink: 0;
+      }
+      .pane-body {
+        flex: 1;
+        overflow: auto;
+        padding: 1rem 1.15rem 1.25rem;
+      }
+      .pane[hidden] { display: none !important; }
+      h4 {
+        margin: 0.9rem 0 0.45rem;
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+      }
+      h4:first-child { margin-top: 0; }
+      p.help { margin: 0 0 0.85rem; color: var(--muted); font-size: 0.82rem; }
+      label {
+        display: grid;
+        gap: 0.3rem;
+        font-size: 0.78rem;
+        color: var(--muted);
+        margin-bottom: 0.65rem;
+      }
+      input, select {
+        border: 1px solid var(--line);
+        background: #0b100e;
+        color: var(--text);
+        border-radius: 8px;
+        padding: 0.55rem 0.65rem;
+        font: inherit;
+      }
+      button.btn {
+        appearance: none;
+        border: 1px solid var(--line);
+        background: #1a2420;
+        color: var(--text);
+        border-radius: 8px;
+        padding: 0.45rem 0.8rem;
+        font: inherit;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      button.btn:hover { border-color: var(--accent); }
+      button.btn.primary {
+        background: var(--accent);
+        color: #042015;
+        border-color: transparent;
+        font-weight: 600;
+      }
+      button.btn.danger {
+        color: #f0c8c8;
+        border-color: rgba(196, 92, 92, 0.45);
+      }
+      button.btn.danger:hover { border-color: var(--danger); }
+      button.btn:disabled { opacity: 0.4; cursor: default; }
+      button.btn-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 2rem;
+        height: 2rem;
+        padding: 0;
+        font-size: 1.15rem;
+        line-height: 1;
+        border-radius: 8px;
+      }
+      .status { font-size: 0.78rem; color: var(--muted); min-height: 1.1em; }
+      .status.err { color: var(--danger); }
+      a { color: var(--accent); }
+      .meta {
+        font-size: 0.75rem;
+        color: var(--muted);
+        word-break: break-all;
+        background: var(--soft);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 0.5rem 0.65rem;
+        margin-bottom: 0.75rem;
+      }
+      .section {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 0.7rem 0.75rem;
+        background: #121a17;
+        margin-bottom: 0.75rem;
+      }
+      .row {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.6rem;
+        padding: 0.45rem 0;
+        border-top: 1px dashed var(--line);
+      }
+      .row:first-of-type { border-top: none; padding-top: 0; }
+      .row .sub { color: var(--muted); font-size: 0.75rem; margin-top: 0.1rem; }
+      .tag {
+        display: inline-block;
+        margin-left: 0.35rem;
+        font-size: 0.65rem;
+        font-weight: 700;
+        color: var(--accent-deep);
+        background: rgba(61, 186, 138, 0.18);
+        padding: 0.1rem 0.35rem;
+        border-radius: 999px;
+      }
+      .tag.off {
+        color: #c45c5c;
+        background: rgba(196, 92, 92, 0.15);
+      }
+      .override-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.82rem;
+      }
+      .override-table th {
+        text-align: left;
+        font-size: 0.68rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--muted);
+        padding: 0.35rem 0.5rem 0.5rem;
+        border-bottom: 1px solid var(--line);
+      }
+      .override-table td {
+        padding: 0.55rem 0.5rem;
+        border-bottom: 1px solid rgba(36, 48, 43, 0.6);
+        vertical-align: middle;
+      }
+      .override-table tr:last-child td { border-bottom: none; }
+      .override-empty {
+        color: var(--muted);
+        font-size: 0.82rem;
+        padding: 0.35rem 0;
+      }
+      .add-override {
+        display: grid;
+        grid-template-columns: 1.2fr 1.2fr 1fr auto;
+        gap: 0.5rem;
+        align-items: end;
+        margin-top: 0.65rem;
+        padding-top: 0.65rem;
+        border-top: 1px dashed var(--line);
+      }
+      .add-override label { margin: 0; }
+      .add-override select { width: 100%; }
+      @media (max-width: 640px) {
+        .add-override {
+          grid-template-columns: 1fr 1fr;
+        }
+        .add-override .span-2 { grid-column: 1 / -1; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="layout">
+      <nav>
+        <div class="title">Settings</div>
+        <button type="button" class="nav-btn active" data-pane="policies" id="navPolicies">
+          Policies
+        </button>
+        <button type="button" class="nav-btn" data-pane="microphone" id="navMic">
+          Microphone
+        </button>
+        <button type="button" class="nav-btn" data-pane="apikey" id="navApiKey">
+          API key
+        </button>
+      </nav>
+      <main>
+        <section class="pane" id="pane-policies">
+          <header class="pane-header">
+            <h3>AI policies</h3>
+            <div class="pane-toolbar">
+              <span class="status" id="policyStatus"></span>
+              <button type="button" class="btn" id="btnPolicyRefresh">Refresh</button>
+              <button type="button" class="btn btn-icon" id="btnClosePolicies" title="Close" aria-label="Close">×</button>
+            </div>
+          </header>
+          <div class="pane-body">
+            <p class="help">
+              Global policies apply to all agents. Add per-agent overrides only when you
+              need an exception — remove an override to follow global again.
+            </p>
+            <div class="meta" id="policyMeta">Loading…</div>
+            <div class="section">
+              <h4 style="margin-top:0">Global policies</h4>
+              <div id="globalRows"></div>
+            </div>
+            <div class="section">
+              <h4 style="margin-top:0">Per-agent overrides</h4>
+              <div id="overrideRows"></div>
+              <div class="add-override" id="addOverrideForm">
+                <label>
+                  Agent
+                  <select id="overrideAgent"></select>
+                </label>
+                <label>
+                  Policy
+                  <select id="overridePolicy"></select>
+                </label>
+                <label>
+                  Status
+                  <select id="overrideMode">
+                    <option value="on">Force on</option>
+                    <option value="off">Force off</option>
+                  </select>
+                </label>
+                <button type="button" class="btn primary" id="btnAddOverride">Add</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="pane" id="pane-microphone" hidden>
+          <header class="pane-header">
+            <h3>Microphone</h3>
+            <div class="pane-toolbar">
+              <button type="button" class="btn btn-icon" id="btnCloseMic" title="Close" aria-label="Close">×</button>
+            </div>
+          </header>
+          <div class="pane-body">
+            <p class="help">
+              When enabled, your Mac microphone is shared with the workspace as a
+              virtual mic (no redaction). Off by default.
+            </p>
+            <div class="section">
+              <div class="row" style="align-items:center">
+                <div>
+                  <div><strong>Share microphone with workspace</strong></div>
+                  <div class="sub">Requires macOS microphone permission for OneBridge</div>
+                </div>
+                <label style="margin:0; display:flex; align-items:center; gap:0.4rem">
+                  <input id="micToggle" type="checkbox" />
+                  <span id="micToggleLabel">Off</span>
+                </label>
+              </div>
+            </div>
+            <p class="status" id="micStatus">Off</p>
+          </div>
+        </section>
+
+        <section class="pane" id="pane-apikey" hidden>
+          <header class="pane-header">
+            <h3>Bridge LLM</h3>
+            <div class="pane-toolbar">
+              <button type="submit" class="btn primary" form="keyForm" id="btnSaveApiKey">Save</button>
+              <button type="button" class="btn btn-icon" id="keyCancel" title="Close" aria-label="Close">×</button>
+            </div>
+          </header>
+          <div class="pane-body">
+            <form id="keyForm">
+              <p class="help">
+                Optional. Pick a provider, then paste its API key. The key stays on the host.
+              </p>
+              <label>
+                Provider
+                <select id="providerSelect"></select>
+              </label>
+              <div>
+                <strong id="providerName"></strong>
+                <p class="help" id="providerDesc" style="margin-bottom:0.35rem"></p>
+                <p class="help" id="providerHint" style="margin-bottom:0.35rem"></p>
+                <a id="providerDocs" href="#" target="_blank" rel="noreferrer" hidden></a>
+              </div>
+              <label>
+                Model
+                <select id="modelSelect"></select>
+              </label>
+              <label id="apiKeyLabel">
+                API key
+                <input id="apiKeyInput" type="password" autocomplete="off" placeholder="Paste key" />
+              </label>
+              <p class="status" id="keyStatus"></p>
+            </form>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script src="settings.js"></script>
+  </body>
+</html>

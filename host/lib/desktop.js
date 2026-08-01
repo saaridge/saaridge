@@ -136,6 +136,7 @@ export const provisionDesktopSession = async () => {
   for (const file of [
     "auth-proxy.mjs",
     "audio-stream.mjs",
+    "mic-ingress.mjs",
     "agent-env.sh",
     "bridge-browser.sh",
     "bridge-mcp-stdio.mjs",
@@ -180,24 +181,33 @@ export const provisionDesktopSession = async () => {
     `${CONTAINER_NAME}:/usr/local/bin/start-audio.sh`,
   );
   await dockerCp(
+    path.join(ROOT, "container", "start-mic.sh"),
+    `${CONTAINER_NAME}:/usr/local/bin/start-mic.sh`,
+  );
+  await dockerCp(
     path.join(ROOT, "container", "entrypoint.sh"),
     `${CONTAINER_NAME}:/usr/local/bin/entrypoint.sh`,
+  );
+  await dockerCp(
+    path.join(ROOT, "container", "entrypoint.sh"),
+    `${CONTAINER_NAME}:/entrypoint.sh`,
   );
   // dockerCp from macOS often drops +x — fix before any start-desktop / browser launch.
   await dockerExec([
     "bash",
     "-lc",
     [
-      "chmod 755 /usr/local/bin/start-desktop.sh /usr/local/bin/start-audio.sh /usr/local/bin/entrypoint.sh",
+      "chmod 755 /usr/local/bin/start-desktop.sh /usr/local/bin/start-audio.sh /usr/local/bin/start-mic.sh /usr/local/bin/entrypoint.sh",
       "chmod 755 /opt/bridge/*.sh /opt/bridge/host-bin/* 2>/dev/null || true",
       "chmod 755 /opt/bridge/gtk-file-picker.py /opt/bridge/hostfs-fuse.py /opt/bridge/ensure-desktop-icon.py 2>/dev/null || true",
+      "chmod 644 /opt/bridge/*.mjs 2>/dev/null || true",
     ].join("; "),
   ]);
   await dockerExec([
     "bash",
     "-lc",
     [
-            "chmod 755 /opt/bridge/bridge-browser.sh /opt/bridge/launch-browser.sh /opt/bridge/restart-browser.sh /opt/bridge/open-agent.sh /opt/bridge/open-install-assistant.sh /opt/bridge/gtk-file-picker.py /opt/bridge/repair-desktop.sh /opt/bridge/dedupe-xfce-panel.sh /opt/bridge/ensure-x-modes.sh /opt/bridge/resize-display.sh /opt/bridge/fit-windows.sh /opt/bridge/fix-vnc-stack.py /opt/bridge/key-pump.sh /opt/bridge/mouse-pump.sh /opt/bridge/agent-env.sh /opt/bridge/hostfs-fuse.py /opt/bridge/hostfs-watchdog.sh /opt/bridge/audio-watchdog.sh /opt/bridge/ensure-desktop-icon.py /opt/bridge/host-bin/* /usr/local/bin/start-desktop.sh /usr/local/bin/start-audio.sh /usr/local/bin/entrypoint.sh",
+            "chmod 755 /opt/bridge/bridge-browser.sh /opt/bridge/launch-browser.sh /opt/bridge/restart-browser.sh /opt/bridge/open-agent.sh /opt/bridge/open-install-assistant.sh /opt/bridge/gtk-file-picker.py /opt/bridge/repair-desktop.sh /opt/bridge/dedupe-xfce-panel.sh /opt/bridge/ensure-x-modes.sh /opt/bridge/resize-display.sh /opt/bridge/fit-windows.sh /opt/bridge/fix-vnc-stack.py /opt/bridge/key-pump.sh /opt/bridge/mouse-pump.sh /opt/bridge/agent-env.sh /opt/bridge/hostfs-fuse.py /opt/bridge/hostfs-watchdog.sh /opt/bridge/audio-watchdog.sh /opt/bridge/ensure-desktop-icon.py /opt/bridge/host-bin/* /usr/local/bin/start-desktop.sh /usr/local/bin/start-audio.sh /usr/local/bin/start-mic.sh /usr/local/bin/entrypoint.sh",
       "chmod 644 /opt/bridge/*.mjs 2>/dev/null || true",
       "mkdir -p /host",
       // Keep RANDR modes available so viewer resize maps 1:1 (accurate clicks).
@@ -436,7 +446,7 @@ export const provisionDesktopSession = async () => {
         "export DISPLAY=:1",
         "export XDG_RUNTIME_DIR=/tmp/runtime-browser",
         "export PULSE_RUNTIME_PATH=/tmp/runtime-browser/pulse",
-        "chmod 755 /usr/local/bin/start-audio.sh /opt/bridge/audio-watchdog.sh 2>/dev/null || true",
+        "chmod 755 /usr/local/bin/start-audio.sh /usr/local/bin/start-mic.sh /opt/bridge/audio-watchdog.sh 2>/dev/null || true",
         "/usr/local/bin/start-audio.sh >/tmp/start-audio.log 2>&1",
         "echo AUDIO_EXIT:$?",
         "tail -20 /tmp/start-audio.log || true",
@@ -457,10 +467,21 @@ export const provisionDesktopSession = async () => {
     logStep("Audio pulse + watchdog running");
   }
 
+  // Retail boot: stream must be RFB-live, not just HTML on :6081.
+  const { ensureStreamStack } = await import("./stream-stack.js");
+  const stream = await ensureStreamStack();
+  if (!stream.ok) {
+    return {
+      ok: false,
+      error: stream.error || "Desktop stream is not ready",
+      stream,
+    };
+  }
+
   // Do not place agent/demo icons on the desktop at startup — Install Assistant only.
 
   logStep("Workspace desktop is ready");
-  return { ok: true, agentId: DESKTOP_AGENT_ID };
+  return { ok: true, agentId: DESKTOP_AGENT_ID, stream };
 };
 
 /** Close user-facing app windows so the desktop starts empty. */

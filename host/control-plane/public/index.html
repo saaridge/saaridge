@@ -432,6 +432,62 @@
       details.advanced summary::-webkit-details-marker { display: none; }
       details.advanced[open] summary { border-bottom: 1px solid var(--line); }
       .advanced-body { padding: 1rem 1.2rem 1.2rem; }
+
+      .policy-algo-meta {
+        margin: 0 0 1rem;
+        padding: 0.75rem 0.9rem;
+        border-radius: 12px;
+        background: var(--paper-2);
+        border: 1px solid var(--line);
+        font-size: 0.86rem;
+        color: var(--ink-soft);
+      }
+      .policy-algo-meta code {
+        font-size: 0.78rem;
+        word-break: break-all;
+      }
+      .policy-agent {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 0.9rem 1rem;
+        margin-bottom: 0.75rem;
+        background: var(--card);
+      }
+      .policy-agent:last-child { margin-bottom: 0; }
+      .policy-agent h4 {
+        margin: 0 0 0.15rem;
+        font-size: 1rem;
+      }
+      .policy-agent .kind {
+        color: var(--muted);
+        font-size: 0.8rem;
+        margin-bottom: 0.65rem;
+      }
+      .policy-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        padding: 0.4rem 0;
+        border-top: 1px dashed var(--line);
+        font-size: 0.9rem;
+      }
+      .policy-row:first-of-type { border-top: none; }
+      .policy-row .tag-on {
+        display: inline-block;
+        margin-left: 0.4rem;
+        font-size: 0.7rem;
+        font-weight: 700;
+        color: var(--accent-deep);
+        background: var(--accent-soft);
+        padding: 0.12rem 0.4rem;
+        border-radius: 999px;
+      }
+      .policy-empty {
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+
       .log-tabs { display: flex; gap: 0.4rem; margin-bottom: 0.7rem; }
       .log-view {
         margin: 0;
@@ -479,15 +535,21 @@
           <p class="lede">
             Assistants work inside a sealed workspace. They can only reach your files,
             websites, and commands through OneBridge — with a private key for each assistant.
+            Day-to-day use the <strong>OneBridge desktop app</strong>
+            (<code>npm run app</code>): workspace view and AI policies in one window.
           </p>
           <div class="cta-row">
             <button class="btn btn-primary" id="openDesktopBtn" type="button">
-              Open workspace desktop
+              Open workspace viewer (dev)
             </button>
             <button class="btn btn-secondary" id="ensureBtn" type="button">
               Start workspace
             </button>
           </div>
+          <p class="help" style="margin-top: 0.75rem; margin-bottom: 0">
+            Prefer the Electron app for Policies + desktop together. This page is a
+            host-only control plane fallback for install and debugging.
+          </p>
         </div>
         <aside class="card hero-side">
           <h3>What stays protected</h3>
@@ -549,6 +611,27 @@
           </ul>
         </section>
       </div>
+
+      <section class="card panel" style="margin-top: 1rem; animation-delay: 0.06s" id="aiPoliciesPanel">
+        <h3>AI policies (dev fallback)</h3>
+        <p class="help">
+          Same host-only controls as the Electron app <strong>Policies</strong> button.
+          Prefer <code>npm run app</code> for day-to-day use so desktop and policies stay
+          in one window. Assistants inside the container cannot change these settings.
+        </p>
+        <div class="policy-algo-meta" id="policyMeta">Loading policy engine…</div>
+        <div class="cta-row" style="margin-bottom: 0.75rem">
+          <button class="btn btn-secondary btn-sm" id="refreshPoliciesBtn" type="button">
+            Refresh policies
+          </button>
+        </div>
+        <h4 style="margin: 0 0 0.5rem; font-size: 0.85rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em">Global</h4>
+        <div id="policyGlobal" style="margin-bottom: 1rem"></div>
+        <h4 style="margin: 0 0 0.5rem; font-size: 0.85rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em">Per agent</h4>
+        <div id="policyAgents">
+          <p class="policy-empty">Loading…</p>
+        </div>
+      </section>
 
       <section class="card panel" style="margin-top: 1rem; animation-delay: 0.08s">
         <h3>Capabilities the assistants can use</h3>
@@ -856,6 +939,151 @@
           .join("\n") || "No activity yet.";
       };
 
+      const refreshPolicies = async () => {
+        const meta = $("policyMeta");
+        const root = $("policyAgents");
+        const globalRoot = $("policyGlobal");
+        try {
+          const [statusRes, globalRes, agentsRes] = await Promise.all([
+            fetch("/api/policies/status"),
+            fetch("/api/policies/global"),
+            fetch("/api/policies/agents"),
+          ]);
+          const status = await statusRes.json();
+          const global = await globalRes.json();
+          const agents = await agentsRes.json();
+          if (!status.ok) {
+            meta.textContent = status.error || "Policy engine unavailable";
+            root.innerHTML = `<p class="policy-empty">${status.error || "Unavailable"}</p>`;
+            if (globalRoot) globalRoot.innerHTML = "";
+            return;
+          }
+          const algoList = global.algorithms || [];
+          meta.innerHTML = `
+            Host config (private): <code>${status.configPath || ""}</code><br/>
+            Prefer Electron app Policies for day-to-day use.
+          `;
+
+          if (globalRoot) {
+            globalRoot.innerHTML = "";
+            for (const algo of algoList) {
+              const card = document.createElement("div");
+              card.className = "policy-agent";
+              const row = document.createElement("div");
+              row.className = "policy-row";
+              const left = document.createElement("div");
+              left.innerHTML = `<strong>${algo.id}</strong>${
+                algo.enabledGlobally ? '<span class="tag-on">global</span>' : ""
+              }<div class="meta-line">${algo.name || ""}</div>`;
+              const btn = document.createElement("button");
+              btn.type = "button";
+              btn.className = algo.enabledGlobally
+                ? "btn btn-danger btn-sm"
+                : "btn btn-secondary btn-sm";
+              btn.textContent = algo.enabledGlobally ? "Disable global" : "Enable global";
+              btn.onclick = async () => {
+                btn.disabled = true;
+                try {
+                  const r = await fetch("/api/policies/global", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      algorithmId: algo.id,
+                      enabled: !algo.enabledGlobally,
+                    }),
+                  });
+                  const body = await r.json();
+                  showToast(
+                    body.ok
+                      ? `${algo.id} ${algo.enabledGlobally ? "disabled" : "enabled"} globally`
+                      : body.error || "Update failed",
+                    !body.ok,
+                  );
+                  await refreshPolicies();
+                } catch (err) {
+                  showToast(String(err), true);
+                  btn.disabled = false;
+                }
+              };
+              row.appendChild(left);
+              row.appendChild(btn);
+              card.appendChild(row);
+              globalRoot.appendChild(card);
+            }
+          }
+
+          root.innerHTML = "";
+          const list = agents.agents || [];
+          if (!list.length) {
+            root.innerHTML =
+              '<p class="policy-empty">No assistants yet. Install one or start the workspace desktop.</p>';
+            return;
+          }
+          for (const agent of list) {
+            const card = document.createElement("div");
+            card.className = "policy-agent";
+            const kindLabel =
+              agent.kind === "desktop"
+                ? "Workspace desktop"
+                : agent.kind === "assistant"
+                  ? "Assistant"
+                  : "Configured";
+            card.innerHTML = `<h4>${agent.name || agent.agentId}</h4><div class="kind">${kindLabel} · <code>${agent.agentId}</code></div>`;
+            for (const algo of algoList) {
+              const configured = (agent.configuredAlgorithms || []).includes(algo.id);
+              const effective = (agent.activeAlgorithms || []).includes(algo.id);
+              const viaGlobal = effective && !configured;
+              const row = document.createElement("div");
+              row.className = "policy-row";
+              const left = document.createElement("div");
+              left.innerHTML = `<strong>${algo.id}</strong>${
+                effective ? '<span class="tag-on">on</span>' : ""
+              }${viaGlobal ? '<span class="tag-on">via global</span>' : ""}<div class="meta-line">${algo.name || ""}</div>`;
+              const btn = document.createElement("button");
+              btn.type = "button";
+              btn.className = configured ? "btn btn-danger btn-sm" : "btn btn-secondary btn-sm";
+              btn.textContent = configured ? "Disable" : "Enable";
+              btn.onclick = async () => {
+                btn.disabled = true;
+                try {
+                  const r = await fetch(
+                    configured
+                      ? "/api/policies/bindings/disable"
+                      : "/api/policies/bindings/enable",
+                    {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        agentId: agent.agentId,
+                        algorithmId: algo.id,
+                      }),
+                    },
+                  );
+                  const body = await r.json();
+                  showToast(
+                    body.ok
+                      ? `${algo.id} ${configured ? "disabled" : "enabled"} for ${agent.name || agent.agentId}`
+                      : body.error || "Update failed",
+                    !body.ok,
+                  );
+                  await refreshPolicies();
+                } catch (err) {
+                  showToast(String(err), true);
+                  btn.disabled = false;
+                }
+              };
+              row.appendChild(left);
+              row.appendChild(btn);
+              card.appendChild(row);
+            }
+            root.appendChild(card);
+          }
+        } catch (err) {
+          meta.textContent = "Could not load AI policies";
+          root.innerHTML = `<p class="policy-empty">${String(err)}</p>`;
+        }
+      };
+
       $("openDesktopBtn").onclick = () => {
         // Custom viewer: overflow:hidden + no scale so trackpad scroll reaches remote apps
         window.open(
@@ -889,6 +1117,7 @@
           renderTimeline(j.steps || [{ ok: false, message: j.error || "Install failed" }]);
           showToast(j.ok ? "Assistant installed successfully" : "Installation failed", !j.ok);
           await refreshAgents();
+          await refreshPolicies();
           await refreshHealth();
           await refreshLogs("control");
         } catch (err) {
@@ -945,8 +1174,11 @@
         btn.onclick = () => refreshLogs(btn.dataset.log);
       });
 
+      $("refreshPoliciesBtn").onclick = () => refreshPolicies();
+
       refreshHealth();
       refreshAgents();
+      refreshPolicies();
       refreshTools();
       refreshLogs("control");
       setInterval(refreshHealth, 5000);

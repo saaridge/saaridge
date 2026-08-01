@@ -7,7 +7,39 @@ contextBridge.exposeInMainWorld("onebridge", {
   showDesktop: () => ipcRenderer.invoke("onebridge:show-desktop"),
   hideDesktop: () => ipcRenderer.invoke("onebridge:hide-desktop"),
   focusDesktop: () => ipcRenderer.invoke("onebridge:focus-desktop"),
-  openApiKey: () => ipcRenderer.invoke("onebridge:open-api-key"),
+  /** @param {"policies"|"apikey"|"microphone"} [pane] */
+  openSettings: (pane) =>
+    ipcRenderer.invoke("onebridge:open-settings", pane || "policies"),
+  // Back-compat aliases
+  openApiKey: () => ipcRenderer.invoke("onebridge:open-settings", "apikey"),
+  openPolicies: () => ipcRenderer.invoke("onebridge:open-settings", "policies"),
+  getMicPrefs: () => ipcRenderer.invoke("onebridge:mic-prefs-get"),
+  setMicPrefs: (prefs) => ipcRenderer.invoke("onebridge:mic-prefs-set", prefs),
+  /** Capture page → main status updates */
+  micStatus: (payload) => {
+    try {
+      ipcRenderer.send("onebridge:mic-status", payload);
+    } catch (_) {}
+  },
+  onMicCommand: (cb) => {
+    const handler = (_event, cmd) => {
+      try {
+        cb(cmd);
+      } catch (_) {}
+    };
+    ipcRenderer.on("onebridge:mic-command", handler);
+    return () => ipcRenderer.removeListener("onebridge:mic-command", handler);
+  },
+  onMicStatus: (cb) => {
+    const handler = (_event, payload) => {
+      try {
+        cb(payload);
+      } catch (_) {}
+    };
+    ipcRenderer.on("onebridge:mic-status-broadcast", handler);
+    return () =>
+      ipcRenderer.removeListener("onebridge:mic-status-broadcast", handler);
+  },
   /** Inject mouse into remote X (bypasses noVNC coordinate bugs). */
   injectMouse: (payload) => {
     try {

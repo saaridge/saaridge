@@ -59,7 +59,9 @@ fi
 
   DISPLAY=:1 xsetroot -solid "#1a2f28" 2>/dev/null || true
 
-  if command -v x11vnc >/dev/null 2>&1 && ! pgrep -x x11vnc >/dev/null 2>&1; then
+  # Prefer port liveness over pgrep: a crashed x11vnc can leave a zombie that
+  # still matches `pgrep -x x11vnc`, so the watchdog never restarts and :5900 stays down.
+  if command -v x11vnc >/dev/null 2>&1 && ! ss -lnt 2>/dev/null | grep -q ':5900 '; then
     # Wheel buttons 4/5 come from noVNC pointer events — keep injection on.
     x11vnc -display :1 -forever -shared -rfbport 5900 -nopw \
       -noncache -modtweak -xkb -noxdamage -noscrollcopyrect \
@@ -117,7 +119,7 @@ fi
       if ! ss -lnt 2>/dev/null | grep -q ':6080 '; then
         websockify --web=/usr/share/novnc 0.0.0.0:6080 localhost:5900 >/tmp/novnc.log 2>&1 &
       fi
-      if ! pgrep -x x11vnc >/dev/null 2>&1; then
+      if ! ss -lnt 2>/dev/null | grep -q ':5900 '; then
         x11vnc -display :1 -forever -shared -rfbport 5900 -nopw \
           -noncache -modtweak -xkb -noxdamage -noscrollcopyrect \
           -always_inject -xrandr resize \

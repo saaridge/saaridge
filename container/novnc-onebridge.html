@@ -403,9 +403,17 @@
         connectAudio();
       });
       rfb.addEventListener("desktopresize", () => {
-        lastResizeKey = "";
+        // Do not clear lastResizeKey / force another resize — that fought
+        // Electron's parallel resize and flipped scaleViewport every frame.
         applyScaleMode();
-        scheduleSync(80);
+        const { w, h } = viewerSize();
+        const fbW = Number(rfb._fbWidth || 0);
+        const fbH = Number(rfb._fbHeight || 0);
+        if (fbW === w && fbH === h) {
+          lastResizeKey = `${w}x${h}`;
+        } else {
+          scheduleSync(200);
+        }
         setTimeout(grabKeyboardLocal, 60);
       });
       rfb.addEventListener("disconnect", (e) => {

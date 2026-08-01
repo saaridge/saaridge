@@ -391,6 +391,15 @@ export const uninstallAgent = async (agentId) => {
 
     removeAgentRecord(agentId);
     push("Revoked agent token on host (token no longer accepted by bridge)");
+    try {
+      const { removeAgentWorkspace } = await import("../bridge/data/paths.js");
+      const removed = removeAgentWorkspace(agentId);
+      push("Removed host workspace", true, { path: removed });
+    } catch (err) {
+      push("Host workspace cleanup skipped/failed", false, {
+        error: String(err?.message || err),
+      });
+    }
     return { ok: true, steps };
   } catch (err) {
     push("Uninstall failed", false, { error: String(err) });

@@ -734,11 +734,27 @@ const pipeInspected = (clientTls, upstreamTls, { agent, host }) => {
     } else {
       const statusCode = Number((head.split("\r\n")[0] || "").split(" ")[1]) || 0;
       // Media CDNs often 403 Node's MITM TLS fingerprint — adapt domain (no URL list).
+      // Drop this MITM session so the browser opens a fresh CONNECT that hits
+      // blind passthrough (same pattern as tlsClientError). Leaving the socket
+      // up keeps serving 403s on the inspected connection forever.
       if (
         !sawVaultOnConnection &&
         looksLikeMitmMediaRejection(statusCode, headers, lastClientReq)
       ) {
         markAdaptivePassthrough(host, "mitm_media_reject");
+        logBridge("mitm_media_reject_drop", {
+          agentId: agent.id,
+          host,
+          statusCode,
+          path: lastClientReq.path,
+        });
+        try {
+          if (!clientTls.destroyed) clientTls.destroy();
+        } catch (_) {}
+        try {
+          if (!upstreamTls.destroyed) upstreamTls.destroy();
+        } catch (_) {}
+        return;
       }
     }
 
