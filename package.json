@@ -14,7 +14,8 @@
     "container:down": "docker compose down",
     "logs": "docker compose logs -f agent-box",
     "test:data-plane": "node scripts/test-data-plane.mjs",
-    "test:mediated-fast-fs": "node scripts/test-mediated-fast-fs.mjs"
+    "test:mediated-fast-fs": "node scripts/test-mediated-fast-fs.mjs",
+    "test:mediation-guarantee": "node scripts/test-mediation-guarantee.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",

@@ -13,5 +13,6 @@ export {
   onNetResponse,
   resolveVaultForUpstream,
   hasVaultRefs,
+  requiresMediate,
   assertNoUnresolvedVaultRefs,
 } from "./pipeline.js";

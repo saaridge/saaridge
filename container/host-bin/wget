@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # wget shim — force bridge proxy.
+# vault:// / mediate header → bridge-owned vault_http (never TUNNEL).
 set -euo pipefail
 
 REAL_WGET="/usr/bin/wget"
@@ -12,6 +13,69 @@ fi
 if [[ ! -x "${REAL_WGET:-}" ]]; then
   echo "wget not found" >&2
   exit 127
+fi
+
+NEED_MEDIATE=0
+for arg in "$@"; do
+  case "$arg" in
+    *vault://*|*"X-OneBridge-Mediate"*|*"x-onebridge-mediate"*)
+      NEED_MEDIATE=1
+      break
+      ;;
+  esac
+done
+
+if [[ "$NEED_MEDIATE" -eq 1 ]]; then
+  if [[ ! -x /opt/bridge/host-bin/bridge-call ]]; then
+    echo "wget shim: vault:// requires bridge-call (MEDIATE) but it is missing" >&2
+    exit 1
+  fi
+  ARGS_JSON="$(python3 - "$@" <<'PY'
+import json, sys
+args = sys.argv[1:]
+method = "GET"
+url = None
+headers = {}
+body = None
+i = 0
+while i < len(args):
+    a = args[i]
+    if a in ("--method",) and i + 1 < len(args):
+        method = args[i + 1]
+        i += 2
+        continue
+    if a.startswith("--header="):
+        h = a.split("=", 1)[1]
+        if ":" in h:
+            k, v = h.split(":", 1)
+            headers[k.strip()] = v.strip()
+        i += 1
+        continue
+    if a in ("--header", "-H") and i + 1 < len(args):
+        h = args[i + 1]
+        if ":" in h:
+            k, v = h.split(":", 1)
+            headers[k.strip()] = v.strip()
+        i += 2
+        continue
+    if a in ("--post-data", "--body-data") and i + 1 < len(args):
+        body = args[i + 1]
+        method = "POST"
+        i += 2
+        continue
+    if a.startswith("http://") or a.startswith("https://"):
+        url = a
+        i += 1
+        continue
+    i += 1
+if not url:
+    print("wget shim: could not find URL for vault mediate", file=sys.stderr)
+    sys.exit(2)
+headers = {k: v for k, v in headers.items() if k.lower() != "x-onebridge-mediate"}
+print(json.dumps({"method": method, "url": url, "headers": headers, "body": body}))
+PY
+)"
+  exec /opt/bridge/host-bin/bridge-call vault_http "$ARGS_JSON"
 fi
 
 PROXY="${HTTP_PROXY:-${http_proxy:-}}"

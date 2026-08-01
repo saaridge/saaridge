@@ -65,7 +65,6 @@ exec /usr/lib/chromium/chromium \
   --start-maximized \
   --disable-features=TouchpadOverscrollHistoryNavigation,AudioServiceOutOfProcess \
   --disable-quic \
-  --disable-http2 \
   --autoplay-policy=no-user-gesture-required \
   --use-system-ca-store \
   --proxy-server="$PROXY" \

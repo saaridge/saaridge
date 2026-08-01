@@ -53,8 +53,8 @@ if [[ -d /host/home ]]; then
   echo "file:///host/home ${ONEBRIDGE_HOST_NAME} Home" > "$HOME/.config/gtk-3.0/bookmarks"
 fi
 
-# Point Cursor launchers at the mediated host workspace (also covers late installs)
-_cursor_exec_line="Exec=/usr/share/cursor/cursor --no-sandbox --disable-gpu --disable-dev-shm-usage \"${CURSOR_PROJECT_DIR}\""
+# Point Cursor launchers through launch-cursor.sh (proxy + MITM CA env).
+_cursor_exec_line="Exec=/opt/bridge/launch-cursor.sh \"${CURSOR_PROJECT_DIR}\""
 _patch_cursor_desktop() {
   local desk="$1"
   [[ -f "$desk" ]] || return 0

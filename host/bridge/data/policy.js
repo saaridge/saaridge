@@ -7,9 +7,31 @@ import {
   resolveHostPath,
   resolveUnderRoots,
 } from "./paths.js";
+import { PRIVATE_STATE_DIR, STATE_DIR } from "../../lib/paths.js";
 import { notifyHostHomeWriteDenied } from "../../lib/host-home-grant.js";
 
 const DEFAULT_MAX_BYTES = 50 * 1024 * 1024; // 50 MiB
+
+/** Deny Data API / FUSE access to bridge-private vault (ciphertext + keys). */
+export const assertNotPrivateVaultPath = (inputPath) => {
+  let resolved;
+  try {
+    resolved = path.resolve(resolveHostPath(inputPath));
+  } catch {
+    return;
+  }
+  const privateRoot = path.resolve(PRIVATE_STATE_DIR);
+  const legacyVault = path.resolve(STATE_DIR, "vault");
+  const under = (base) =>
+    resolved === base || resolved.startsWith(base + path.sep);
+  if (under(privateRoot) || under(legacyVault)) {
+    const err = new Error(
+      "Bridge private vault is not readable via the data plane",
+    );
+    err.code = "EACCES";
+    throw err;
+  }
+};
 
 /**
  * Build effective path policy for an agent.
@@ -80,11 +102,13 @@ export const effectiveRoots = (agent) => {
 };
 
 export const assertReadable = (agent, inputPath) => {
+  assertNotPrivateVaultPath(inputPath);
   const { readWrite, readOnly } = effectiveRoots(agent);
   return resolveUnderRoots(inputPath, [...readWrite, ...readOnly]);
 };
 
 export const assertWritable = (agent, inputPath) => {
+  assertNotPrivateVaultPath(inputPath);
   const roots = effectiveRoots(agent);
   try {
     return resolveUnderRoots(inputPath, roots.readWrite);

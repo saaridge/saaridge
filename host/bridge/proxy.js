@@ -10,6 +10,7 @@ import { ensureMitmCa, getHostCertificate } from "../lib/mitm-certs.js";
 import { HttpMessageTap, logTraffic } from "../lib/traffic-log.js";
 import { audit } from "./data/audit.js";
 import * as control from "./control/index.js";
+import { hasVaultRefs, requiresMediate } from "./vault/markers.js";
 import { shouldProcessNetText, isCompressedContent, shouldStreamOpaqueBody } from "./transformers/text.js";
 
 // Prefer IPv4 — Docker Desktop / some Wi‑Fi paths break IPv6 CONNECT tunnels
@@ -75,6 +76,19 @@ export const markAdaptivePassthrough = (host, reason) => {
   });
 };
 
+/** Drop adaptive blind so vault-bearing traffic can stay on MITM/MEDIATE. */
+export const clearAdaptivePassthrough = (host, reason) => {
+  const base = registrableBase(host);
+  if (!base) return;
+  if (!adaptivePassthroughByBase.has(base)) return;
+  adaptivePassthroughByBase.delete(base);
+  logBridge("proxy_adaptive_passthrough_cleared", {
+    host,
+    base,
+    reason: String(reason || "vault_mediate"),
+  });
+};
+
 const shouldPassthroughMitm = (host) => {
   const base = registrableBase(host);
   const row = adaptivePassthroughByBase.get(base);
@@ -90,9 +104,25 @@ const shouldPassthroughMitm = (host) => {
 export const looksLikeMitmBlockingChallenge = (body) => {
   const s = String(body || "").slice(0, 8000);
   if (!s) return false;
-  return /just a moment|cf-browser-verification|challenge-platform|cdn-cgi\/challenge|attention required|enable javascript and cookies/i.test(
+  return /just a moment|cf-browser-verification|challenge-platform|cdn-cgi\/challenge|attention required|enable javascript and cookies|turnstile|radar-challenge|cf-turnstile|challenges\.cloudflare\.com/i.test(
     s,
   );
+};
+
+/** URL/path signals that MITM is in a bot wall (mark before body arrives). */
+export const looksLikeMitmChallengeUrl = (urlOrPath) => {
+  const s = String(urlOrPath || "");
+  if (!s) return false;
+  return /cdn-cgi\/challenge|challenge-platform|\/turnstile\/|challenges\.cloudflare\.com|cf-browser-verification/i.test(
+    s,
+  );
+};
+
+/** Static frontend assets — never UTF-8-decode under MITM (corrupts bundles). */
+export const looksLikeStaticAssetUrl = (urlOrPath) => {
+  const s = String(urlOrPath || "").split("?")[0];
+  if (!s) return false;
+  return /\/_next\/static\/|\.js$|\.css$|\.mjs$|\.map$|\.woff2?$|\.ttf$/i.test(s);
 };
 
 /**
@@ -263,6 +293,16 @@ const releaseSession = (agentId) => {
 export const transformNetBody = async (agent, direction, msg) => {
   try {
     if (direction === "request") {
+      const mediate = requiresMediate({
+        url: msg.url,
+        headers: msg.headers,
+        body: msg.body,
+      });
+      // Blind adaptive cannot safely carry vault://. Clear the mark so this
+      // MITM path can resolve; callers on true TUNNEL never reach here.
+      if (mediate && msg.host && shouldPassthroughMitm(msg.host)) {
+        clearAdaptivePassthrough(msg.host, "vault_requires_mediate");
+      }
       const result = await control.onNetRequest({
         agent,
         url: msg.url,
@@ -276,7 +316,11 @@ export const transformNetBody = async (agent, direction, msg) => {
           body: "",
           denied: true,
           denyReason: result.denyReason || result.reason,
+          hadVault: mediate,
         };
+      }
+      if (mediate || result?.vaultResolved) {
+        clearAdaptivePassthrough(msg.host, "vault_resolved");
       }
       return {
         ...msg,
@@ -284,6 +328,7 @@ export const transformNetBody = async (agent, direction, msg) => {
         body: result.body !== undefined ? result.body : msg.body,
         headers: result.headers || msg.headers,
         vaultResolved: !!result.vaultResolved,
+        hadVault: mediate || !!result.vaultResolved,
       };
     }
     const result = await control.onNetResponse({
@@ -303,12 +348,15 @@ export const transformNetBody = async (agent, direction, msg) => {
       };
     }
     // Adaptive: CF / bot interstitial under MITM → next CONNECT for this domain
-    // is blind passthrough (no static URL list).
+    // is blind passthrough (no static URL list). Never after vault-bearing traffic.
     if (
       msg.host &&
-      looksLikeMitmBlockingChallenge(
-        result?.action === "rewrite" ? result.body : msg.body,
-      )
+      !msg.hadVault &&
+      !msg.vaultResolved &&
+      (looksLikeMitmChallengeUrl(msg.url || msg.path) ||
+        looksLikeMitmBlockingChallenge(
+          result?.action === "rewrite" ? result.body : msg.body,
+        ))
     ) {
       markAdaptivePassthrough(msg.host, "mitm_blocking_challenge");
     }
@@ -508,6 +556,7 @@ const encodeChunkedPiece = (data) => {
  */
 const pipeInspected = (clientTls, upstreamTls, { agent, host }) => {
   let mode = "http"; // http | ws | sse | opaque-body
+  let sawVaultOnConnection = false;
   let clientBuf = Buffer.alloc(0);
   let upstreamBuf = Buffer.alloc(0);
   let opaqueLeft = 0; // remaining body bytes to stream when mode === opaque-body
@@ -672,20 +721,35 @@ const pipeInspected = (clientTls, upstreamTls, { agent, host }) => {
         path: reqPath,
         headers: { ...headers },
       };
+      // CF challenge under MITM — mark domain so the *next* CONNECT is blind
+      // passthrough (runtime content/URL signal — not a site allowlist).
+      // Never adapt after vault-bearing traffic on this connection.
+      if (
+        !sawVaultOnConnection &&
+        (looksLikeMitmChallengeUrl(reqPath) ||
+          looksLikeMitmChallengeUrl(lastClientReq.url))
+      ) {
+        markAdaptivePassthrough(host, "mitm_challenge_url");
+      }
     } else {
       const statusCode = Number((head.split("\r\n")[0] || "").split(" ")[1]) || 0;
       // Media CDNs often 403 Node's MITM TLS fingerprint — adapt domain (no URL list).
-      if (looksLikeMitmMediaRejection(statusCode, headers, lastClientReq)) {
+      if (
+        !sawVaultOnConnection &&
+        looksLikeMitmMediaRejection(statusCode, headers, lastClientReq)
+      ) {
         markAdaptivePassthrough(host, "mitm_media_reject");
       }
     }
 
-    // Installers / large binaries: stream immediately (do not buffer entire .deb).
-    // Requests still go through vault:// mediation above when text/headers apply.
+    // Installers / large binaries / Next static JS+CSS: stream immediately.
+    // UTF-8 decoding JS under MITM corrupts bundles and leaves login on "Loading".
     if (
       direction === "response" &&
       !chunked &&
-      shouldStreamOpaqueBody(headers, cl || 0)
+      (shouldStreamOpaqueBody(headers, cl || 0) ||
+        looksLikeStaticAssetUrl(lastClientReq.path) ||
+        /javascript|ecmascript|css|font\//i.test(ctype))
     ) {
       const headBuf = raw.slice(0, headerEnd + 4);
       const rest = raw.slice(headerEnd + 4);
@@ -795,7 +859,14 @@ const pipeInspected = (clientTls, upstreamTls, { agent, host }) => {
       headers,
       body: bodyText,
     };
-    msg = await transformNetBody(agent, direction, msg);
+    if (direction === "request" && (msg.hadVault || requiresMediate(msg))) {
+      sawVaultOnConnection = true;
+    }
+    msg = await transformNetBody(agent, direction, {
+      ...msg,
+      hadVault: sawVaultOnConnection || msg.hadVault,
+    });
+    if (msg.hadVault || msg.vaultResolved) sawVaultOnConnection = true;
     auditNet({
       ...msg,
       op: direction === "request" ? "net_request" : "net_response",
@@ -804,8 +875,9 @@ const pipeInspected = (clientTls, upstreamTls, { agent, host }) => {
     const dest = direction === "request" ? upstreamTls : clientTls;
     if (msg.denied) {
       if (direction === "request") {
+        const reason = String(msg.denyReason || "Forbidden").slice(0, 200);
         const deny = Buffer.from(
-          "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+          `HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: ${Buffer.byteLength(reason)}\r\nConnection: close\r\n\r\n${reason}`,
         );
         if (!clientTls.destroyed) clientTls.write(deny);
         clientTls.end();
@@ -919,6 +991,14 @@ export const startProxy = ({ port = 7332 } = {}) => {
         op: "net_request",
       };
       reqMsg = await transformNetBody(agent, "request", reqMsg);
+      if (
+        reqMsg.host &&
+        !reqMsg.hadVault &&
+        !reqMsg.vaultResolved &&
+        looksLikeMitmChallengeUrl(reqMsg.url || reqMsg.path)
+      ) {
+        markAdaptivePassthrough(reqMsg.host, "mitm_challenge_url");
+      }
       auditNet(reqMsg);
       if (reqMsg.denied) {
         releaseSession(agent.id);
@@ -1023,6 +1103,26 @@ export const startProxy = ({ port = 7332 } = {}) => {
     }
 
     const { host, portNum } = parseConnectTarget(req.url);
+
+    // vault:// must never ride CONNECT TUNNEL (body invisible). Deny early.
+    const connectHeaderBlob = Object.entries(req.headers || {})
+      .map(([k, v]) => `${k}: ${v}`)
+      .join("\n");
+    if (hasVaultRefs(req.url) || hasVaultRefs(connectHeaderBlob)) {
+      clientSocket.write(
+        "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n" +
+          "vault:// on CONNECT denied — use vault_http / bridge MEDIATE\n",
+      );
+      clientSocket.end();
+      auditNet({
+        agentId: agent.id,
+        op: "net_request",
+        ok: false,
+        error: "vault_on_connect_denied",
+        host,
+      });
+      return;
+    }
 
     try {
       assertProxyUrlAllowed(agent, `${host}:${portNum}`);
@@ -1170,17 +1270,28 @@ export const startProxy = ({ port = 7332 } = {}) => {
     );
 
     mitmServer.on("tlsClientError", (err) => {
+      // Client rejected MITM (pinning / custom trust). Mark domain for blind
+      // passthrough and drop this socket so the client retries CONNECT and
+      // lands on the passthrough path (needed for Cursor api*.cursor.sh login).
       markAdaptivePassthrough(host, `tls_client_error:${err?.code || err?.message || "unknown"}`);
       logBridge("mitm_tls_client_error", {
         agentId: agent.id,
         host,
         error: String(err),
       });
+      try {
+        mitmServer.close();
+      } catch (_) {}
+      try {
+        if (!clientSocket.destroyed) clientSocket.destroy();
+      } catch (_) {}
+      releaseOnce();
     });
 
     mitmServer.on("error", (err) => {
       logBridge("mitm_server_error", { host, error: String(err) });
       clientSocket.destroy();
+      releaseOnce();
     });
 
     mitmServer.emit("connection", clientSocket);

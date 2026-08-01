@@ -4,14 +4,13 @@
  */
 import * as lib from "./lib.js";
 import * as vault from "../vault/index.js";
+import { hasVaultRefs, requiresMediate } from "../vault/markers.js";
 import {
   shouldProcessFsText,
   shouldProcessNetText,
 } from "../transformers/text.js";
 
-const VAULT_REF_RE = /vault:\/\/[a-f0-9]+/i;
-
-export const hasVaultRefs = (value) => VAULT_REF_RE.test(String(value ?? ""));
+export { hasVaultRefs, requiresMediate };
 
 const resolveDeep = (agentId, value) => {
   if (value == null) return value;

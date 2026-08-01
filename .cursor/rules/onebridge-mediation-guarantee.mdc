@@ -16,6 +16,7 @@ Read and obey [`CONSTRAINTS.md`](../../CONSTRAINTS.md) for this repo.
 ## Always preserve
 
 - Host FS virtualization via Data API + control lib.
-- Bridge-owned handling of `vault://` (lib → resolve → upstream → lib on response).
-- Fail-closed network lock.
+- Bridge-owned handling of `vault://` (lib → resolve → upstream → lib on response); never blind TUNNEL for vault markers.
+- Encrypted vault at rest under `state/private/` (bridge-only).
+- Fail-closed network lock (IPv4 + IPv6 + DNS pin).
 - Adaptive (runtime) MITM passthrough only — no checked-in site lists. See `CONSTRAINTS.md`.

@@ -53,6 +53,7 @@ COPY container/audio-stream.mjs /opt/bridge/audio-stream.mjs
 COPY container/agent-env.sh /opt/bridge/agent-env.sh
 COPY container/bridge-browser.sh /opt/bridge/bridge-browser.sh
 COPY container/launch-browser.sh /opt/bridge/launch-browser.sh
+COPY container/launch-cursor.sh /opt/bridge/launch-cursor.sh
 COPY container/open-agent.sh /opt/bridge/open-agent.sh
 COPY container/open-install-assistant.sh /opt/bridge/open-install-assistant.sh
 COPY container/gtk-file-picker.py /opt/bridge/gtk-file-picker.py
@@ -77,6 +78,7 @@ COPY container/network-lock.sh /usr/local/bin/network-lock.sh
 COPY container/start-desktop.sh /usr/local/bin/start-desktop.sh
 COPY container/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /opt/bridge/bridge-browser.sh /opt/bridge/launch-browser.sh \
+      /opt/bridge/launch-cursor.sh \
       /opt/bridge/open-agent.sh /opt/bridge/open-install-assistant.sh \
       /opt/bridge/gtk-file-picker.py \
       /opt/bridge/list-workspace-apps.py \
