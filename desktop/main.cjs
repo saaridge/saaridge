@@ -322,7 +322,6 @@ const injectMouseToX = (payload) => {
 const injectKeyToX = (input) => {
   if (!desktopLive) return;
   if (input.type !== "keyDown") return;
-  if (input.isAutoRepeat) return;
   if (
     input.key === "Shift" ||
     input.key === "Control" ||
@@ -389,7 +388,6 @@ const attachKeyBridge = (webContents) => {
     ) {
       return;
     }
-    if (input.isAutoRepeat) return;
 
     event.preventDefault();
     forwardingKeys = true;

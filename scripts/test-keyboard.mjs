@@ -138,6 +138,24 @@ if (!dockerBoxRunning()) {
       );
     }
     ok(`remote terminal shows "${E2E_TEXT}"`);
+
+    // Auto-repeat: multiple BackSpace injections must delete characters.
+    prepareTarget();
+    for (const ch of "abcd") {
+      pump.stdin.write(`TYPE ${ch}\n`);
+    }
+    for (let i = 0; i < 3; i++) {
+      pump.stdin.write("KEY BackSpace\n");
+    }
+    pump.stdin.write("KEY Return\n");
+    await new Promise((r) => setTimeout(r, 800));
+    const afterBs = dockerExec(`cat ${OUT} 2>/dev/null || true`);
+    if (afterBs !== "a") {
+      throw new Error(
+        `auto-repeat BackSpace failed (expected "a", got ${JSON.stringify(afterBs)})`,
+      );
+    }
+    ok("repeated BackSpace deletes multiple characters");
   } catch (e) {
     fail("keyboard E2E (key-pump → remote terminal)", e);
   } finally {
