@@ -80,3 +80,14 @@ Auth: `Authorization: Bearer <agent-token>`. Header `X-OneBridge-FS: 1`.
 - Host Mac browser is unchanged (not forced through bridge).
 - Paths outside `~/OneBridge/` are denied by default.
 - `terminal_exec` cwd is restricted to allowlisted OneBridge roots.
+
+## Privacy Codex proof of concept
+
+`privacy-codex/` is a self-contained Python 3.11 proof of concept for detecting and
+tokenizing sensitive English text before it is sent to a Codex CLI agent. It uses
+local deterministic detectors and an optional lightweight, local statistical
+detector; no LLM is used in the redaction path. The component includes its own
+documentation, synthetic evaluation dataset, test suite, and packaging metadata.
+
+See [`privacy-codex/README.md`](privacy-codex/README.md) for installation, the
+redaction flow, and evaluation commands.
