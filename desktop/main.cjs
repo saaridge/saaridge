@@ -6,6 +6,9 @@
  * webContents (so macOS delivers keystrokes to it). Chrome (Settings, etc.)
  * is injected into that same document — BrowserView overlays are unreliable
  * for clicks when the window is not maximized on macOS.
+ *
+ * Keys are stolen in before-input-event and injected via xdotool key-pump
+ * into the focused X window (noVNC keyboard is unreliable in Electron).
  */
 const {
   app,
@@ -221,6 +224,37 @@ const XDOTOOL_SPECIAL = {
   " ": "space",
 };
 
+const stopInputPump = (pump) => {
+  if (!pump || pump.killed) return;
+  try {
+    pump.stdin?.end();
+  } catch (_) {}
+  try {
+    pump.kill();
+  } catch (_) {}
+};
+
+const restartInputPumps = () => {
+  stopInputPump(keyPump);
+  stopInputPump(mousePump);
+  keyPump = null;
+  mousePump = null;
+  ensureKeyPump();
+  ensureMousePump();
+};
+
+/** Keep macOS app shortcuts local — do not forward to the remote desktop. */
+const isLocalAppShortcut = (input) => {
+  if (input.type !== "keyDown") return false;
+  if (process.platform !== "darwin" || !input.meta) return false;
+  const key = String(input.key || "").toLowerCase();
+  return key === "q" || key === "w" || key === "h" || key === "m";
+};
+
+const installAppMenu = () => {
+  Menu.setApplicationMenu(null);
+};
+
 const ensureKeyPump = () => {
   if (keyPump && !keyPump.killed) return keyPump;
   keyPump = spawn(
@@ -284,7 +318,7 @@ const injectMouseToX = (payload) => {
   } catch (_) {}
 };
 
-/** Original path: Electron steals keys → xdotool into focused X window. */
+/** Electron steals keys → xdotool into focused X window (HEAD path). */
 const injectKeyToX = (input) => {
   if (!desktopLive) return;
   if (input.type !== "keyDown") return;
@@ -307,22 +341,44 @@ const injectKeyToX = (input) => {
   if (input.meta) mods.push("ctrl");
 
   let line;
-  if (input.key && input.key.length === 1 && !input.control && !input.alt && !input.meta) {
+  if (
+    input.key &&
+    input.key.length === 1 &&
+    !input.control &&
+    !input.alt &&
+    !input.meta
+  ) {
     line = `TYPE ${input.key}\n`;
   } else {
-    const base = XDOTOOL_SPECIAL[input.key] || (input.key.length === 1 ? input.key : null);
+    const base =
+      XDOTOOL_SPECIAL[input.key] ||
+      (input.key.length === 1 ? input.key : null);
     if (!base) return;
     const combo = mods.length ? `${mods.join("+")}+${base}` : base;
     line = `KEY ${combo}\n`;
   }
   try {
-    fs.appendFileSync("/tmp/onebridge-keys.log", `${new Date().toISOString()} ${line}`);
+    pump.stdin.write(line);
   } catch (_) {}
-  pump.stdin.write(line);
 };
 
 const attachKeyBridge = (webContents) => {
   webContents.on("before-input-event", (event, input) => {
+    if (isLocalAppShortcut(input)) {
+      event.preventDefault();
+      const key = String(input.key || "").toLowerCase();
+      if (key === "q") {
+        app.quit();
+      } else if (key === "w" && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.close();
+      } else if (key === "h" && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.hide();
+      } else if (key === "m" && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.minimize();
+      }
+      return;
+    }
+
     if (!desktopLive || forwardingKeys) return;
     if (input.type !== "keyDown" && input.type !== "keyUp") return;
     if (
@@ -333,6 +389,8 @@ const attachKeyBridge = (webContents) => {
     ) {
       return;
     }
+    if (input.isAutoRepeat) return;
+
     event.preventDefault();
     forwardingKeys = true;
     try {
@@ -349,6 +407,7 @@ const openDesktop = async () => {
   await mainWindow.loadURL(DESKTOP);
   desktopLive = true;
   await injectWorkspaceChrome();
+  restartInputPumps();
   // Titlebar inset is already applied by novnc-onebridge.html (?titlebar=44).
   setTimeout(focusDesktop, 100);
   setTimeout(focusDesktop, 500);
@@ -614,7 +673,7 @@ const createWindow = () => {
     },
   });
 
-  Menu.setApplicationMenu(null);
+  installAppMenu();
   mainWindow.webContents.setIgnoreMenuShortcuts(true);
   attachKeyBridge(mainWindow.webContents);
 
@@ -858,6 +917,7 @@ const startStreamHeal = () => {
         20_000,
       );
       if (ensure.ok && ensure.body?.ok) {
+        restartInputPumps();
         await openDesktop();
       }
     } finally {
