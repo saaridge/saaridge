@@ -18,10 +18,13 @@ const {
   Menu,
   dialog,
   session,
+  clipboard,
 } = require("electron");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
+const readline = require("node:readline");
+const { createHash } = require("node:crypto");
 
 const ROOT = path.resolve(__dirname, "..");
 const CONTROL = "http://127.0.0.1:3847";
@@ -37,7 +40,6 @@ let bootPollTimer = null;
 let consentPollTimer = null;
 let consentDialog = null;
 let desktopLive = false;
-let forwardingKeys = false;
 let streamHealTimer = null;
 let streamHealInFlight = false;
 let micCaptureWin = null;
@@ -205,24 +207,30 @@ const focusDesktop = () => {
 /** Persistent xdotool pipe — bypasses noVNC keyboard (unreliable in Electron). */
 let keyPump = null;
 let mousePump = null;
+/** Clipboard pump: SETB64/GET ↔ X11 CLIPBOARD (stdio request/response). */
+let clipboardPump = null;
+let clipboardRl = null;
+/** @type {Array<(line: string) => void>} */
+let clipboardWaiters = [];
+let clipboardChain = Promise.resolve();
+let clipboardHostPollTimer = null;
+let clipboardContainerPollTimer = null;
+let lastHostClipFp = "";
+let lastContainerClipFp = "";
+let lastContainerPrimaryFp = "";
+let lastHostPushedFp = "";
+let lastContainerPulledFp = "";
+let clipboardEchoUntil = 0;
+let clipboardSizeWarned = false;
 
-const XDOTOOL_SPECIAL = {
-  Backspace: "BackSpace",
-  Enter: "Return",
-  Escape: "Escape",
-  Tab: "Tab",
-  Delete: "Delete",
-  ArrowLeft: "Left",
-  ArrowUp: "Up",
-  ArrowRight: "Right",
-  ArrowDown: "Down",
-  Home: "Home",
-  End: "End",
-  PageUp: "Page_Up",
-  PageDown: "Page_Down",
-  Insert: "Insert",
-  " ": "space",
-};
+const CLIPBOARD_MAX_BYTES = 512 * 1024;
+const CLIPBOARD_HOST_POLL_MS = 350;
+const CLIPBOARD_CONTAINER_POLL_MS = 350;
+const CLIPBOARD_ECHO_MS = 1200;
+const CLIPBOARD_PASTE_SYNC_MS = 280;
+
+const clipFingerprint = (text) =>
+  createHash("sha256").update(String(text || ""), "utf8").digest("hex");
 
 const stopInputPump = (pump) => {
   if (!pump || pump.killed) return;
@@ -234,6 +242,32 @@ const stopInputPump = (pump) => {
   } catch (_) {}
 };
 
+const stopClipboardPump = () => {
+  clipboardWaiters.splice(0).forEach((w) => {
+    try {
+      w("");
+    } catch (_) {}
+  });
+  try {
+    clipboardRl?.close();
+  } catch (_) {}
+  clipboardRl = null;
+  stopInputPump(clipboardPump);
+  clipboardPump = null;
+};
+
+const stopClipboardSync = () => {
+  if (clipboardHostPollTimer) {
+    clearInterval(clipboardHostPollTimer);
+    clipboardHostPollTimer = null;
+  }
+  if (clipboardContainerPollTimer) {
+    clearInterval(clipboardContainerPollTimer);
+    clipboardContainerPollTimer = null;
+  }
+  stopClipboardPump();
+};
+
 const restartInputPumps = () => {
   stopInputPump(keyPump);
   stopInputPump(mousePump);
@@ -241,6 +275,9 @@ const restartInputPumps = () => {
   mousePump = null;
   ensureKeyPump();
   ensureMousePump();
+  stopClipboardPump();
+  ensureClipboardPump();
+  startClipboardSync();
 };
 
 /** Keep macOS app shortcuts local — do not forward to the remote desktop. */
@@ -299,6 +336,313 @@ const ensureMousePump = () => {
   return mousePump;
 };
 
+const ensureClipboardPump = () => {
+  if (clipboardPump && !clipboardPump.killed) return clipboardPump;
+  clipboardPump = spawn(
+    "docker",
+    [
+      "exec",
+      "-i",
+      "-u",
+      "browser",
+      "-e",
+      "DISPLAY=:1",
+      "agent-bridge-box",
+      "stdbuf",
+      "-oL",
+      "-eL",
+      "/opt/bridge/clipboard-pump.sh",
+    ],
+    { stdio: ["pipe", "pipe", "ignore"] },
+  );
+  clipboardRl = readline.createInterface({
+    input: clipboardPump.stdout,
+    crlfDelay: Infinity,
+  });
+  clipboardRl.on("line", (line) => {
+    const waiter = clipboardWaiters.shift();
+    if (waiter) waiter(String(line || ""));
+  });
+  clipboardPump.on("exit", () => {
+    clipboardPump = null;
+    try {
+      clipboardRl?.close();
+    } catch (_) {}
+    clipboardRl = null;
+    clipboardWaiters.splice(0).forEach((w) => {
+      try {
+        w("");
+      } catch (_) {}
+    });
+  });
+  return clipboardPump;
+};
+
+/** Serialize clipboard pump request/response. */
+const clipboardCommand = (line, timeoutMs = 1500) => {
+  clipboardChain = clipboardChain
+    .catch(() => {})
+    .then(
+      () =>
+        new Promise((resolve) => {
+          const pump = ensureClipboardPump();
+          if (!pump?.stdin?.writable) {
+            resolve("");
+            return;
+          }
+          let settled = false;
+          const finish = (val) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            resolve(val);
+          };
+          const timer = setTimeout(() => finish(""), timeoutMs);
+          clipboardWaiters.push(finish);
+          try {
+            pump.stdin.write(`${line}\n`);
+          } catch (_) {
+            // Drop waiter we just pushed
+            const idx = clipboardWaiters.lastIndexOf(finish);
+            if (idx >= 0) clipboardWaiters.splice(idx, 1);
+            finish("");
+          }
+        }),
+    );
+  return clipboardChain;
+};
+
+const mediateHostClipboardText = async (text) => {
+  const raw = String(text || "");
+  if (!raw) return "";
+  if (Buffer.byteLength(raw, "utf8") > CLIPBOARD_MAX_BYTES) {
+    if (!clipboardSizeWarned) {
+      clipboardSizeWarned = true;
+      console.warn(
+        "[onebridge] clipboard sync skipped: text exceeds 512KiB cap",
+      );
+    }
+    return null; // signal skip
+  }
+  try {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 400);
+    const res = await fetch(`${CONTROL}/api/desktop/mediate-clipboard`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: raw }),
+      signal: ac.signal,
+    });
+    clearTimeout(timer);
+    const j = await res.json().catch(() => ({}));
+    if (j?.denied) return "";
+    return j?.text == null ? "" : String(j.text);
+  } catch (_) {
+    return ""; // fail-closed
+  }
+};
+
+const setContainerClipboard = async (text) => {
+  const raw = String(text ?? "");
+  const b64 = Buffer.from(raw, "utf8").toString("base64");
+  const reply = await clipboardCommand(`SETB64 ${b64}`, 2000);
+  if (String(reply).startsWith("OK")) {
+    const fp = clipFingerprint(raw);
+    lastHostPushedFp = fp;
+    lastContainerClipFp = fp;
+    lastContainerPrimaryFp = fp;
+    clipboardEchoUntil = Date.now() + CLIPBOARD_ECHO_MS;
+    return true;
+  }
+  return false;
+};
+
+/**
+ * Read X11 CLIPBOARD + PRIMARY. Many Linux apps put Ctrl+C in CLIPBOARD;
+ * selection-only / some terminals only update PRIMARY — we must watch both.
+ * @returns {{ clipboard: string, primary: string } | null}
+ */
+const getContainerSelections = async () => {
+  const reply = await clipboardCommand("GET", 2000);
+  if (!String(reply).startsWith("OKB64")) return null;
+  const rest = String(reply).slice(5).trim();
+  let cB64 = "";
+  let pB64 = "";
+  // New: "c=<b64> p=<b64>"  Legacy: bare "<b64>" or empty
+  const cm = rest.match(/(?:^|\s)c=([^\s]*)/);
+  const pm = rest.match(/(?:^|\s)p=([^\s]*)/);
+  if (cm || pm) {
+    cB64 = cm ? cm[1] : "";
+    pB64 = pm ? pm[1] : "";
+  } else if (rest) {
+    cB64 = rest;
+  }
+  const decode = (b) => {
+    if (!b) return "";
+    try {
+      return Buffer.from(b, "base64").toString("utf8");
+    } catch (_) {
+      return "";
+    }
+  };
+  return { clipboard: decode(cB64), primary: decode(pB64) };
+};
+
+const desktopWindowFocused = () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  return mainWindow.isFocused();
+};
+
+const pushHostClipboardIfChanged = async () => {
+  // Only push Mac→container while the workspace is focused (don't steal when
+  // the user is in another host app).
+  if (!desktopLive || !desktopWindowFocused()) return;
+  let hostText = "";
+  try {
+    hostText = clipboard.readText() || "";
+  } catch (_) {
+    return;
+  }
+  const fp = clipFingerprint(hostText);
+  if (fp === lastHostClipFp) return;
+  lastHostClipFp = fp;
+  if (Date.now() < clipboardEchoUntil && fp === lastContainerPulledFp) return;
+  if (fp === lastHostPushedFp) return;
+  const mediated = await mediateHostClipboardText(hostText);
+  if (mediated === null) return; // oversize skip
+  await setContainerClipboard(mediated);
+};
+
+const pullContainerClipboardIfChanged = async () => {
+  // Pull whenever the desktop session is live — user often copies in-container
+  // then immediately Cmd/Ctrl+Tabs to a host app to paste.
+  if (!desktopLive) return;
+  const sels = await getContainerSelections();
+  if (!sels) return;
+
+  const cFp = clipFingerprint(sels.clipboard);
+  const pFp = clipFingerprint(sels.primary);
+  const clipChanged = cFp !== lastContainerClipFp;
+  const primChanged = pFp !== lastContainerPrimaryFp;
+  if (!clipChanged && !primChanged) return;
+
+  // Prefer the selection that actually changed; CLIPBOARD wins if both did.
+  let remote = "";
+  let usedFp = "";
+  if (clipChanged && sels.clipboard) {
+    remote = sels.clipboard;
+    usedFp = cFp;
+  } else if (primChanged && sels.primary) {
+    remote = sels.primary;
+    usedFp = pFp;
+  } else if (clipChanged) {
+    // Cleared clipboard — still update fingerprints, don't wipe host
+    lastContainerClipFp = cFp;
+    lastContainerPrimaryFp = pFp;
+    return;
+  } else {
+    lastContainerClipFp = cFp;
+    lastContainerPrimaryFp = pFp;
+    return;
+  }
+
+  lastContainerClipFp = cFp;
+  lastContainerPrimaryFp = pFp;
+
+  if (Date.now() < clipboardEchoUntil && usedFp === lastHostPushedFp) return;
+  if (usedFp === lastContainerPulledFp) return;
+  try {
+    clipboard.writeText(remote);
+    lastContainerPulledFp = usedFp;
+    lastHostClipFp = usedFp;
+    clipboardEchoUntil = Date.now() + CLIPBOARD_ECHO_MS;
+  } catch (_) {}
+};
+
+const startClipboardSync = () => {
+  if (clipboardHostPollTimer) clearInterval(clipboardHostPollTimer);
+  if (clipboardContainerPollTimer) clearInterval(clipboardContainerPollTimer);
+  // Seed fingerprints so we don't immediately overwrite host with stale X clip.
+  void (async () => {
+    try {
+      const hostText = clipboard.readText() || "";
+      lastHostClipFp = clipFingerprint(hostText);
+      lastHostPushedFp = lastHostClipFp;
+      const sels = await getContainerSelections();
+      if (sels) {
+        lastContainerClipFp = clipFingerprint(sels.clipboard);
+        lastContainerPrimaryFp = clipFingerprint(sels.primary);
+        // Prefer not to yank stale X into host on boot; wait for a real change.
+        lastContainerPulledFp = lastContainerClipFp || lastContainerPrimaryFp;
+      }
+    } catch (_) {}
+  })();
+  clipboardHostPollTimer = setInterval(() => {
+    void pushHostClipboardIfChanged();
+  }, CLIPBOARD_HOST_POLL_MS);
+  clipboardContainerPollTimer = setInterval(() => {
+    void pullContainerClipboardIfChanged();
+  }, CLIPBOARD_CONTAINER_POLL_MS);
+};
+
+/** Sync host pasteboard into X before Ctrl/Cmd+V (never drop the key). */
+const syncHostClipboardForPaste = async () => {
+  let hostText = "";
+  try {
+    hostText = clipboard.readText() || "";
+  } catch (_) {
+    return;
+  }
+  // CONSTRAINTS: host→agent-visible text must pass control/lib (fail-closed).
+  const mediated = await mediateHostClipboardText(hostText);
+  if (mediated === null) return;
+  await Promise.race([
+    setContainerClipboard(mediated),
+    new Promise((r) => setTimeout(r, CLIPBOARD_PASTE_SYNC_MS)),
+  ]);
+};
+
+/**
+ * Editing chords that must reach the Linux desktop as Ctrl+… (macOS Cmd ≡ Ctrl).
+ * Only Cmd/Ctrl+V moves host pasteboard bytes into the container — that path is
+ * mediated. A/Z/S/X/C/F are keystrokes only (no host text ingress).
+ */
+const EDITING_CHORD_KEYS = new Set([
+  "a", // select all
+  "z", // undo (Shift+Z → redo when shift held)
+  "y", // redo (common)
+  "x", // cut
+  "c", // copy
+  "v", // paste (mediated pre-sync)
+  "s", // save
+  "f", // find
+]);
+
+const isEditingChord = (input) => {
+  if (input.type !== "keyDown") return false;
+  if (!(input.control || input.meta)) return false;
+  if (input.alt) return false;
+  const key = String(input.key || "").toLowerCase();
+  return EDITING_CHORD_KEYS.has(key);
+};
+
+/** Paste shortcuts: Ctrl+V everywhere; Cmd+V on macOS → same remote Ctrl+V. */
+const isPasteShortcut = (input) => {
+  if (input.type !== "keyDown") return false;
+  const key = String(input.key || "").toLowerCase();
+  if (key === "v" && (input.control || input.meta)) return true;
+  if (key === "insert" && input.shift && !input.meta && !input.alt) return true;
+  return false;
+};
+
+/** Copy/cut in the container → refresh host pasteboard promptly (host is trusted). */
+const isCopyOrCutShortcut = (input) => {
+  if (input.type !== "keyDown") return false;
+  if (!(input.control || input.meta) || input.alt) return false;
+  const key = String(input.key || "").toLowerCase();
+  return key === "c" || key === "x";
+};
+
 const injectMouseToX = (payload) => {
   if (!desktopLive || !payload) return;
   const pump = ensureMousePump();
@@ -321,41 +665,11 @@ const injectMouseToX = (payload) => {
 /** Electron steals keys → xdotool into focused X window (HEAD path). */
 const injectKeyToX = (input) => {
   if (!desktopLive) return;
-  if (input.type !== "keyDown") return;
-  if (
-    input.key === "Shift" ||
-    input.key === "Control" ||
-    input.key === "Alt" ||
-    input.key === "Meta"
-  ) {
-    return;
-  }
-
+  const { buildKeyPumpCommand } = require("./key-inject.cjs");
+  const line = buildKeyPumpCommand(input);
+  if (!line) return;
   const pump = ensureKeyPump();
   if (!pump?.stdin?.writable) return;
-
-  const mods = [];
-  if (input.control) mods.push("ctrl");
-  if (input.alt) mods.push("alt");
-  if (input.meta) mods.push("ctrl");
-
-  let line;
-  if (
-    input.key &&
-    input.key.length === 1 &&
-    !input.control &&
-    !input.alt &&
-    !input.meta
-  ) {
-    line = `TYPE ${input.key}\n`;
-  } else {
-    const base =
-      XDOTOOL_SPECIAL[input.key] ||
-      (input.key.length === 1 ? input.key : null);
-    if (!base) return;
-    const combo = mods.length ? `${mods.join("+")}+${base}` : base;
-    line = `KEY ${combo}\n`;
-  }
   try {
     pump.stdin.write(line);
   } catch (_) {}
@@ -378,7 +692,7 @@ const attachKeyBridge = (webContents) => {
       return;
     }
 
-    if (!desktopLive || forwardingKeys) return;
+    if (!desktopLive) return;
     if (input.type !== "keyDown" && input.type !== "keyUp") return;
     if (
       input.key === "Shift" ||
@@ -386,15 +700,36 @@ const attachKeyBridge = (webContents) => {
       input.key === "Alt" ||
       input.key === "Meta"
     ) {
+      // Still swallow so noVNC does not see bare modifiers without keyDown pairs.
+      event.preventDefault();
       return;
     }
 
+    // Always take keys so Electron/macOS/noVNC never eat Ctrl/Cmd editing chords.
     event.preventDefault();
-    forwardingKeys = true;
-    try {
-      injectKeyToX(input);
-    } finally {
-      forwardingKeys = false;
+    if (input.type !== "keyDown") return;
+    // Drop auto-repeat for chords; keep repeat for plain characters via TYPE path.
+    if (input.isAutoRepeat && (input.control || input.meta || input.alt)) return;
+
+    if (isPasteShortcut(input)) {
+      // Do not block the whole keyboard on clipboard sync — only this paste.
+      void (async () => {
+        try {
+          await syncHostClipboardForPaste();
+        } catch (_) {}
+        injectKeyToX(input);
+      })();
+      return;
+    }
+
+    injectKeyToX(input);
+    // After copy/cut in the guest, pull X CLIPBOARD/PRIMARY onto the host soon.
+    if (isCopyOrCutShortcut(input)) {
+      for (const ms of [80, 200, 450, 900]) {
+        setTimeout(() => {
+          void pullContainerClipboardIfChanged();
+        }, ms);
+      }
     }
   });
 };
@@ -480,28 +815,49 @@ const startHostIfNeeded = async () => {
     progress: 3,
     message: "Starting control plane…",
   });
-  if (await fetchOk(`${CONTROL}/api/health`)) {
+
+  const modulesOk = async () => {
+    const r = await fetchJson(`${CONTROL}/api/desktop/stream-health`, {}, 5000);
+    // 200/503 = stream-stack loaded; 500 = import/syntax crash
+    return r.status === 200 || r.status === 503;
+  };
+
+  if ((await fetchOk(`${CONTROL}/api/health`)) && (await modulesOk())) {
     return { already: true };
   }
+
+  // Prefer the supervised start-host.sh so crashes are recovered automatically.
   const logPath = "/tmp/onebridge-desktop-host.log";
   const out = fs.openSync(logPath, "a");
-  const nodeBin = process.env.NODE_BINARY || "node";
   const env = { ...process.env };
   delete env.ELECTRON_RUN_AS_NODE;
-  hostChild = spawn(nodeBin, ["host/index.js"], {
+  const startHostSh = path.join(ROOT, "scripts", "start-host.sh");
+  hostChild = spawn("bash", [startHostSh], {
     cwd: ROOT,
     detached: true,
     stdio: ["ignore", out, out],
     env,
   });
   hostChild.unref();
-  await waitFor(`${CONTROL}/api/health`, "control plane");
-  return { already: false, logPath };
+
+  for (let i = 0; i < 60; i++) {
+    if ((await fetchOk(`${CONTROL}/api/health`)) && (await modulesOk())) {
+      return { already: false, logPath };
+    }
+    await sleep(500);
+  }
+  throw new Error(
+    `Timed out waiting for control plane (${CONTROL}). See ${logPath} and /tmp/onebridge-host.log`,
+  );
 };
 
-/** Ensure control plane is reachable; restart it if it died mid-boot. */
+/** Ensure control plane is reachable and modules load; restart if it died mid-boot. */
 const ensureControlPlane = async () => {
-  if (await fetchOk(`${CONTROL}/api/health`)) return;
+  const modulesOk = async () => {
+    const r = await fetchJson(`${CONTROL}/api/desktop/stream-health`, {}, 5000);
+    return r.status === 200 || r.status === 503;
+  };
+  if ((await fetchOk(`${CONTROL}/api/health`)) && (await modulesOk())) return;
   sendBoot({
     phase: "host",
     progress: 4,
@@ -716,6 +1072,7 @@ const createWindow = () => {
   mainWindow.on("closed", () => {
     stopBootPoll();
     stopStreamHeal();
+    stopClipboardSync();
     desktopLive = false;
     mainWindow = null;
   });
@@ -774,8 +1131,10 @@ const openSettingsWindow = (pane = "policies") => {
   // Same pattern as the committed API-key dialog: child modal only —
   // Child modal — does not affect workspace chrome in the main window.
   const dlg = new BrowserWindow({
-    width: 760,
-    height: 580,
+    width: 880,
+    height: 720,
+    minWidth: 720,
+    minHeight: 520,
     parent: mainWindow || undefined,
     modal: true,
     show: true,
@@ -968,4 +1327,5 @@ app.on("window-all-closed", () => {
 });
 app.on("before-quit", () => {
   stopMicCapture();
+  stopClipboardSync();
 });

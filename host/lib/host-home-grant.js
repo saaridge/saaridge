@@ -5,6 +5,7 @@
 import path from "node:path";
 import os from "node:os";
 import { getAgentById, updateAgentRecord } from "./auth.js";
+import { isEphemeralAgentId } from "./ephemeral-agents.js";
 import { requestHostHomeWriteConsentPrompt } from "./ui-commands.js";
 import { logStep } from "./logger.js";
 
@@ -49,6 +50,7 @@ export const setHostHomeWriteGrant = (agentId, grant) => {
 /** Queue a desktop consent prompt (idempotent while pending). */
 export const notifyHostHomeWriteDenied = (agent, deniedPath) => {
   if (!agent?.id) return;
+  if (isEphemeralAgentId(agent.id, agent)) return;
   if (agentHasHostHomeWrite(agent)) return;
   requestHostHomeWriteConsentPrompt({
     agentId: agent.id,

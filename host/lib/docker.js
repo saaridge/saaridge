@@ -32,6 +32,9 @@ const setBoot = (patch) => {
   };
 };
 
+/** Let provisioners (desktop / hostfs ready) push live phase labels to the boot UI. */
+export const updateContainerBootStatus = (patch) => setBoot(patch);
+
 export const run = (command, args, opts = {}) =>
   new Promise((resolve) => {
     const child = spawn(command, args, {

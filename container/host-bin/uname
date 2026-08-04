@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# Report HOST OS identity (OneBridge virtualization). Real kernel: /bin/uname
+set -euo pipefail
+ID_FILE="${ONEBRIDGE_HOST_IDENTITY:-/opt/bridge/host-identity.json}"
+CRED="${BRIDGE_CREDENTIALS_FILE:-${ONEBRIDGE_SANDBOX_HOME:-/home/browser}/.bridge-credentials}"
+
+python3 - "$ID_FILE" "$CRED" "$@" <<'PY'
+import json, os, sys
+
+id_path = sys.argv[1]
+cred_path = sys.argv[2]
+flags = sys.argv[3:]
+
+def load():
+    for p in (id_path, os.path.expanduser("~/.onebridge-host-identity.json")):
+        try:
+            if os.path.isfile(p):
+                return json.load(open(p))
+        except Exception:
+            pass
+    try:
+        if os.path.isfile(cred_path):
+            c = json.load(open(cred_path))
+            plat = c.get("hostPlatform") or "darwin"
+            sysname = {"darwin": "Darwin", "win32": "Windows_NT"}.get(plat, "Linux")
+            arch = c.get("hostArch") or "arm64"
+            machine = "arm64" if arch == "arm64" else ("x86_64" if arch == "x64" else arch)
+            host = c.get("hostHostname") or "host"
+            release = c.get("hostRelease") or ""
+            return {
+                "uname": {
+                    "s": c.get("hostOsType") or sysname,
+                    "n": host,
+                    "r": release,
+                    "m": machine,
+                    "a": f"{c.get('hostOsType') or sysname} {host} {release} {machine}".strip(),
+                }
+            }
+    except Exception:
+        pass
+    return {
+        "uname": {
+            "s": "Darwin",
+            "n": "host",
+            "r": "",
+            "m": "arm64",
+            "a": "Darwin host",
+        }
+    }
+
+u = load().get("uname") or {}
+s = u.get("s") or "Darwin"
+n = u.get("n") or "host"
+r = u.get("r") or ""
+m = u.get("m") or "arm64"
+a = u.get("a") or f"{s} {n} {r} {m}".strip()
+
+if not flags or flags == ["-s"]:
+    print(s)
+elif flags == ["-n"]:
+    print(n)
+elif flags == ["-r"]:
+    print(r)
+elif flags == ["-m"]:
+    print(m)
+elif "-a" in flags:
+    print(a)
+else:
+    print(s)
+PY

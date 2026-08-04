@@ -3,15 +3,22 @@ import net from "node:net";
 import tls from "node:tls";
 import dns from "node:dns";
 import crypto from "node:crypto";
+import zlib from "node:zlib";
 import { URL } from "node:url";
 import { resolveAgentFromRequestHeaders } from "../lib/auth.js";
 import { logBridge } from "../lib/logger.js";
 import { ensureMitmCa, getHostCertificate } from "../lib/mitm-certs.js";
 import { HttpMessageTap, logTraffic } from "../lib/traffic-log.js";
 import { audit } from "./data/audit.js";
+import { sanitizeNetAuditEntry } from "./data/audit-sanitize.js";
 import * as control from "./control/index.js";
 import { hasVaultRefs, requiresMediate } from "./vault/markers.js";
-import { shouldProcessNetText, isCompressedContent, shouldStreamOpaqueBody } from "./transformers/text.js";
+import {
+  shouldProcessNetText,
+  isCompressedContent,
+  shouldStreamOpaqueBody,
+  isOpaqueRpcContentType,
+} from "./transformers/text.js";
 
 // Prefer IPv4 — Docker Desktop / some Wi‑Fi paths break IPv6 CONNECT tunnels
 // (Chromium shows ERR_TUNNEL_CONNECTION_FAILED).
@@ -46,6 +53,14 @@ const MULTI_PART_TLDS = new Set([
   "com.cn",
 ]);
 
+/**
+ * TTL for adaptive blind. Chromium Root Store / Electron clients often never
+ * come to trust a private MITM CA — keep the same long window for UNKNOWN_CA
+ * so Node (which *does* trust via NODE_EXTRA_CA_CERTS) is not bounced back
+ * onto HTTP/1.1-only MITM every few minutes.
+ */
+export const adaptiveTtlMsForReason = (_reason) => ADAPTIVE_PASSTHROUGH_TTL_MS;
+
 export const registrableBase = (host) => {
   const h = String(host || "")
     .toLowerCase()
@@ -63,16 +78,18 @@ export const registrableBase = (host) => {
 export const markAdaptivePassthrough = (host, reason) => {
   const base = registrableBase(host);
   if (!base) return;
+  const reasonStr = String(reason || "mitm_incompatible");
+  const ttlMs = adaptiveTtlMsForReason(reasonStr);
   adaptivePassthroughByBase.set(base, {
-    until: Date.now() + ADAPTIVE_PASSTHROUGH_TTL_MS,
-    reason: String(reason || "mitm_incompatible"),
+    until: Date.now() + ttlMs,
+    reason: reasonStr,
     sampleHost: String(host || base),
   });
   logBridge("proxy_adaptive_passthrough", {
     host,
     base,
-    reason: String(reason || "mitm_incompatible"),
-    ttlMs: ADAPTIVE_PASSTHROUGH_TTL_MS,
+    reason: reasonStr,
+    ttlMs,
   });
 };
 
@@ -136,17 +153,98 @@ export const looksLikeMitmMediaRejection = (statusCode, headers = {}, req = {}) 
   const url = String(req.url || req.path || "");
   const reqHeaders = req.headers || {};
   const accept = String(reqHeaders.accept || reqHeaders.Accept || "").toLowerCase();
-  const range = reqHeaders.range || reqHeaders.Range;
   const ctype = String(
     headers["content-type"] || headers["Content-Type"] || "",
   ).toLowerCase();
-  if (range) return true;
+  // Range alone is not enough — that would mark API domains on a ranged 401.
+  // Require media-shaped URL or Accept/Content-Type evidence.
   if (/videoplayback|mime=video|mime=audio|itag=\d+|\/video\/|\/audio\//i.test(url)) {
     return true;
   }
   if (/video\/|audio\//i.test(accept)) return true;
   if (/video\/|audio\//i.test(ctype)) return true;
   return false;
+};
+
+/** Max compressed body size to gunzip-copy for mediation (allow = original bytes). */
+const COMPRESSED_MEDIATE_MAX = 2 * 1024 * 1024;
+
+/**
+ * Decode gzip/deflate body for mediation. Returns null if too large or undecodable.
+ * @param {Record<string, string>} headers
+ * @param {Buffer} bodyBuf
+ * @returns {Buffer | null}
+ */
+export const tryDecodeCompressedBody = (headers, bodyBuf) => {
+  if (!Buffer.isBuffer(bodyBuf) || !bodyBuf.length) return null;
+  if (bodyBuf.length > COMPRESSED_MEDIATE_MAX) return null;
+  const enc = String(
+    headers["content-encoding"] || headers["Content-Encoding"] || "",
+  ).toLowerCase();
+  const magicGzip = bodyBuf.length >= 2 && bodyBuf[0] === 0x1f && bodyBuf[1] === 0x8b;
+  const isGzip = /gzip/.test(enc) || magicGzip;
+  const isDeflate = /deflate/.test(enc) && !magicGzip;
+  const isBr = /\bbr\b/.test(enc) || enc === "br";
+  if (!isGzip && !isDeflate && !magicGzip && !isBr) return null;
+  try {
+    if (isBr && !magicGzip) return zlib.brotliDecompressSync(bodyBuf);
+    if (isGzip || magicGzip) return zlib.gunzipSync(bodyBuf);
+    try {
+      return zlib.inflateSync(bodyBuf);
+    } catch {
+      return zlib.inflateRawSync(bodyBuf);
+    }
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Assemble a chunked transfer body into a single Buffer.
+ * Returns null if framing is incomplete or decoded size would exceed maxBytes.
+ * `framedBytes` is how many bytes of `chunkedBuf` form a complete chunked body.
+ * @param {Buffer} chunkedBuf body only (after headers)
+ * @param {number} maxBytes
+ * @returns {{ body: Buffer, complete: boolean, framedBytes: number } | null}
+ */
+export const decodeChunkedBody = (chunkedBuf, maxBytes = COMPRESSED_MEDIATE_MAX) => {
+  if (!Buffer.isBuffer(chunkedBuf)) return null;
+  const parts = [];
+  let offset = 0;
+  let total = 0;
+  while (offset < chunkedBuf.length) {
+    const lineEnd = chunkedBuf.indexOf("\r\n", offset);
+    if (lineEnd < 0) return null; // incomplete size line
+    const sizeLine = chunkedBuf.slice(offset, lineEnd).toString("latin1").split(";")[0].trim();
+    const size = parseInt(sizeLine, 16);
+    if (!Number.isFinite(size) || size < 0) return null;
+    offset = lineEnd + 2;
+    if (size === 0) {
+      // Optional trailers then final CRLF
+      if (chunkedBuf.slice(offset, offset + 2).toString("latin1") === "\r\n") {
+        return {
+          body: Buffer.concat(parts),
+          complete: true,
+          framedBytes: offset + 2,
+        };
+      }
+      const finalBlank = chunkedBuf.indexOf("\r\n\r\n", offset);
+      if (finalBlank < 0) return null;
+      return {
+        body: Buffer.concat(parts),
+        complete: true,
+        framedBytes: finalBlank + 4,
+      };
+    }
+    total += size;
+    if (total > maxBytes) {
+      return { body: Buffer.alloc(0), complete: false, overCap: true, framedBytes: 0 };
+    }
+    if (offset + size + 2 > chunkedBuf.length) return null; // incomplete chunk
+    parts.push(chunkedBuf.slice(offset, offset + size));
+    offset += size + 2; // data + CRLF
+  }
+  return null; // ran out without terminal 0 chunk
 };
 
 /** Parse CONNECT target; supports host:port and [ipv6]:port. */
@@ -208,6 +306,14 @@ const connectTcp = (port, host) =>
   });
 
 const pipeRaw = (a, b) => {
+  // Long-lived HTTP/2 / Connect-RPC streams need low latency and keepalives
+  // (enterprise agents; adaptive TUNNEL path — see CONSTRAINTS residual).
+  for (const s of [a, b]) {
+    try {
+      if (typeof s.setNoDelay === "function") s.setNoDelay(true);
+      if (typeof s.setKeepAlive === "function") s.setKeepAlive(true, 30_000);
+    } catch (_) {}
+  }
   a.pipe(b);
   b.pipe(a);
   const close = () => {
@@ -287,6 +393,87 @@ const releaseSession = (agentId) => {
   const n = agentSessions.get(id) || 0;
   if (n <= 1) agentSessions.delete(id);
   else agentSessions.set(id, n - 1);
+};
+
+/** Fail-closed result when mediation throws — never pass original body through. */
+export const mediationErrorResult = (msg) => ({
+  ...msg,
+  body: "",
+  denied: true,
+  denyReason: "mediation_error",
+});
+
+/**
+ * WS/SSE text mediation (CONSTRAINTS): control.lib only — never resolve vault://
+ * on stream bodies. Unresolved markers clear the unit. Errors fail closed (empty)
+ * and leave the socket up for the caller.
+ *
+ * @param {{ agent: object, host?: string, direction: "egress"|"ingress", text: string, channel?: "ws"|"sse" }} opts
+ * @returns {Promise<string>}
+ */
+export const mediateStreamText = async ({
+  agent,
+  host = "stream",
+  direction,
+  text,
+  channel = "ws",
+  /** @internal test-only override of control.lib */
+  _lib = null,
+}) => {
+  const raw = text == null ? "" : String(text);
+  if (!raw) return "";
+
+  const headers = {
+    "content-type":
+      channel === "sse" ? "text/event-stream" : "text/plain",
+  };
+  const url =
+    channel === "sse" ? `https://${host}/` : `wss://${host}/`;
+  const logOp =
+    channel === "sse" ? "sse_transform_error" : "ws_transform_error";
+  const libApi = _lib || control.lib;
+
+  let next = raw;
+  try {
+    let result;
+    if (direction === "egress") {
+      result = await libApi.onNetRequest({
+        agent,
+        url,
+        method: channel === "ws" ? "WEBSOCKET" : "POST",
+        headers,
+        body: next,
+      });
+    } else {
+      result = await libApi.onNetResponse({
+        agent,
+        url,
+        method: channel === "ws" ? "WEBSOCKET" : "GET",
+        status: channel === "ws" ? 101 : 200,
+        headers,
+        body: next,
+      });
+    }
+    if (result?.action === "deny") {
+      next = "";
+    } else if (result?.action === "rewrite" && result.body != null) {
+      next = String(result.body);
+    } else if (result?.body != null && result.action === "allow") {
+      next = String(result.body);
+    }
+  } catch (err) {
+    logBridge(logOp, {
+      error: String(err),
+      direction,
+      channel,
+      denyReason: "mediation_error",
+    });
+    return "";
+  }
+
+  // Never forward unresolved vault:// on streams (no resolve path here).
+  if (hasVaultRefs(next)) return "";
+  return next;
 };
 
 /** Mediation via control pipeline — vault:// resolved after lib.onNetRequest. */
@@ -374,16 +561,15 @@ export const transformNetBody = async (agent, direction, msg) => {
     };
   } catch (err) {
     logBridge("net_transform_error", { error: String(err) });
+    return mediationErrorResult(msg);
   }
-  return msg;
 };
 
 const auditNet = (entry) => {
-  audit({
-    plane: "net",
-    ...entry,
-  });
-  logTraffic(entry);
+  // Never persist resolved vault plaintext (CONSTRAINTS §3).
+  const safe = sanitizeNetAuditEntry({ plane: "net", ...entry });
+  audit(safe);
+  logTraffic(safe);
 };
 
 const rebuildHttpMessage = (direction, msg, originalHeaders, { force = false } = {}) => {
@@ -496,25 +682,14 @@ const pipeWebSocketText = (a, b, { agent, host }) => {
           if (mask) {
             for (let i = 0; i < payload.length; i++) payload[i] ^= mask[i % 4];
           }
-          let text = payload.toString("utf8");
-          try {
-            const result = await control.onNetResponse({
-              agent,
-              url: `wss://${host}/`,
-              method: "WEBSOCKET",
-              status: 101,
-              headers: { "content-type": "text/plain" },
-              body: text,
-            });
-            if (result?.action === "deny") {
-              text = "";
-            } else if (result?.action === "rewrite" && result.body != null) {
-              text = String(result.body);
-            }
-          } catch (err) {
-            logBridge("ws_transform_error", { error: String(err), label });
-          }
           const clientToServer = label === "client_to_server";
+          let text = await mediateStreamText({
+            agent,
+            host,
+            direction: clientToServer ? "egress" : "ingress",
+            text: payload.toString("utf8"),
+            channel: "ws",
+          });
           if (!to.destroyed) {
             to.write(buildWsTextFrame(text, { mask: clientToServer }));
           }
@@ -540,6 +715,8 @@ const pipeWebSocketText = (a, b, { agent, host }) => {
   makeTap(b, a, "server_to_client");
 };
 
+const CHUNKED_BODY_END = Buffer.from("\r\n0\r\n\r\n");
+
 /** Encode one HTTP/1.1 chunked body chunk (hex-size CRLF data CRLF). */
 const encodeChunkedPiece = (data) => {
   const buf = Buffer.isBuffer(data) ? data : Buffer.from(String(data), "utf8");
@@ -555,16 +732,25 @@ const encodeChunkedPiece = (data) => {
  * switch to WebSocket / SSE text mediation after headers.
  */
 const pipeInspected = (clientTls, upstreamTls, { agent, host }) => {
-  let mode = "http"; // http | ws | sse | opaque-body
+  let mode = "http"; // http | ws | sse | opaque-body | opaque-until-end | chunked-opaque
   let sawVaultOnConnection = false;
   let clientBuf = Buffer.alloc(0);
   let upstreamBuf = Buffer.alloc(0);
   let opaqueLeft = 0; // remaining body bytes to stream when mode === opaque-body
+  let chunkedOpaqueTail = Buffer.alloc(0);
+  let chunkedOpaqueDir = "response";
   /** @type {{ url: string, path: string, headers: Record<string, string> }} */
   let lastClientReq = { url: "", path: "", headers: {} };
 
   const onClientData = (chunk) => {
-    if (mode === "opaque-body") {
+    if (mode === "chunked-opaque" && chunkedOpaqueDir === "request") {
+      if (!upstreamTls.destroyed) upstreamTls.write(chunk);
+      const endCheck = Buffer.concat([chunkedOpaqueTail, chunk]);
+      if (endCheck.includes(CHUNKED_BODY_END)) mode = "http";
+      chunkedOpaqueTail = endCheck.slice(-8);
+      return;
+    }
+    if (mode === "opaque-body" || mode === "opaque-until-end") {
       // Client→server during download (rare); keep connection alive
       if (!upstreamTls.destroyed) upstreamTls.write(chunk);
       return;
@@ -573,6 +759,17 @@ const pipeInspected = (clientTls, upstreamTls, { agent, host }) => {
     void forwardHttpSide("request", chunk);
   };
   const onUpstreamData = (chunk) => {
+    if (mode === "chunked-opaque" && chunkedOpaqueDir === "response") {
+      if (!clientTls.destroyed) clientTls.write(chunk);
+      const endCheck = Buffer.concat([chunkedOpaqueTail, chunk]);
+      if (endCheck.includes(CHUNKED_BODY_END)) mode = "http";
+      chunkedOpaqueTail = endCheck.slice(-8);
+      return;
+    }
+    if (mode === "opaque-until-end") {
+      if (!clientTls.destroyed) clientTls.write(chunk);
+      return;
+    }
     if (mode === "opaque-body") {
       if (!clientTls.destroyed) clientTls.write(chunk);
       opaqueLeft -= chunk.length;
@@ -588,11 +785,23 @@ const pipeInspected = (clientTls, upstreamTls, { agent, host }) => {
 
   const rewriteAcceptEncoding = (buf) => {
     const text = buf.toString("latin1");
-    if (!/Accept-Encoding:/i.test(text) || !text.includes("\r\n\r\n")) return buf;
-    const next = text.replace(
-      /Accept-Encoding:[^\r\n]*/i,
-      "Accept-Encoding: gzip, deflate",
-    );
+    if (!text.includes("\r\n\r\n")) return buf;
+    // Prefer identity so MITM can mediate text without corrupting gzip bytes.
+    // Opaque/static/media paths still stream compressed bodies when servers insist.
+    if (/Accept-Encoding:/i.test(text)) {
+      const next = text.replace(
+        /Accept-Encoding:[^\r\n]*/i,
+        "Accept-Encoding: identity",
+      );
+      return Buffer.from(next, "latin1");
+    }
+    // Insert if missing (after first line)
+    const idx = text.indexOf("\r\n");
+    if (idx < 0) return buf;
+    const next =
+      text.slice(0, idx + 2) +
+      "Accept-Encoding: identity\r\n" +
+      text.slice(idx + 2);
     return Buffer.from(next, "latin1");
   };
 
@@ -629,25 +838,13 @@ const pipeInspected = (clientTls, upstreamTls, { agent, host }) => {
       if (!payload.length) return Buffer.alloc(0);
       let text = payload.toString("utf8");
       if (!shouldProcessNetText(headers, text)) return payload;
-      try {
-        const result = await control.onNetResponse({
-          agent,
-          url: `https://${host}/`,
-          method: "GET",
-          status: 200,
-          headers: {
-            ...headers,
-            "content-type": headers["content-type"] || "text/event-stream",
-          },
-          body: text,
-        });
-        if (result?.action === "deny") text = "";
-        else if (result?.action === "rewrite" && result.body != null) {
-          text = String(result.body);
-        }
-      } catch (err) {
-        logBridge("sse_transform_error", { error: String(err) });
-      }
+      text = await mediateStreamText({
+        agent,
+        host,
+        direction: direction === "request" ? "egress" : "ingress",
+        text,
+        channel: "sse",
+      });
       auditNet({
         agentId: agent.id,
         op: "sse_chunk",
@@ -709,9 +906,9 @@ const pipeInspected = (clientTls, upstreamTls, { agent, host }) => {
     const cl = headers["content-length"] ? Number(headers["content-length"]) : 0;
     const chunked = (headers["transfer-encoding"] || "").includes("chunked");
     const ctype = headers["content-type"] || "";
-    const isSse =
-      /text\/event-stream/i.test(ctype) ||
-      (/text\//i.test(ctype) && chunked && direction === "response");
+    // Only real SSE. Do NOT treat chunked text/html (SPA pages) as event-stream —
+    // that path stream-transforms and can yield empty/blank login pages.
+    const isSse = /text\/event-stream/i.test(ctype);
 
     if (direction === "request") {
       const reqLine = head.split("\r\n")[0] || "";
@@ -730,6 +927,25 @@ const pipeInspected = (clientTls, upstreamTls, { agent, host }) => {
           looksLikeMitmChallengeUrl(lastClientReq.url))
       ) {
         markAdaptivePassthrough(host, "mitm_challenge_url");
+      }
+      // gRPC / Connect-RPC need HTTP/2 (or SSE fallback). Our MITM inspector
+      // forces ALPN http/1.1 — opaque RPC under MITM hangs. Adapt + drop so
+      // the next CONNECT is a raw TUNNEL (generic content-type signal).
+      if (!sawVaultOnConnection && isOpaqueRpcContentType(ctype)) {
+        markAdaptivePassthrough(host, "mitm_opaque_rpc");
+        logBridge("mitm_opaque_rpc_drop", {
+          agentId: agent.id,
+          host,
+          path: reqPath,
+          contentType: ctype,
+        });
+        try {
+          if (!clientTls.destroyed) clientTls.destroy();
+        } catch (_) {}
+        try {
+          if (!upstreamTls.destroyed) upstreamTls.destroy();
+        } catch (_) {}
+        return;
       }
     } else {
       const statusCode = Number((head.split("\r\n")[0] || "").split(" ")[1]) || 0;
@@ -798,26 +1014,253 @@ const pipeInspected = (clientTls, upstreamTls, { agent, host }) => {
       return;
     }
 
-    if (chunked) {
-      // Non-SSE chunked: audit via tap, forward opaque
-      const side = new HttpMessageTap({
+    // Gzip/br without Content-Length (common after Accept-Encoding rewrite):
+    // must stream byte-for-byte until connection close — treating !cl as
+    // bodyless drops the payload and leaves SPAs blank.
+    if (
+      direction === "response" &&
+      !chunked &&
+      !cl &&
+      isCompressedContent(headers)
+    ) {
+      const headBuf = raw.slice(0, headerEnd + 4);
+      const rest = raw.slice(headerEnd + 4);
+      upstreamBuf = Buffer.alloc(0);
+      const dest = clientTls;
+      if (!dest.destroyed) {
+        dest.write(headBuf);
+        if (rest.length) dest.write(rest);
+      }
+      auditNet({
         agentId: agent.id,
+        op: "net_response",
         host,
-        direction,
-        onMessage: (msg) => {
-          void transformNetBody(agent, direction, msg).then((next) =>
-            auditNet({
-              ...next,
-              op: direction === "request" ? "net_request" : "net_response",
-            }),
-          );
-        },
+        statusCode: Number((head.split("\r\n")[0] || "").split(" ")[1]) || undefined,
+        streamingOpaque: true,
+        compressed: true,
+        contentType: ctype,
+        bytes: rest.length,
       });
-      side.push(raw);
+      mode = "opaque-until-end";
+      return;
+    }
+
+    if (chunked) {
+      // Buffer small non-SSE chunked bodies, mediate on the wire.
+      // Allow = original bytes; rewrite/deny = identity + Content-Length.
+      const bodyPart = raw.slice(headerEnd + 4);
       const dest = direction === "request" ? upstreamTls : clientTls;
-      if (!dest.destroyed) dest.write(raw);
-      if (direction === "request") clientBuf = Buffer.alloc(0);
-      else upstreamBuf = Buffer.alloc(0);
+      const startLine = head.split("\r\n")[0] || "";
+      const method = startLine.split(" ")[0];
+      const statusMatch = startLine.match(/HTTP\/\d\.\d\s+(\d+)/i);
+
+      // Too large to buffer safely — stream opaque (CONSTRAINTS non-goal),
+      // except vault-bearing *requests* which must not reach upstream unresolved.
+      if (bodyPart.length > COMPRESSED_MEDIATE_MAX) {
+        const headBuf = raw.slice(0, headerEnd + 4);
+        const rest = bodyPart;
+        const hdrBlob = Object.entries(headers || {})
+          .map(([k, v]) => `${k}: ${v}`)
+          .join("\n");
+        const vaultOnRequest =
+          direction === "request" &&
+          (hasVaultRefs(startLine) ||
+            hasVaultRefs(hdrBlob) ||
+            hasVaultRefs(rest.toString("utf8")));
+        if (vaultOnRequest) {
+          const reason = "vault:// on over-cap request denied — use vault_http";
+          const deny = Buffer.from(
+            `HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: ${Buffer.byteLength(reason)}\r\nConnection: close\r\n\r\n${reason}`,
+          );
+          if (!clientTls.destroyed) clientTls.write(deny);
+          clientTls.end();
+          upstreamTls.destroy();
+          auditNet({
+            agentId: agent.id,
+            op: "net_request",
+            host,
+            chunked: true,
+            mediated: false,
+            overCap: true,
+            hadVault: true,
+            denied: true,
+            error: "vault_over_cap_denied",
+          });
+          return;
+        }
+        if (direction === "request") clientBuf = Buffer.alloc(0);
+        else upstreamBuf = Buffer.alloc(0);
+        if (!dest.destroyed) {
+          dest.write(headBuf);
+          if (rest.length) dest.write(rest);
+        }
+        chunkedOpaqueDir = direction;
+        chunkedOpaqueTail = rest;
+        mode = "chunked-opaque";
+        auditNet({
+          agentId: agent.id,
+          op: direction === "request" ? "net_request" : "net_response",
+          host,
+          chunked: true,
+          mediated: false,
+          overCap: true,
+          bytes: rest.length,
+        });
+        return;
+      }
+
+      const assembled = decodeChunkedBody(bodyPart, COMPRESSED_MEDIATE_MAX);
+      if (assembled?.overCap) {
+        const headBuf = raw.slice(0, headerEnd + 4);
+        const rest = bodyPart;
+        const hdrBlob = Object.entries(headers || {})
+          .map(([k, v]) => `${k}: ${v}`)
+          .join("\n");
+        const vaultOnRequest =
+          direction === "request" &&
+          (hasVaultRefs(startLine) ||
+            hasVaultRefs(hdrBlob) ||
+            hasVaultRefs(rest.toString("utf8")));
+        if (vaultOnRequest) {
+          const reason = "vault:// on over-cap request denied — use vault_http";
+          const deny = Buffer.from(
+            `HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: ${Buffer.byteLength(reason)}\r\nConnection: close\r\n\r\n${reason}`,
+          );
+          if (!clientTls.destroyed) clientTls.write(deny);
+          clientTls.end();
+          upstreamTls.destroy();
+          auditNet({
+            agentId: agent.id,
+            op: "net_request",
+            host,
+            chunked: true,
+            mediated: false,
+            overCap: true,
+            hadVault: true,
+            denied: true,
+            error: "vault_over_cap_denied",
+          });
+          return;
+        }
+        if (direction === "request") clientBuf = Buffer.alloc(0);
+        else upstreamBuf = Buffer.alloc(0);
+        if (!dest.destroyed) {
+          dest.write(headBuf);
+          if (rest.length) dest.write(rest);
+        }
+        chunkedOpaqueDir = direction;
+        chunkedOpaqueTail = rest;
+        mode = "chunked-opaque";
+        auditNet({
+          agentId: agent.id,
+          op: direction === "request" ? "net_request" : "net_response",
+          host,
+          chunked: true,
+          mediated: false,
+          overCap: true,
+          bytes: rest.length,
+        });
+        return;
+      }
+      if (!assembled || !assembled.complete) {
+        // Wait for more chunks (same pattern as Content-Length wait).
+        return;
+      }
+
+      const msgEnd = headerEnd + 4 + assembled.framedBytes;
+      const fullMsg = raw.slice(0, msgEnd);
+      const restPipe = raw.slice(msgEnd);
+      if (direction === "request") clientBuf = restPipe;
+      else upstreamBuf = restPipe;
+
+      let bodyBuf = assembled.body;
+      const compressed = isCompressedContent(headers);
+      let bodyText;
+      let mediateHeaders = { ...headers };
+      if (compressed) {
+        const decoded = tryDecodeCompressedBody(headers, bodyBuf);
+        if (!decoded) {
+          if (!dest.destroyed) dest.write(fullMsg);
+          auditNet({
+            agentId: agent.id,
+            op: direction === "request" ? "net_request" : "net_response",
+            host,
+            chunked: true,
+            compressed: true,
+            mediated: false,
+            bytes: bodyBuf.length,
+          });
+          return;
+        }
+        bodyText = decoded.toString("utf8");
+        delete mediateHeaders["content-encoding"];
+        delete mediateHeaders["Content-Encoding"];
+      } else {
+        bodyText = bodyBuf.toString("utf8");
+      }
+      delete mediateHeaders["transfer-encoding"];
+      delete mediateHeaders["Transfer-Encoding"];
+      delete mediateHeaders["content-length"];
+      delete mediateHeaders["Content-Length"];
+
+      let msg = {
+        agentId: agent.id,
+        direction,
+        host,
+        method: direction === "request" ? method : undefined,
+        path: direction === "request" ? startLine.split(" ")[1] : undefined,
+        url:
+          direction === "request"
+            ? `https://${host}${startLine.split(" ")[1] || "/"}`
+            : `https://${host}`,
+        statusCode: statusMatch ? Number(statusMatch[1]) : undefined,
+        headers: mediateHeaders,
+        body: bodyText,
+      };
+      if (direction === "request" && (msg.hadVault || requiresMediate(msg))) {
+        sawVaultOnConnection = true;
+      }
+      msg = await transformNetBody(agent, direction, {
+        ...msg,
+        hadVault: sawVaultOnConnection || msg.hadVault,
+      });
+      if (msg.hadVault || msg.vaultResolved) sawVaultOnConnection = true;
+
+      const bodyChanged = String(msg.body ?? "") !== bodyText;
+      const needsRewrite = Boolean(msg.denied || msg.vaultResolved || bodyChanged);
+
+      auditNet({
+        ...msg,
+        op: direction === "request" ? "net_request" : "net_response",
+        chunked: true,
+        mediated: true,
+        rewritten: needsRewrite,
+      });
+
+      if (!needsRewrite) {
+        if (!dest.destroyed) dest.write(fullMsg);
+        return;
+      }
+
+      if (msg.denied) {
+        if (direction === "request") {
+          const reason = String(msg.denyReason || "Forbidden").slice(0, 200);
+          const deny = Buffer.from(
+            `HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: ${Buffer.byteLength(reason)}\r\nConnection: close\r\n\r\n${reason}`,
+          );
+          if (!clientTls.destroyed) clientTls.write(deny);
+          clientTls.end();
+          upstreamTls.destroy();
+          return;
+        }
+        msg.body = "";
+      }
+
+      const rebuilt = rebuildHttpMessage(direction, msg, mediateHeaders, {
+        force: true,
+      });
+      if (rebuilt && !dest.destroyed) dest.write(rebuilt);
+      else if (!dest.destroyed) dest.write(fullMsg);
       return;
     }
 
@@ -843,20 +1286,94 @@ const pipeInspected = (clientTls, upstreamTls, { agent, host }) => {
 
     const bodyBuf = messageBuf.slice(bodyStart);
     const statusMatch = startLine.match(/HTTP\/\d\.\d\s+(\d+)/i);
-    // Never UTF-8-decode compressed payloads for transforms (breaks sites like
-    // lichess under MITM while passthrough hosts like google still "work").
-    if (isCompressedContent(headers) || (bodyBuf.length >= 2 && bodyBuf[0] === 0x1f && bodyBuf[1] === 0x8b)) {
+    const compressed =
+      isCompressedContent(headers) ||
+      (bodyBuf.length >= 2 && bodyBuf[0] === 0x1f && bodyBuf[1] === 0x8b);
+
+    // Compressed: gunzip a copy for mediation; allow keeps original wire bytes.
+    if (compressed) {
       const dest = direction === "request" ? upstreamTls : clientTls;
-      if (!dest.destroyed) dest.write(messageBuf);
-      auditNet({
+      const decoded = tryDecodeCompressedBody(headers, bodyBuf);
+      if (!decoded) {
+        if (!dest.destroyed) dest.write(messageBuf);
+        auditNet({
+          agentId: agent.id,
+          op: direction === "request" ? "net_request" : "net_response",
+          host,
+          method: direction === "request" ? method : undefined,
+          statusCode: statusMatch ? Number(statusMatch[1]) : undefined,
+          compressed: true,
+          mediated: false,
+          bytes: bodyBuf.length,
+        });
+        return;
+      }
+
+      const mediateHeaders = { ...headers };
+      delete mediateHeaders["content-encoding"];
+      delete mediateHeaders["Content-Encoding"];
+      delete mediateHeaders["content-length"];
+      delete mediateHeaders["Content-Length"];
+
+      const bodyText = decoded.toString("utf8");
+      let msg = {
         agentId: agent.id,
-        op: direction === "request" ? "net_request" : "net_response",
+        direction,
         host,
         method: direction === "request" ? method : undefined,
+        path: direction === "request" ? startLine.split(" ")[1] : undefined,
+        url:
+          direction === "request"
+            ? `https://${host}${startLine.split(" ")[1] || "/"}`
+            : `https://${host}`,
         statusCode: statusMatch ? Number(statusMatch[1]) : undefined,
-        compressed: true,
-        bytes: bodyBuf.length,
+        headers: mediateHeaders,
+        body: bodyText,
+      };
+      if (direction === "request" && (msg.hadVault || requiresMediate(msg))) {
+        sawVaultOnConnection = true;
+      }
+      msg = await transformNetBody(agent, direction, {
+        ...msg,
+        hadVault: sawVaultOnConnection || msg.hadVault,
       });
+      if (msg.hadVault || msg.vaultResolved) sawVaultOnConnection = true;
+
+      const bodyChanged = String(msg.body ?? "") !== bodyText;
+      const needsRewrite = Boolean(msg.denied || msg.vaultResolved || bodyChanged);
+
+      auditNet({
+        ...msg,
+        op: direction === "request" ? "net_request" : "net_response",
+        compressed: true,
+        mediated: true,
+        rewritten: needsRewrite,
+      });
+
+      if (!needsRewrite) {
+        if (!dest.destroyed) dest.write(messageBuf);
+        return;
+      }
+
+      if (msg.denied) {
+        if (direction === "request") {
+          const reason = String(msg.denyReason || "Forbidden").slice(0, 200);
+          const deny = Buffer.from(
+            `HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: ${Buffer.byteLength(reason)}\r\nConnection: close\r\n\r\n${reason}`,
+          );
+          if (!clientTls.destroyed) clientTls.write(deny);
+          clientTls.end();
+          upstreamTls.destroy();
+          return;
+        }
+        msg.body = "";
+      }
+
+      const rebuilt = rebuildHttpMessage(direction, msg, mediateHeaders, {
+        force: true,
+      });
+      if (rebuilt && !dest.destroyed) dest.write(rebuilt);
+      else if (!dest.destroyed) dest.write(messageBuf);
       return;
     }
 
@@ -939,6 +1456,7 @@ const pipeInspected = (clientTls, upstreamTls, { agent, host }) => {
     if (mode === "http") upstreamTls.end();
   });
   upstreamTls.on("end", () => {
+    if (mode === "opaque-until-end" || mode === "chunked-opaque") mode = "http";
     if (mode === "http") clientTls.end();
   });
   clientTls.on("close", () => {

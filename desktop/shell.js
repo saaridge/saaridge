@@ -4,12 +4,39 @@
   const bootBar = document.getElementById("bootBar");
   const bootPct = document.getElementById("bootPct");
   const bootPhase = document.getElementById("bootPhase");
+  const bootCheck = document.getElementById("bootCheck");
+  const bootCheckPhase = document.getElementById("bootCheckPhase");
   const uiActions = document.getElementById("uiActions");
   const btnApiKey = document.getElementById("btnApiKey");
   const osBadge = document.getElementById("osBadge");
   const osLabel = document.getElementById("osLabel");
 
   let displayedProgress = 0;
+
+  /** Boot UI phase → short label under the progress bar. */
+  const PHASE_LABELS = {
+    boot: "Starting",
+    docker: "Docker",
+    host: "Control plane",
+    checking: "Workspace",
+    building: "Building image",
+    image_ready: "Image ready",
+    starting: "Starting container",
+    container_up: "Container",
+    desktop: "Desktop",
+    stream: "Desktop stream",
+    desktop_wait: "Desktop",
+    ready: "Ready",
+    error: "Error",
+    hostfs_start: "Host drive",
+    hostfs_credentials: "Host drive · credentials",
+    hostfs_watchdog: "Host drive · watchdog",
+    hostfs_mount: "Host drive · mount",
+    hostfs_browse: "Host drive · folders",
+    hostfs_remount: "Host drive · remount",
+    hostfs_ready: "Host drive · ready",
+    hostfs_error: "Host drive · failed",
+  };
 
   const showWorkspaceOs = (os) => {
     if (!os || !osLabel || !osBadge) return;
@@ -23,14 +50,26 @@
     displayedProgress = next;
     bootBar.style.width = `${next}%`;
     bootPct.textContent = `${Math.round(next)}%`;
-    if (phase) bootPhase.textContent = String(phase).replace(/_/g, " ");
+    if (phase) {
+      const key = String(phase);
+      bootPhase.textContent =
+        PHASE_LABELS[key] || key.replace(/_/g, " ");
+      if (bootCheck) {
+        bootCheck.hidden = key === "ready" || key === "error" || key === "idle";
+        if (bootCheckPhase) {
+          bootCheckPhase.textContent =
+            message || PHASE_LABELS[key] || key.replace(/_/g, " ");
+        }
+      }
+    }
     if (message) bootMsg.textContent = message;
   };
 
   const fail = (err) => {
     boot.classList.add("err");
     bootMsg.textContent = String(err?.message || err || "Failed to start");
-    bootPhase.textContent = "error";
+    bootPhase.textContent = "Error";
+    if (bootCheck) bootCheck.hidden = true;
   };
 
   if (window.onebridge?.onBoot) {

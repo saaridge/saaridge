@@ -237,3 +237,33 @@ export const onNetResponse = async ({
     headers: result?.headers || headers,
   };
 };
+
+/**
+ * Host clipboard → container (agent-visible). Fail-closed: deny/error → empty text.
+ */
+export const onClipboardIngress = async ({ agent, text }) => {
+  const raw = text == null ? "" : String(text);
+  try {
+    const result = await lib.onClipboardIngress({ agent, text: raw });
+    if (result?.action === "deny") {
+      return {
+        action: "deny",
+        reason: result.reason || "denied by onClipboardIngress",
+        text: "",
+      };
+    }
+    if (result?.action === "rewrite") {
+      return {
+        action: "rewrite",
+        text: result.data == null ? "" : String(result.data),
+      };
+    }
+    return { action: "allow", text: raw };
+  } catch (err) {
+    return {
+      action: "deny",
+      reason: err?.message || "clipboard_mediate_error",
+      text: "",
+    };
+  }
+};

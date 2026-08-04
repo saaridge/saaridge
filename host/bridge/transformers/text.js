@@ -60,6 +60,29 @@ const TEXT_CTYPE = [
   "+xml",
 ];
 
+/**
+ * RPC / framed binary protocols — never UTF-8 content-mediate under MITM.
+ * Generic (not app-specific): gRPC, Connect-RPC, protobuf wire formats.
+ */
+export const isOpaqueRpcContentType = (ctype = "") => {
+  const c = String(ctype || "").toLowerCase().split(";")[0].trim();
+  if (!c) return false;
+  if (c === "application/grpc" || c.startsWith("application/grpc+") || c.startsWith("application/grpc-")) {
+    return true;
+  }
+  if (c.startsWith("application/connect+")) return true;
+  if (
+    c === "application/proto" ||
+    c === "application/protobuf" ||
+    c === "application/x-protobuf" ||
+    c === "application/vnd.google.protobuf"
+  ) {
+    return true;
+  }
+  if (c.includes("protobuf") || c.includes("+proto")) return true;
+  return false;
+};
+
 export const isTextPath = (filePath = "") => {
   const base = String(filePath).split("?")[0];
   const i = base.lastIndexOf(".");
@@ -70,6 +93,7 @@ export const isTextPath = (filePath = "") => {
 export const isTextContentType = (ctype = "") => {
   const c = String(ctype || "").toLowerCase();
   if (!c) return false;
+  if (isOpaqueRpcContentType(c)) return false;
   return TEXT_CTYPE.some((p) => c.includes(p));
 };
 
@@ -114,6 +138,7 @@ export const shouldStreamOpaqueBody = (headers = {}, contentLength = 0) => {
   const ctype = String(
     headers["content-type"] || headers["Content-Type"] || "",
   ).toLowerCase();
+  if (isOpaqueRpcContentType(ctype)) return true;
   const disp = String(
     headers["content-disposition"] || headers["Content-Disposition"] || "",
   ).toLowerCase();
@@ -138,6 +163,9 @@ export const shouldProcessNetText = (headers = {}, body) => {
   if (isCompressedContent(headers)) return false;
 
   const ctype = headers["content-type"] || headers["Content-Type"] || "";
+  // gRPC / Connect / protobuf — never content-mediate (CONSTRAINTS: binary non-goal).
+  if (isOpaqueRpcContentType(ctype)) return false;
+
   if (isTextContentType(ctype)) {
     // Still refuse if payload looks like gzip magic despite missing header
     if (Buffer.isBuffer(body) && body.length >= 2 && body[0] === 0x1f && body[1] === 0x8b) {

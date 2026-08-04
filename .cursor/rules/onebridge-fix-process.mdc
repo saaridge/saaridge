@@ -1,0 +1,20 @@
+---
+description: Bug-fix discipline — CONSTRAINTS first, reliable recovery, regression tests, full npm test before done
+alwaysApply: true
+---
+
+# Fix process (mandatory before coding a fix)
+
+Read [`FIXING.md`](../../FIXING.md) and [`CONSTRAINTS.md`](../../CONSTRAINTS.md) **before** implementing a bug fix.
+
+## Required for every bug fix
+
+1. **Constraints first** — never weaken mediation / vault / fail-closed egress; no static hostname URL passthrough lists.
+2. **Reliable, not one-shot** — fix root cause **and** add startup ensure + runtime detect/recover when the failure can recur.
+3. **Regression test** — add/extend `scripts/test-*.mjs` that catches this class of bug; wire a `test:*` script when appropriate.
+4. **Health paths must not hang** — prefer `bash -c` (not `bash -lc`) for docker health/repair; always bound timeouts (FUSE STATs and RFB `recv` can block forever).
+5. **Before completing work** — run **`npm test`** (the full suite in `package.json`). Do not finish after only a focused `test:*` script. Fix failures or report blockers; do not skip.
+
+## Desktop black screen class
+
+If stream-health / ensure-stream / `bash -lc` hangs: treat as FUSE-or-login-shell deadlock until proven otherwise. See `host/lib/stream-stack.js` and `scripts/test-desktop-stream.mjs`.

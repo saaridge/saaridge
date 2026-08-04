@@ -1,9 +1,10 @@
-import os from "node:os";
 import { logBridge } from "../lib/logger.js";
 import { getTools, listAllTools } from "../lib/state.js";
 import * as dataApi from "./data/api.js";
 import { audit } from "./data/audit.js";
 import { getRoots } from "./data/api.js";
+import { hostOrientation } from "./data/paths.js";
+import { runHostExec } from "./host-exec.js";
 import * as vault from "./vault/index.js";
 import { vaultFetch } from "./vault/fetch.js";
 
@@ -82,23 +83,22 @@ const invokeBuiltin = async (name, args, agent) => {
   switch (name) {
     case "host_info": {
       const roots = agent ? getRoots(agent) : null;
+      const orientation = hostOrientation(agent || { id: "unknown" });
       return textResult(
         JSON.stringify(
           {
-            hostname: os.hostname(),
-            platform: os.platform(),
-            arch: os.arch(),
-            homedir: os.homedir(),
-            oneBridge: roots
+            ...orientation,
+            ...(roots
               ? {
-                  workspace: roots.workspace,
-                  shared: roots.shared,
-                  readWrite: roots.readWrite,
-                  readOnly: roots.readOnly,
+                  access: {
+                    workspace: roots.workspace,
+                    shared: roots.shared,
+                    readWrite: roots.readWrite,
+                    readOnly: roots.readOnly,
+                  },
                 }
-              : null,
-            note:
-              "File tools use the OneBridge data plane (virtualized). Network: vault_http / http_request via bridge processors. Host shell disabled.",
+              : {}),
+            note: orientation.note || orientation.shell?.note,
           },
           null,
           2,
@@ -115,8 +115,28 @@ const invokeBuiltin = async (name, args, agent) => {
         command: String(args.command || "").slice(0, 200),
       });
       return textResult(
-        "terminal_exec is disabled. Host shell bypasses mediation. Use read_file/write_file/list_dir and vault_http.",
+        "terminal_exec is disabled (unmediated host shell). Use host_exec — bridge runs on the host as the normal user and mediates stdout/stderr.",
         true,
+      );
+    }
+    case "host_exec": {
+      const result = await runHostExec(agent, args);
+      audit({
+        plane: "data",
+        op: "host_exec",
+        agentId: agent?.id,
+        ok: result.code === 0 && !result.stdoutDenied && !result.stderrDenied,
+        code: result.code,
+        cwd: result.cwd,
+        timedOut: result.timedOut,
+        command: String(result.command || "").slice(0, 200),
+      });
+      return textResult(
+        JSON.stringify(result, null, 2),
+        result.code !== 0 ||
+          result.timedOut ||
+          result.stdoutDenied ||
+          result.stderrDenied,
       );
     }
     case "read_file": {
@@ -196,6 +216,9 @@ export const mcpToolList = (agent = null) => {
     tools = tools.filter((t) => allow.has(t.name));
   }
   tools = tools.filter((t) => t.name !== "terminal_exec");
+  // host_exec stays callable via HTTP for host-shell; hide from MCP tool lists
+  // so agents just use the normal terminal (no tool wiring required).
+  tools = tools.filter((t) => t.name !== "host_exec");
   return tools.map((t) => ({
     name: t.name,
     description: t.description || "",

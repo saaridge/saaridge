@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Invoke a HOST bridge MCP tool from inside the container.
 # Usage: bridge-call <tool> [json-args]
+# Example: bridge-call host_exec '{"command":"uname -a"}'
 # Example: bridge-call read_file '{"path":"/Users/me/note.txt"}'
-# Example: bridge-call terminal_exec '{"command":"uname -a"}'
 set -euo pipefail
 
 TOOL="${1:-}"

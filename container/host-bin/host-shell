@@ -1,0 +1,138 @@
+#!/bin/bash
+# Mediated host shell — agent runs normal commands; bridge executes on the host
+# as the normal user and returns mediated stdout/stderr. No MCP tool required.
+#
+# Usage:
+#   host-shell                 # interactive
+#   host-shell -c 'uname -a'   # one shot (Cursor/agent terminals)
+#   host-shell -lc 'pwd'
+# IMPORTANT: shebang must be /bin/bash (not env bash) — host-bin/bash is a shim.
+set -euo pipefail
+
+CRED="${BRIDGE_CREDENTIALS_FILE:-${ONEBRIDGE_SANDBOX_HOME:-/home/browser}/.bridge-credentials}"
+BRIDGE_URL="${BRIDGE_URL:-http://host.docker.internal:7331}"
+CWD_HINT="${ONEBRIDGE_HOST_EXEC_CWD:-${ONEBRIDGE_PROJECTS:-}}"
+# When agents ask for home inside host-shell, match mediated host home.
+export HOME="${ONEBRIDGE_HOST_HOME:-${HOME:-/host/home}}"
+export ONEBRIDGE_HOST_HOME="${ONEBRIDGE_HOST_HOME:-/host/home}"
+
+if [[ ! -f "$CRED" ]]; then
+  echo "host-shell: missing credentials ($CRED)" >&2
+  exit 1
+fi
+
+run_one() {
+  local cmd="$1"
+  python3 - "$CRED" "$BRIDGE_URL" "$CWD_HINT" "$cmd" <<'PY'
+import json, os, sys, urllib.request
+
+cred_path, bridge, cwd_hint, command = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+cred = json.load(open(cred_path))
+token = cred["token"]
+args = {"command": command, "timeoutMs": 120000}
+# Prefer host-native workspace path if we only have /host hint — bridge resolves both.
+if cwd_hint:
+    args["cwd"] = cwd_hint
+
+body = json.dumps({"arguments": args}).encode()
+req = urllib.request.Request(
+    bridge.rstrip("/") + "/v1/tools/host_exec/invoke",
+    data=body,
+    headers={
+        "Authorization": "Bearer " + token,
+        "Content-Type": "application/json",
+    },
+    method="POST",
+)
+try:
+    # Never send bridge control-plane calls through the MITM auth-proxy.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(req, timeout=125) as resp:
+        raw = resp.read().decode("utf-8", "replace")
+except Exception as e:
+    print(f"host-shell: bridge error: {e}", file=sys.stderr)
+    raise SystemExit(1)
+
+try:
+    payload = json.loads(raw)
+except Exception:
+    print(raw)
+    raise SystemExit(1)
+
+text = ""
+if isinstance(payload.get("content"), list) and payload["content"]:
+    text = payload["content"][0].get("text") or ""
+else:
+    text = raw
+
+try:
+    result = json.loads(text)
+except Exception:
+    sys.stdout.write(text)
+    if not text.endswith("\n"):
+        sys.stdout.write("\n")
+    raise SystemExit(1 if payload.get("isError") else 0)
+
+out = result.get("stdout") or ""
+err = result.get("stderr") or ""
+if out:
+    sys.stdout.write(out if out.endswith("\n") else out + "\n")
+if err:
+    sys.stderr.write(err if err.endswith("\n") else err + "\n")
+if result.get("denyReason"):
+    sys.stderr.write(str(result["denyReason"]) + "\n")
+code = result.get("code")
+if result.get("timedOut"):
+    code = 124
+if payload.get("isError") and code == 0:
+    code = 1
+raise SystemExit(int(code if code is not None else 1))
+PY
+}
+
+# Non-interactive: host-shell -c '...' / -lc '...'
+if [[ "${1:-}" == "-c" || "${1:-}" == "-lc" || "${1:-}" == "-c--" ]]; then
+  shift
+  CMD="${1:-}"
+  if [[ -z "$CMD" ]]; then
+    echo "host-shell: missing command after -c" >&2
+    exit 2
+  fi
+  run_one "$CMD"
+  exit $?
+fi
+
+# Some agents pass: host-shell -l -c 'cmd'
+if [[ "${1:-}" == "-l" && "${2:-}" == "-c" ]]; then
+  run_one "${3:-}"
+  exit $?
+fi
+
+# Interactive REPL
+echo "OneBridge host shell — commands run on the host (user-level, mediated)."
+echo "cwd default: ${CWD_HINT:-workspace}  |  exit with Ctrl-D or 'exit'"
+while true; do
+  # Use a simple PS1; host prompt would require another round-trip.
+  if ! read -r -e -p "host$ " line; then
+    echo
+    break
+  fi
+  [[ -z "$line" ]] && continue
+  [[ "$line" == "exit" || "$line" == "quit" ]] && break
+  # Allow local cd to update cwd hint for subsequent commands (host path or /host/...).
+  if [[ "$line" == cd || "$line" == cd\ * ]]; then
+    target="${line#cd}"
+    target="${target## }"
+    target="${target:-$HOME}"
+    # Resolve relative against current hint if possible
+    if [[ "$target" != /* && "$target" != ~* ]]; then
+      base="${CWD_HINT:-/host/workspaces/workspace-desktop}"
+      target="${base%/}/$target"
+    fi
+    CWD_HINT="$target"
+    export ONEBRIDGE_HOST_EXEC_CWD="$CWD_HINT"
+    echo "$CWD_HINT"
+    continue
+  fi
+  run_one "$line" || true
+done

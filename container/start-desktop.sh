@@ -24,31 +24,67 @@ if [[ -f /opt/bridge/agent-env.sh ]]; then
   # shellcheck source=/dev/null
   source /opt/bridge/agent-env.sh
 fi
+# XFCE / desktop chrome must keep sandbox home (profiles, Desktop icons).
+# Agent-facing shells still get HOME=/host/home via profile.d + Cursor terminal env.
+export ONEBRIDGE_SANDBOX_HOME="${ONEBRIDGE_SANDBOX_HOME:-/home/browser}"
+export ONEBRIDGE_HOST_HOME="${ONEBRIDGE_HOST_HOME:-/host/home}"
+export HOME="${ONEBRIDGE_SANDBOX_HOME}"
+export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
+export BRIDGE_CREDENTIALS_FILE="${BRIDGE_CREDENTIALS_FILE:-$HOME/.bridge-credentials}"
 export ONEBRIDGE_PROJECTS="${ONEBRIDGE_PROJECTS:-/host/workspaces/workspace-desktop}"
 export CURSOR_PROJECT_DIR="${CURSOR_PROJECT_DIR:-$ONEBRIDGE_PROJECTS}"
 
 mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" \
-  "$HOME/Desktop" "$HOME/Downloads" "$HOME/chromium-bridge-profile" \
+  "$HOME/Desktop" "$HOME/chromium-bridge-profile" \
   "$HOME/.local/share/applications" 2>/dev/null || true
 
-# Wait for FUSE /host (watchdog may still be mounting after credentials land)
-for _ in $(seq 1 60); do
-  if [[ -d /host/workspaces ]] || findmnt -T /host 2>/dev/null | grep -q fuse; then
-    break
-  fi
-  sleep 0.5
-done
+# Wait for FUSE /host and prove folders browse within a budget (not just mounted).
+# Catches the access()-STAT freeze that makes Thunar look like a dead drive.
+if [[ -x /opt/bridge/hostfs-ready.sh ]]; then
+  HOSTFS_READY_TIMEOUT="${HOSTFS_READY_TIMEOUT:-45}" \
+  HOSTFS_BROWSE_BUDGET="${HOSTFS_BROWSE_BUDGET:-3}" \
+    /opt/bridge/hostfs-ready.sh >/tmp/hostfs-ready.log 2>&1 \
+    || echo "[start-desktop] WARN: /host browse readiness failed — see /tmp/hostfs-ready.log" >&2
+else
+  for _ in $(seq 1 60); do
+    if [[ -d /host/workspaces ]] || findmnt -T /host 2>/dev/null | grep -q fuse; then
+      break
+    fi
+    sleep 0.5
+  done
+fi
 mkdir -p "$ONEBRIDGE_PROJECTS" 2>/dev/null || true
 
 # Host machine label for Places / Desktop (from credentials → agent-env)
 ONEBRIDGE_HOST_NAME="${ONEBRIDGE_HOST_NAME:-Host}"
 ONEBRIDGE_HOST_HOME="${ONEBRIDGE_HOST_HOME:-/host/home}"
 
-# Host home only in Places / home links (RO via Data API). Drop legacy Projects/Host entries.
+# Host-home symlink + Places; keep sandbox home free of tourist folders.
 rm -f "$HOME/Projects" "$HOME/Host Home" "$HOME/host-home" \
-  "$HOME/Desktop/Host Projects" "$HOME/Desktop/Host-Projects" 2>/dev/null || true
+  "$HOME/Desktop/Host Projects" "$HOME/Desktop/Host-Projects" \
+  "$HOME/host-layout.json" 2>/dev/null || true
+rm -f "$HOME"/Unknown_*\ Home "$HOME/Desktop"/Unknown_*\ Home 2>/dev/null || true
+for _d in Documents Music Pictures Public Templates Videos; do
+  if [[ -d "$HOME/$_d" ]] && [[ -z "$(find "$HOME/$_d" -mindepth 1 -maxdepth 1 2>/dev/null | head -1)" ]]; then
+    rmdir "$HOME/$_d" 2>/dev/null || true
+  fi
+done
+# Stop xdg-user-dirs from recreating empty Music/Pictures/…
+mkdir -p "$HOME/.config" 2>/dev/null || true
+printf '%s\n' 'enabled=False' 'filename_encoding=UTF-8' >"$HOME/.config/user-dirs.conf"
 if [[ -d /host/home ]]; then
   ln -sfn /host/home "$HOME/${ONEBRIDGE_HOST_NAME} Home" 2>/dev/null || true
+  if [[ -d /host/home/Downloads ]]; then
+    if [[ -L "$HOME/Downloads" ]] || [[ ! -e "$HOME/Downloads" ]]; then
+      ln -sfn /host/home/Downloads "$HOME/Downloads" 2>/dev/null || true
+    elif [[ -d "$HOME/Downloads" ]] && [[ -z "$(find "$HOME/Downloads" -mindepth 1 -maxdepth 1 2>/dev/null | head -1)" ]]; then
+      rmdir "$HOME/Downloads" 2>/dev/null || true
+      ln -sfn /host/home/Downloads "$HOME/Downloads" 2>/dev/null || true
+    fi
+  else
+    mkdir -p "$HOME/Downloads" 2>/dev/null || true
+  fi
   mkdir -p "$HOME/.config/gtk-3.0" 2>/dev/null || true
   echo "file:///host/home ${ONEBRIDGE_HOST_NAME} Home" > "$HOME/.config/gtk-3.0/bookmarks"
 fi
@@ -98,8 +134,9 @@ done
 mkdir -p "$HOME/.config/Cursor/User"
 python3 - <<'PY' 2>/dev/null || true
 import json
+import os
 from pathlib import Path
-path = Path.home() / ".config/Cursor/User/settings.json"
+path = Path("/home/browser") / ".config/Cursor/User/settings.json"
 cur = {}
 if path.is_file():
     try:
@@ -150,8 +187,22 @@ cur["git.autoRepositoryDetection"] = False
 cur["git.detectSubmodules"] = False
 cur["git.enabled"] = False
 cur["window.restoreWindows"] = "none"
-# Drop stale backup restore that reopens huge /host trees on launch.
-backup = Path.home() / ".config/Cursor/User/globalStorage/storage.json"
+# Nested CONNECT often breaks HTTP/2 bidi; Cursor SSE fallback unblocks agent.
+cur["cursor.general.disableHttp2"] = True
+_env_proxy = (
+    os.environ.get("HTTPS_PROXY")
+    or os.environ.get("https_proxy")
+    or ""
+).strip()
+if not _env_proxy:
+    port = os.environ.get("LOCAL_PROXY_PORT") or "17999"
+    _env_proxy = f"http://127.0.0.1:{port}"
+cur["http.proxy"] = _env_proxy
+cur["http.proxySupport"] = "override"
+cur["http.systemCertificates"] = True
+cur["http.experimental.systemCertificatesV2"] = True
+# Drop stale backup restore that reopens huge /host trees or sandbox home on launch.
+backup = Path("/home/browser") / ".config/Cursor/User/globalStorage/storage.json"
 try:
     if backup.is_file():
         data = json.loads(backup.read_text(encoding="utf-8"))
@@ -162,6 +213,89 @@ except Exception:
     pass
 path.write_text(json.dumps(cur, indent=2) + "\n", encoding="utf-8")
 print("[start-desktop] Cursor lazy-folder settings for FUSE host paths")
+PY
+
+# Generic Code-OSS / Electron editor trust: prefer OS CA store (includes OneBridge
+# MITM CA). Applies to every ~/.config/*/User/settings.json — not one product.
+python3 - <<'PY' 2>/dev/null || true
+import json
+import os
+from pathlib import Path
+home = Path("/home/browser")  # sandbox config root (HOME may be remapped to /host/home)
+patched = 0
+for path in sorted(home.glob(".config/*/User/settings.json")):
+    try:
+        cur = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        cur = {}
+    if not isinstance(cur, dict):
+        cur = {}
+    changed = False
+    if cur.get("http.systemCertificates") is not True:
+        cur["http.systemCertificates"] = True
+        changed = True
+    # VS Code / forks: v2 picks up Linux system CAs more reliably under MITM.
+    if cur.get("http.experimental.systemCertificatesV2") is not True:
+        cur["http.experimental.systemCertificatesV2"] = True
+        changed = True
+    if changed:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(cur, indent=2) + "\n", encoding="utf-8")
+        patched += 1
+# Ensure Cursor User dir exists even on first boot (before first launch).
+cursor_settings = home / ".config/Cursor/User/settings.json"
+cursor_settings.parent.mkdir(parents=True, exist_ok=True)
+try:
+    cur = json.loads(cursor_settings.read_text(encoding="utf-8")) if cursor_settings.is_file() else {}
+except Exception:
+    cur = {}
+if not isinstance(cur, dict):
+    cur = {}
+changed = False
+if cur.get("http.systemCertificates") is not True:
+    cur["http.systemCertificates"] = True
+    changed = True
+if cur.get("http.experimental.systemCertificatesV2") is not True:
+    cur["http.experimental.systemCertificatesV2"] = True
+    changed = True
+# Mediated host shell as default terminal (no MCP tool required).
+profiles = cur.get("terminal.integrated.profiles.linux")
+if not isinstance(profiles, dict):
+    profiles = {}
+host_home = os.environ.get("ONEBRIDGE_HOST_HOME") or "/host/home"
+sandbox = os.environ.get("ONEBRIDGE_SANDBOX_HOME") or "/home/browser"
+host_env = {
+    "HOME": host_home,
+    "ONEBRIDGE_HOST_HOME": host_home,
+    "ONEBRIDGE_SANDBOX_HOME": sandbox,
+    "BRIDGE_CREDENTIALS_FILE": f"{sandbox}/.bridge-credentials",
+    "PATH": "/opt/bridge/host-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+}
+host_profile = {
+    "path": "/opt/bridge/host-bin/host-shell",
+    "icon": "terminal",
+    "env": host_env,
+}
+if profiles.get("OneBridge Host") != host_profile:
+    profiles["OneBridge Host"] = host_profile
+    cur["terminal.integrated.profiles.linux"] = profiles
+    changed = True
+if cur.get("terminal.integrated.defaultProfile.linux") != "OneBridge Host":
+    cur["terminal.integrated.defaultProfile.linux"] = "OneBridge Host"
+    changed = True
+if cur.get("terminal.integrated.automationProfile.linux") != host_profile:
+    cur["terminal.integrated.automationProfile.linux"] = host_profile
+    changed = True
+term_env = cur.get("terminal.integrated.env.linux")
+if not isinstance(term_env, dict):
+    term_env = {}
+if term_env != host_env:
+    cur["terminal.integrated.env.linux"] = host_env
+    changed = True
+if changed:
+    cursor_settings.write_text(json.dumps(cur, indent=2) + "\n", encoding="utf-8")
+    patched += 1
+print(f"[start-desktop] seeded http.systemCertificates on {patched} editor setting file(s)")
 PY
 
 
@@ -265,13 +399,11 @@ if command -v gio >/dev/null 2>&1; then
   gio set "$HOME/Desktop/Install Assistant.desktop" metadata::trusted true 2>/dev/null || true
 fi
 
-# Host-home shortcut on Desktop (after wipe so it persists); no Host Projects link
+# Host-home shortcut on Desktop (after wipe so it persists)
 rm -f "$HOME/Desktop/Host Projects" "$HOME/Desktop/Host-Projects" 2>/dev/null || true
+rm -f "$HOME/Desktop"/Unknown_*\ Home 2>/dev/null || true
 if [[ -d /host/home ]]; then
   ln -sfn /host/home "$HOME/Desktop/${ONEBRIDGE_HOST_NAME} Home" 2>/dev/null || true
-fi
-# Refresh GTK Places in case FUSE came up after the earlier block
-if [[ -d /host/home ]]; then
   mkdir -p "$HOME/.config/gtk-3.0" 2>/dev/null || true
   echo "file:///host/home ${ONEBRIDGE_HOST_NAME} Home" > "$HOME/.config/gtk-3.0/bookmarks"
 fi

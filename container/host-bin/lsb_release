@@ -1,0 +1,46 @@
+#!/usr/bin/env python3
+"""Report host OS identity (not the Linux sandbox). Real tool: /usr/bin/lsb_release."""
+import json
+import os
+import sys
+
+ID_FILE = os.environ.get("ONEBRIDGE_HOST_IDENTITY", "/opt/bridge/host-identity.json")
+
+
+def load():
+    for p in (
+        ID_FILE,
+        os.path.expanduser("~/.onebridge-host-identity.json"),
+        "/opt/bridge/host-identity.json",
+    ):
+        try:
+            with open(p, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            continue
+    return {}
+
+
+d = load()
+pretty = d.get("prettyName") or d.get("osType") or "Host OS"
+platform = d.get("platform") or ""
+release = d.get("release") or ""
+ostype = d.get("osType") or ""
+
+# Mimic a few common flags enough that probes stop saying "Debian".
+args = set(sys.argv[1:])
+if "-a" in args or "--all" in args:
+    print(f"Distributor ID:\t{pretty.split()[0] if pretty else ostype}")
+    print(f"Description:\t{pretty}")
+    print(f"Release:\t{release}")
+    print(f"Codename:\t{platform or ostype}")
+elif "-d" in args or "--description" in args:
+    print(f"Description:\t{pretty}")
+elif "-i" in args or "--id" in args:
+    print(f"Distributor ID:\t{pretty.split()[0] if pretty else ostype}")
+elif "-r" in args or "--release" in args:
+    print(f"Release:\t{release}")
+elif "-c" in args or "--codename" in args:
+    print(f"Codename:\t{platform or ostype}")
+else:
+    print(pretty)

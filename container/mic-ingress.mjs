@@ -1,12 +1,10 @@
 #!/usr/bin/env node
 /**
  * Host mic uplink → Pulse null-sink (virtual mic = sink.monitor).
- * Listens on 0.0.0.0:6083. Accepts binary PCM s16le mono 48kHz WebSocket frames.
- * Feeds ffmpeg → Pulse sink "onebridge-mic-sink"; apps capture onebridge-mic-sink.monitor
- * (usually remapped / default-sourced as onebridge-mic).
+ * PCM is written only to onebridge-mic-sink — never the speaker sink (onebridge).
  */
 import http from "node:http";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 
 const PORT = Number(process.env.MIC_WS_PORT || 6083);
@@ -27,6 +25,19 @@ let silenceTimer = null;
 let readBuf = Buffer.alloc(0);
 let feeder = null;
 
+const micSinkReady = () => {
+  try {
+    const r = spawnSync("pactl", ["list", "short", "sinks"], {
+      encoding: "utf8",
+      env: process.env,
+    });
+    if (r.status !== 0) return false;
+    return new RegExp(`(^|\\s)${SINK}(\\s|$)`).test(r.stdout || "");
+  } catch {
+    return false;
+  }
+};
+
 const stopFeeder = () => {
   if (!feeder) return;
   try {
@@ -40,6 +51,10 @@ const stopFeeder = () => {
 
 const startFeeder = () => {
   if (feeder && !feeder.killed) return;
+  if (!micSinkReady()) {
+    console.error(`[mic-ingress] waiting for Pulse sink ${SINK}`);
+    return;
+  }
   stopFeeder();
   const args = [
     "-hide_banner",
@@ -71,13 +86,12 @@ const startFeeder = () => {
     if (code && code !== 0) {
       console.error(`[mic-ingress] ffmpeg exited ${code}: ${err.trim().slice(-400)}`);
     }
-    // Restart so silence/PCM keep flowing.
     setTimeout(() => {
       startFeeder();
       startSilence();
     }, 500);
   });
-  console.error(`[mic-ingress] ffmpeg → pulse sink ${SINK}`);
+  console.error(`[mic-ingress] ffmpeg → pulse sink ${SINK} (input-only virtual mic)`);
 };
 
 const writePcm = (chunk) => {
@@ -153,6 +167,7 @@ const server = http.createServer((req, res) => {
         channels: CHANNELS,
         format: "s16le",
         sink: SINK,
+        sinkReady: micSinkReady(),
         hostConnected: Boolean(hostSocket),
         feeder: Boolean(feeder),
       }),
@@ -229,14 +244,21 @@ server.on("upgrade", (req, socket) => {
   socket.on("end", onGone);
 });
 
-startFeeder();
-startSilence();
+// Poll until mic sink exists (start-mic creates it before ingress listens).
+const waitSink = setInterval(() => {
+  if (micSinkReady()) {
+    clearInterval(waitSink);
+    startFeeder();
+    startSilence();
+  }
+}, 200);
 
 server.listen(PORT, "0.0.0.0", () => {
   console.error(`[mic-ingress] listening 0.0.0.0:${PORT} → pulse:${SINK}`);
 });
 
 process.on("SIGTERM", () => {
+  clearInterval(waitSink);
   stopSilence();
   stopFeeder();
   server.close();

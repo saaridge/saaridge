@@ -6,12 +6,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { createRequire } from "node:module";
 import {
   VAULT_DIR,
   LEGACY_VAULT_DIR,
   PRIVATE_STATE_DIR,
 } from "../../lib/paths.js";
 import { encrypt, decrypt } from "./crypto.js";
+
+const require_ = createRequire(import.meta.url);
 
 export { hasVaultRefs, requiresMediate, hasMediateHeader } from "./markers.js";
 
@@ -162,6 +165,12 @@ const writeStore = (agentId, data) => {
   } catch {
     /* ignore */
   }
+  // Keep FS hardlink deny set fresh for new vault files.
+  try {
+    require_("../data/policy.js").refreshBridgeStateInodes();
+  } catch {
+    /* ignore circular/load errors */
+  }
 };
 
 /** Absolute path of on-disk vault file (for tests / isolation checks). */
@@ -236,6 +245,26 @@ export const listMeta = (agentId) => {
     sourcePath: s.sourcePath,
     createdAt: s.createdAt,
   }));
+};
+
+/**
+ * Bridge-internal: plaintext values for egress re-leak scanning.
+ * Never expose via agent-facing APIs.
+ * @param {string} agentId
+ * @returns {string[]}
+ */
+export const listPlainValues = (agentId) => {
+  const store = readStore(agentId);
+  const out = [];
+  for (const id of Object.keys(store.secrets || {})) {
+    try {
+      const row = get(agentId, id);
+      if (row?.value) out.push(String(row.value));
+    } catch {
+      /* skip */
+    }
+  }
+  return out;
 };
 
 export const remove = (agentId, id) => {

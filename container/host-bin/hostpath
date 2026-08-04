@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Map host-native paths → container FUSE paths for shell use.
+# Usage: hostpath /Users/me/OneBridge/workspaces/foo
+#        hostpath ~/Documents/x
+#        eval "$(hostpath --exports)"   # print cd/export hints
+set -euo pipefail
+
+CRED="${BRIDGE_CREDENTIALS_FILE:-${HOME:-}/.bridge-credentials}"
+HOST_HOME_NATIVE=""
+if [[ -f "$CRED" ]]; then
+  HOST_HOME_NATIVE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("hostNativeHome",""))' "$CRED" 2>/dev/null || true)"
+fi
+
+python3 - "$HOST_HOME_NATIVE" "$@" <<'PY'
+import os, sys, re
+
+host_home = sys.argv[1].strip() or None
+args = sys.argv[2:]
+
+mount = os.environ.get("ONEBRIDGE_HOST_MOUNT", "/host")
+projects = os.environ.get("ONEBRIDGE_PROJECTS", f"{mount}/workspaces/workspace-desktop")
+shared = os.environ.get("ONEBRIDGE_SHARED", f"{mount}/shared")
+chome = os.environ.get("ONEBRIDGE_HOST_HOME", f"{mount}/home")
+
+def rewrite(p: str) -> str:
+    if not p:
+        return projects
+    s = os.path.expanduser(p)
+    if s.startswith("/host/") or s == "/host":
+        return s
+    # ~/OneBridge/... or absolute .../OneBridge/...
+    m = re.search(r"(?:^|/)OneBridge(?:/|$)", s)
+    if "OneBridge" in s:
+        idx = s.find("OneBridge")
+        rest = s[idx + len("OneBridge") :].lstrip("/")
+        return f"{mount}/{rest}" if rest else mount
+    # /Users/<name>/... or /home/<name>/... → /host/home/...
+    m = re.match(r"^/(?:Users|home)/[^/]+(?:/(.*))?$", s)
+    if m:
+        rest = m.group(1) or ""
+        return f"{chome}/{rest}" if rest else chome
+    if host_home and (s == host_home or s.startswith(host_home.rstrip("/") + "/")):
+        rest = s[len(host_home.rstrip("/")) :].lstrip("/")
+        return f"{chome}/{rest}" if rest else chome
+    return s
+
+if args == ["--exports"]:
+    print(f'export ONEBRIDGE_HOST_MOUNT="{mount}"')
+    print(f'export ONEBRIDGE_PROJECTS="{projects}"')
+    print(f'export ONEBRIDGE_SHARED="{shared}"')
+    print(f'export ONEBRIDGE_HOST_HOME="{chome}"')
+    print(f'cd "{projects}" 2>/dev/null || true')
+    raise SystemExit(0)
+
+if not args:
+    print(projects)
+    raise SystemExit(0)
+
+for a in args:
+    print(rewrite(a))
+PY

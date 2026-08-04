@@ -972,15 +972,47 @@
               const row = document.createElement("div");
               row.className = "policy-row";
               const left = document.createElement("div");
-              left.innerHTML = `<strong>${algo.id}</strong>${
+              left.innerHTML = `<strong>${algo.name || algo.id}</strong>${
                 algo.enabledGlobally ? '<span class="tag-on">global</span>' : ""
-              }<div class="meta-line">${algo.name || ""}</div>`;
+              }<div class="meta-line">${algo.description || ""}</div>
+              <div class="meta-line">Mode: <strong>${algo.mode || "redact"}</strong></div>`;
+              const modeWrap = document.createElement("div");
+              modeWrap.style.display = "flex";
+              modeWrap.style.gap = "0.35rem";
+              modeWrap.style.flexWrap = "wrap";
+              modeWrap.style.marginTop = "0.35rem";
+              for (const mode of algo.allowModes || ["redact", "block", "allow"]) {
+                const mbtn = document.createElement("button");
+                mbtn.type = "button";
+                mbtn.className = "btn btn-secondary btn-sm";
+                mbtn.textContent = mode;
+                mbtn.disabled = !algo.enabledGlobally || (algo.mode || "") === mode;
+                mbtn.onclick = async () => {
+                  try {
+                    const r = await fetch("/api/policies/mode", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ algorithmId: algo.id, mode }),
+                    });
+                    const body = await r.json();
+                    showToast(
+                      body.ok ? `${algo.name}: ${mode}` : body.error || "Mode update failed",
+                      !body.ok,
+                    );
+                    await refreshPolicies();
+                  } catch (err) {
+                    showToast(String(err), true);
+                  }
+                };
+                modeWrap.appendChild(mbtn);
+              }
+              left.appendChild(modeWrap);
               const btn = document.createElement("button");
               btn.type = "button";
               btn.className = algo.enabledGlobally
                 ? "btn btn-danger btn-sm"
                 : "btn btn-secondary btn-sm";
-              btn.textContent = algo.enabledGlobally ? "Disable global" : "Enable global";
+              btn.textContent = algo.enabledGlobally ? "Disable" : "Enable";
               btn.onclick = async () => {
                 btn.disabled = true;
                 try {
@@ -995,7 +1027,7 @@
                   const body = await r.json();
                   showToast(
                     body.ok
-                      ? `${algo.id} ${algo.enabledGlobally ? "disabled" : "enabled"} globally`
+                      ? `${algo.name || algo.id} ${algo.enabledGlobally ? "disabled" : "enabled"}`
                       : body.error || "Update failed",
                     !body.ok,
                   );
@@ -1036,7 +1068,7 @@
               const row = document.createElement("div");
               row.className = "policy-row";
               const left = document.createElement("div");
-              left.innerHTML = `<strong>${algo.id}</strong>${
+              left.innerHTML = `<strong>${algo.name || algo.id}</strong>${
                 effective ? '<span class="tag-on">on</span>' : ""
               }${viaGlobal ? '<span class="tag-on">via global</span>' : ""}<div class="meta-line">${algo.name || ""}</div>`;
               const btn = document.createElement("button");

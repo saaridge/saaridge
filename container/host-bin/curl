@@ -28,13 +28,33 @@ for arg in "$@"; do
   esac
 done
 
+# Also scan -d @file / --data* @file bodies for vault:// (argv-only miss).
+if [[ "$NEED_MEDIATE" -eq 0 ]]; then
+  prev=""
+  for arg in "$@"; do
+    if [[ "$prev" == "-d" || "$prev" == "--data" || "$prev" == "--data-raw" || "$prev" == "--data-binary" || "$prev" == "--data-urlencode" ]]; then
+      if [[ "$arg" == @* ]]; then
+        f="${arg:1}"
+        if [[ -f "$f" ]] && grep -q 'vault://' "$f" 2>/dev/null; then
+          NEED_MEDIATE=1
+          break
+        fi
+      elif [[ "$arg" == *vault://* ]]; then
+        NEED_MEDIATE=1
+        break
+      fi
+    fi
+    prev="$arg"
+  done
+fi
+
 if [[ "$NEED_MEDIATE" -eq 1 ]]; then
   if [[ ! -x /opt/bridge/host-bin/bridge-call ]]; then
     echo "curl shim: vault:// requires bridge-call (MEDIATE) but it is missing" >&2
     exit 1
   fi
   ARGS_JSON="$(python3 - "$@" <<'PY'
-import json, sys
+import json, sys, os
 args = sys.argv[1:]
 method = "GET"
 url = None
@@ -55,7 +75,12 @@ while i < len(args):
         i += 2
         continue
     if a in ("-d", "--data", "--data-raw", "--data-binary", "--data-urlencode") and i + 1 < len(args):
-        body = args[i + 1]
+        raw = args[i + 1]
+        if raw.startswith("@") and os.path.isfile(raw[1:]):
+            with open(raw[1:], "r", encoding="utf-8", errors="replace") as fh:
+                body = fh.read()
+        else:
+            body = raw
         if method == "GET":
             method = "POST"
         i += 2

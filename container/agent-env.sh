@@ -7,10 +7,19 @@
 
 _CRED="${BRIDGE_CREDENTIALS_FILE:-}"
 if [[ -z "$_CRED" || ! -f "$_CRED" ]]; then
-  if [[ -f "${HOME:-}/.bridge-credentials" ]]; then
-    _CRED="${HOME}/.bridge-credentials"
-    export BRIDGE_CREDENTIALS_FILE="$_CRED"
-  fi
+  # Prefer sandbox credentials even when HOME is remapped to /host/home.
+  for _try in \
+    "${BRIDGE_CREDENTIALS_FILE:-}" \
+    /home/browser/.bridge-credentials \
+    "${ONEBRIDGE_SANDBOX_HOME:-}/.bridge-credentials" \
+    "${HOME:-}/.bridge-credentials"
+  do
+    if [[ -n "${_try}" && -f "${_try}" ]]; then
+      _CRED="$_try"
+      export BRIDGE_CREDENTIALS_FILE="$_CRED"
+      break
+    fi
+  done
 fi
 
 if [[ -n "$_CRED" && -f "$_CRED" ]]; then
@@ -32,8 +41,21 @@ export BRIDGE_URL="${BRIDGE_URL:-http://host.docker.internal:7331}"
 export BRIDGE_PROXY_HOST="${BRIDGE_PROXY_HOST:-host.docker.internal}"
 export BRIDGE_PROXY_PORT="${BRIDGE_PROXY_PORT:-7332}"
 
-# Host-bin shims first: curl/wget always use the bridge proxy
+export ONEBRIDGE_HOST_HOME="${ONEBRIDGE_HOST_HOME:-/host/home}"
+export ONEBRIDGE_SANDBOX_HOME="${ONEBRIDGE_SANDBOX_HOME:-/home/browser}"
+# Agent-facing HOME is always the mediated host home. Apps that need the
+# Linux sandbox (Chromium profile, Cursor user-data, XFCE) must set
+# HOME="$ONEBRIDGE_SANDBOX_HOME" themselves (launch-browser / start-desktop).
+# Do not gate on `test -d` — that STAT hangs when FUSE is wedged and leaves
+# agents on /home/browser.
+export HOME="$ONEBRIDGE_HOST_HOME"
+# Host-bin shims first: curl/wget/uname + mediated host shell
 export PATH="/opt/bridge/host-bin:${PATH}"
+# Default shell for agent terminals: commands run on the host via the bridge.
+if [[ -x /opt/bridge/host-bin/host-shell ]]; then
+  export SHELL=/opt/bridge/host-bin/host-shell
+  export ONEBRIDGE_HOST_SHELL=1
+fi
 
 # Node 22+: honor HTTP(S)_PROXY for fetch (agents that call network in-process)
 case " ${NODE_OPTIONS:-} " in
@@ -77,19 +99,174 @@ fi
 export ONEBRIDGE_PROJECTS="${ONEBRIDGE_PROJECTS:-/host/workspaces/workspace-desktop}"
 export ONEBRIDGE_HOST_HOME="${ONEBRIDGE_HOST_HOME:-/host/home}"
 export ONEBRIDGE_HOST_NAME="${ONEBRIDGE_HOST_NAME:-Host}"
+# Docker Desktop sometimes reports Unknown_<mac> — useless Places/Desktop label.
+if [[ "${ONEBRIDGE_HOST_NAME}" == Unknown_* ]]; then
+  export ONEBRIDGE_HOST_NAME=Host
+fi
 # Cursor / editors: open projects under this path (not container-local copies)
 export CURSOR_PROJECT_DIR="${CURSOR_PROJECT_DIR:-$ONEBRIDGE_PROJECTS}"
+export ONEBRIDGE_HOST_EXEC_CWD="${ONEBRIDGE_HOST_EXEC_CWD:-$ONEBRIDGE_PROJECTS}"
+
+# Host OS identity (authoritative for agents — not sandbox Linux).
+export ONEBRIDGE_HOST_IDENTITY="${ONEBRIDGE_HOST_IDENTITY:-/opt/bridge/host-identity.json}"
+if [[ -n "$_CRED" && -f "$_CRED" ]]; then
+  eval "$(python3 - "$_CRED" <<'PY'
+import json, sys
+c = json.load(open(sys.argv[1]))
+def exp(k, v):
+    if v is None or v == "":
+        return
+    v = str(v).replace("'", "'\"'\"'")
+    print(f"export {k}='{v}'")
+exp("ONEBRIDGE_HOST_PLATFORM", c.get("hostPlatform"))
+exp("ONEBRIDGE_HOST_ARCH", c.get("hostArch"))
+exp("ONEBRIDGE_HOST_RELEASE", c.get("hostRelease"))
+exp("ONEBRIDGE_HOST_OSTYPE", c.get("hostOsType"))
+exp("ONEBRIDGE_HOST_NATIVE_HOME", c.get("hostNativeHome"))
+exp("ONEBRIDGE_HOST_USERNAME", c.get("hostUsername"))
+PY
+)" 2>/dev/null || true
+fi
+# Match host uname(1) family for naive probes (Darwin/Linux/…).
+if [[ -n "${ONEBRIDGE_HOST_OSTYPE:-}" ]]; then
+  export OSTYPE="${ONEBRIDGE_HOST_OSTYPE}"
+fi
+if [[ -n "${ONEBRIDGE_HOST_USERNAME:-}" ]]; then
+  export USER="${ONEBRIDGE_HOST_USERNAME}"
+  export LOGNAME="${ONEBRIDGE_HOST_USERNAME}"
+fi
+
+# Shell orientation for agents (host-only).
+export ONEBRIDGE_SHELL_NOTE="OS=${ONEBRIDGE_HOST_OSTYPE:-host}. Home=${ONEBRIDGE_HOST_HOME}. Workspace=${ONEBRIDGE_PROJECTS}."
+# Write layout for agents; do NOT clobber a full host-identity.json from the bridge.
+python3 - <<PY 2>/dev/null || true
+import json, os
+layout = {
+  "virtualizedOnHost": True,
+  "platform": os.environ.get("ONEBRIDGE_HOST_PLATFORM"),
+  "osType": os.environ.get("ONEBRIDGE_HOST_OSTYPE"),
+  "arch": os.environ.get("ONEBRIDGE_HOST_ARCH"),
+  "release": os.environ.get("ONEBRIDGE_HOST_RELEASE"),
+  "hostname": os.environ.get("ONEBRIDGE_HOST_NAME"),
+  "mount": os.environ.get("ONEBRIDGE_HOST_MOUNT", "/host"),
+  "workspace": os.environ.get("ONEBRIDGE_PROJECTS"),
+  "shared": os.environ.get("ONEBRIDGE_SHARED", "/host/shared"),
+  "home": os.environ.get("ONEBRIDGE_HOST_HOME", "/host/home"),
+  "terminal_exec": "disabled",
+  "note": os.environ.get("ONEBRIDGE_SHELL_NOTE"),
+}
+for d in ("/opt/bridge",):
+    try:
+        open(os.path.join(d, "host-layout.json"), "w").write(json.dumps(layout, indent=2) + "\n")
+    except OSError:
+        pass
+# Do not drop host-layout.json in $HOME — keeps the sandbox home uncluttered.
+try:
+    home = os.environ.get("HOME") or ""
+    if home:
+        p = os.path.join(home, "host-layout.json")
+        if os.path.isfile(p):
+            os.remove(p)
+except OSError:
+    pass
+
+# Merge credentials into identity only when we have real host platform fields.
+cred = os.environ.get("BRIDGE_CREDENTIALS_FILE") or os.path.expanduser("~/.bridge-credentials")
+identity_path = "/opt/bridge/host-identity.json"
+home_id = os.path.join(os.environ.get("HOME") or "/tmp", ".onebridge-host-identity.json")
+try:
+    c = json.load(open(cred)) if os.path.isfile(cred) else {}
+except Exception:
+    c = {}
+plat = c.get("hostPlatform") or os.environ.get("ONEBRIDGE_HOST_PLATFORM")
+if plat:
+    arch = c.get("hostArch") or os.environ.get("ONEBRIDGE_HOST_ARCH") or "arm64"
+    machine = "arm64" if arch == "arm64" else ("x86_64" if arch == "x64" else arch)
+    sysname = c.get("hostOsType") or os.environ.get("ONEBRIDGE_HOST_OSTYPE") or (
+        "Darwin" if plat == "darwin" else ("Windows_NT" if plat == "win32" else "Linux")
+    )
+    host = c.get("hostHostname") or os.environ.get("ONEBRIDGE_HOST_NAME") or "host"
+    release = c.get("hostRelease") or os.environ.get("ONEBRIDGE_HOST_RELEASE") or ""
+    identity = {
+        "virtualizedOnHost": True,
+        "hostname": host,
+        "platform": plat,
+        "osType": sysname,
+        "arch": arch,
+        "release": release,
+        "homedir": c.get("hostNativeHome"),
+        "shell": {
+            "mount": layout["mount"],
+            "workspace": layout["workspace"],
+            "shared": layout["shared"],
+            "home": layout["home"],
+            "cwdHint": layout["workspace"],
+        },
+        "uname": {
+            "s": sysname,
+            "n": host,
+            "r": release,
+            "m": machine,
+            "a": f"{sysname} {host} {release} {machine}".strip(),
+        },
+        "note": layout["note"],
+    }
+    for path in (identity_path, home_id):
+        try:
+            open(path, "w").write(json.dumps(identity, indent=2) + "\n")
+        except OSError:
+            pass
+PY
+
+# FS binary IPC is host-loopback only; FUSE uses HTTP Data API from the container.
+export HOSTFS_IPC="${HOSTFS_IPC:-0}"
 
 # Force all HTTP(S) clients (Node fetch, Python requests if configured, MCP servers)
 # through the local auth-proxy → host MITM. Fail-closed iptables blocks non-proxy egress.
-export REQUESTS_CA_BUNDLE="${REQUESTS_CA_BUNDLE:-/opt/bridge/certs/onebridge-mitm-ca.crt}"
-export SSL_CERT_FILE="${SSL_CERT_FILE:-/opt/bridge/certs/onebridge-mitm-ca.crt}"
-export NODE_EXTRA_CA_CERTS="${NODE_EXTRA_CA_CERTS:-/opt/bridge/certs/onebridge-mitm-ca.crt}"
+# Shared MITM CA for every process in the container (CONSTRAINTS: generic only).
+_OB_CA="${ONEBRIDGE_MITM_CA:-/opt/bridge/certs/onebridge-mitm-ca.crt}"
+# OpenSSL-style env vars *replace* the default trust store — use system+MITM
+# bundle so adaptive TUNNEL (real public certs) still verifies.
+_OB_BUNDLE="${ONEBRIDGE_CA_BUNDLE:-/opt/bridge/certs/ca-bundle.crt}"
+if [[ ! -f "$_OB_BUNDLE" ]]; then
+  _OB_BUNDLE="$_OB_CA"
+fi
+export REQUESTS_CA_BUNDLE="${REQUESTS_CA_BUNDLE:-$_OB_BUNDLE}"
+export SSL_CERT_FILE="${SSL_CERT_FILE:-$_OB_BUNDLE}"
+export CURL_CA_BUNDLE="${CURL_CA_BUNDLE:-$_OB_BUNDLE}"
+# Node adds this file to its built-in Mozilla store (MITM-only PEM is correct).
+export NODE_EXTRA_CA_CERTS="${NODE_EXTRA_CA_CERTS:-$_OB_CA}"
+# JVM agents that honor a custom truststore path (seeded by trust-mitm-ca.sh).
+if [[ -f /opt/bridge/certs/jssecacerts ]]; then
+  case "${JAVA_TOOL_OPTIONS:-}" in
+    *javax.net.ssl.trustStore=/opt/bridge/certs/jssecacerts*) ;;
+    *)
+      export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }-Djavax.net.ssl.trustStore=/opt/bridge/certs/jssecacerts -Djavax.net.ssl.trustStorePassword=changeit"
+      ;;
+  esac
+fi
+unset _OB_CA _OB_BUNDLE
 
-# Durable host-home link once FUSE is up (safe to re-run). Drop legacy Projects/Host aliases.
-_HOME_DIR="${HOME:-/home/browser}"
-rm -f "${_HOME_DIR}/Projects" "${_HOME_DIR}/Host Home" "${_HOME_DIR}/host-home" \
-  "${_HOME_DIR}/Desktop/Host Projects" "${_HOME_DIR}/Desktop/Host-Projects" 2>/dev/null || true
-if [[ -d "$ONEBRIDGE_HOST_HOME" ]]; then
+# Host-home Places link lives in the *sandbox* home (XFCE), never under /host/home.
+_HOME_DIR="${ONEBRIDGE_SANDBOX_HOME:-/home/browser}"
+# Bound FUSE probes — skip quietly if hostfs is wedged.
+if timeout 1 test -d "$ONEBRIDGE_HOST_HOME" 2>/dev/null; then
+  rm -f "${_HOME_DIR}/Projects" "${_HOME_DIR}/Host Home" "${_HOME_DIR}/host-home" \
+    "${_HOME_DIR}/Desktop/Host Projects" "${_HOME_DIR}/Desktop/Host-Projects" \
+    "${_HOME_DIR}/host-layout.json" 2>/dev/null || true
+  rm -f "${_HOME_DIR}"/Unknown_*\ Home "${_HOME_DIR}/Desktop"/Unknown_*\ Home 2>/dev/null || true
+  for _d in Documents Music Pictures Public Templates Videos; do
+    if [[ -d "${_HOME_DIR}/${_d}" ]] && [[ -z "$(find "${_HOME_DIR}/${_d}" -mindepth 1 -maxdepth 1 2>/dev/null | head -1)" ]]; then
+      rmdir "${_HOME_DIR}/${_d}" 2>/dev/null || true
+    fi
+  done
   ln -sfn "$ONEBRIDGE_HOST_HOME" "${_HOME_DIR}/${ONEBRIDGE_HOST_NAME} Home" 2>/dev/null || true
+  if [[ -d "${ONEBRIDGE_HOST_HOME}/Downloads" ]]; then
+    if [[ -L "${_HOME_DIR}/Downloads" ]] || [[ ! -e "${_HOME_DIR}/Downloads" ]]; then
+      ln -sfn "${ONEBRIDGE_HOST_HOME}/Downloads" "${_HOME_DIR}/Downloads" 2>/dev/null || true
+    elif [[ -d "${_HOME_DIR}/Downloads" ]] && [[ -z "$(find "${_HOME_DIR}/Downloads" -mindepth 1 -maxdepth 1 2>/dev/null | head -1)" ]]; then
+      rmdir "${_HOME_DIR}/Downloads" 2>/dev/null || true
+      ln -sfn "${ONEBRIDGE_HOST_HOME}/Downloads" "${_HOME_DIR}/Downloads" 2>/dev/null || true
+    fi
+  fi
 fi

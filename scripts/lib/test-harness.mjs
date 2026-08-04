@@ -28,10 +28,18 @@ export function dockerBoxRunning(name = "agent-bridge-box") {
   return res.status === 0 && res.stdout.trim() === "true";
 }
 
-export function dockerExec(script, { container = "agent-bridge-box", timeoutMs = 30000 } = {}) {
+export function dockerExec(
+  script,
+  {
+    container = "agent-bridge-box",
+    timeoutMs = 30000,
+    // Prefer -c: login shells source agent-env and can hang on wedged FUSE.
+    login = false,
+  } = {},
+) {
   const res = spawnSync(
     "docker",
-    ["exec", container, "bash", "-lc", script],
+    ["exec", container, "bash", login ? "-lc" : "-c", script],
     { encoding: "utf8", timeout: timeoutMs },
   );
   if (res.error) throw res.error;

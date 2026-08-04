@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -7,12 +8,122 @@ import {
   resolveHostPath,
   resolveUnderRoots,
 } from "./paths.js";
-import { PRIVATE_STATE_DIR, STATE_DIR } from "../../lib/paths.js";
+import { STATE_DIR } from "../../lib/paths.js";
 import { notifyHostHomeWriteDenied } from "../../lib/host-home-grant.js";
 
 const DEFAULT_MAX_BYTES = 50 * 1024 * 1024; // 50 MiB
+const INODE_CACHE_TTL_MS = 60_000;
 
-/** Deny Data API / FUSE access to bridge-private vault (ciphertext + keys). */
+/** @type {{ until: number, keys: Set<string> } | null} */
+let stateInodeCache = null;
+
+const stateRoot = () => path.resolve(STATE_DIR);
+
+const underDir = (candidate, base) => {
+  const c = path.resolve(candidate);
+  const b = path.resolve(base);
+  return c === b || c.startsWith(b + path.sep);
+};
+
+const denyBridgeState = () => {
+  const err = new Error(
+    "Bridge state is not readable via the data plane",
+  );
+  err.code = "EACCES";
+  throw err;
+};
+
+const walkInodes = (dir, out) => {
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const ent of entries) {
+    const full = path.join(dir, ent.name);
+    try {
+      // Use lstat so we index symlink nodes too; follow only directories.
+      const st = fs.lstatSync(full);
+      out.add(`${st.dev}:${st.ino}`);
+      if (ent.isDirectory() && !ent.isSymbolicLink()) {
+        walkInodes(full, out);
+      }
+    } catch {
+      /* skip unreadable */
+    }
+  }
+};
+
+/** Refresh inode set for STATE_DIR (hardlink escape detection). */
+export const refreshBridgeStateInodes = () => {
+  const keys = new Set();
+  const root = stateRoot();
+  try {
+    if (fs.existsSync(root)) {
+      const st = fs.statSync(root);
+      keys.add(`${st.dev}:${st.ino}`);
+      walkInodes(root, keys);
+    }
+  } catch {
+    /* ignore */
+  }
+  stateInodeCache = {
+    until: Date.now() + INODE_CACHE_TTL_MS,
+    keys,
+  };
+  return keys;
+};
+
+const bridgeStateInodes = () => {
+  if (!stateInodeCache || Date.now() > stateInodeCache.until) {
+    refreshBridgeStateInodes();
+  }
+  return stateInodeCache.keys;
+};
+
+/**
+ * True when absPath is this install's bridge STATE_DIR (or under it).
+ * Path-based — do not use basename "state" (unrelated project folders).
+ */
+export const isBridgeStatePath = (absPath) => {
+  if (absPath == null || absPath === "") return false;
+  try {
+    return underDir(path.resolve(String(absPath)), stateRoot());
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Drop listing children that resolve under STATE_DIR (e.g. omit `state/`
+ * from the repo root list so FUSE never caches vault.key metadata).
+ * @param {string} parentReal
+ * @param {Array<{ name?: string, path?: string, rel?: string }>} entries
+ */
+export const filterBridgeStateListing = (parentReal, entries) => {
+  if (!Array.isArray(entries) || entries.length === 0) return entries || [];
+  const parent = path.resolve(parentReal || ".");
+  return entries.filter((e) => {
+    const name = e?.name;
+    if (!name && !e?.path && !e?.rel) return true;
+    let child;
+    if (e.path) {
+      child = path.resolve(String(e.path));
+    } else if (e.rel) {
+      // Tree entries: rel is relative to the walk root (parentReal).
+      child = path.resolve(parent, String(e.rel));
+    } else {
+      child = path.resolve(parent, String(name));
+    }
+    return !isBridgeStatePath(child);
+  });
+};
+
+/**
+ * Deny Data API / FUSE access to all bridge state (tokens, MITM keys,
+ * vault, traffic logs). Checks logical path, realpath, and hardlink inodes.
+ */
 export const assertNotPrivateVaultPath = (inputPath) => {
   let resolved;
   try {
@@ -20,16 +131,41 @@ export const assertNotPrivateVaultPath = (inputPath) => {
   } catch {
     return;
   }
-  const privateRoot = path.resolve(PRIVATE_STATE_DIR);
-  const legacyVault = path.resolve(STATE_DIR, "vault");
-  const under = (base) =>
-    resolved === base || resolved.startsWith(base + path.sep);
-  if (under(privateRoot) || under(legacyVault)) {
-    const err = new Error(
-      "Bridge private vault is not readable via the data plane",
-    );
-    err.code = "EACCES";
-    throw err;
+
+  const root = stateRoot();
+  if (underDir(resolved, root)) denyBridgeState();
+
+  let real = resolved;
+  try {
+    if (fs.existsSync(resolved)) {
+      real = fs.realpathSync(resolved);
+    } else {
+      const parent = path.dirname(resolved);
+      if (fs.existsSync(parent)) {
+        real = path.join(fs.realpathSync(parent), path.basename(resolved));
+      }
+    }
+  } catch {
+    real = resolved;
+  }
+  if (underDir(real, root)) denyBridgeState();
+
+  // Hardlink: realpath may stay under workspace while inode is in STATE_DIR.
+  try {
+    if (fs.existsSync(resolved)) {
+      const st = fs.statSync(resolved);
+      const key = `${st.dev}:${st.ino}`;
+      let keys = bridgeStateInodes();
+      if (keys.has(key)) denyBridgeState();
+      // Multi-link: refresh once so newly created state files are covered.
+      else if (st.nlink > 1) {
+        keys = refreshBridgeStateInodes();
+        if (keys.has(key)) denyBridgeState();
+      }
+    }
+  } catch (err) {
+    if (err?.code === "EACCES") throw err;
+    /* ignore other stat errors */
   }
 };
 

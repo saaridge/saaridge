@@ -78,9 +78,13 @@ export const walkTree = async (
     maxDepth = 3,
     exclude = AGENT_FS_EXCLUDES,
     maxEntries = 8000,
+    /** @type {((fullPath: string) => boolean) | null | undefined} */
+    skipPath = null,
   } = {},
 ) => {
   const excludeSet = new Set(exclude || AGENT_FS_EXCLUDES);
+  const shouldSkip =
+    typeof skipPath === "function" ? skipPath : () => false;
   const out = [];
   const walk = async (dir, depth, relBase) => {
     if (out.length >= maxEntries) return;
@@ -94,6 +98,8 @@ export const walkTree = async (
       if (excludeSet.has(d.name)) continue;
       if (d.name === ".DS_Store" || d.name.startsWith(".onebridge-")) continue;
       const full = path.join(dir, d.name);
+      // Never emit or descend into bridge STATE_DIR (path-based).
+      if (shouldSkip(full)) continue;
       const rel = relBase ? `${relBase}/${d.name}` : d.name;
       let isDirectory = d.isDirectory();
       let isFile = d.isFile() || (!isDirectory && !d.isSymbolicLink());

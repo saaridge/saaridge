@@ -134,6 +134,35 @@
       #boot.hidden { display: none; }
       #boot h1 { margin: 0; font-size: 1.35rem; letter-spacing: -0.02em; }
       #boot p { margin: 0; color: var(--muted); max-width: 360px; }
+      .boot-check {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        max-width: min(420px, 88vw);
+        margin: 0.15rem 0 0;
+        padding: 0.35rem 0.7rem;
+        border-radius: 999px;
+        border: 1px solid rgba(61, 186, 138, 0.28);
+        background: rgba(61, 186, 138, 0.1);
+        color: var(--text);
+        font-size: 12px;
+        font-weight: 550;
+        letter-spacing: 0.01em;
+      }
+      .boot-check[hidden] { display: none; }
+      .boot-check .tag {
+        color: var(--accent);
+        font-size: 10px;
+        font-weight: 650;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        flex-shrink: 0;
+      }
+      .boot-check #bootCheckPhase {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
       .progress-wrap {
         width: min(360px, 78vw);
         margin: 0.35rem auto 0;
@@ -267,6 +296,10 @@
         <div id="boot">
           <h1>Starting workspace</h1>
           <p id="bootMsg">Preparing…</p>
+          <div class="boot-check" id="bootCheck" hidden>
+            <span class="tag">Now</span>
+            <span id="bootCheckPhase">…</span>
+          </div>
           <div class="progress-wrap" aria-label="Startup progress">
             <div class="progress-track">
               <div class="progress-fill" id="bootBar"></div>

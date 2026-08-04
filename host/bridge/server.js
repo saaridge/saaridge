@@ -13,9 +13,13 @@ import { DESKTOP_AGENT_ID } from "../lib/desktop.js";
 import {
   listWorkspaceDownloadPackages,
   installAgentFromWorkspaceDownload,
+  installAgentFromWorkspacePath,
+  listWorkspaceInstalledApps,
+  uninstallWorkspaceApp,
 } from "../lib/workspace-install.js";
 import { openInstallAssistantInDesktop } from "../lib/ui-commands.js";
 import * as dataApi from "./data/api.js";
+import { hostOrientation } from "./data/paths.js";
 import { readAudit, auditMetrics } from "./data/audit.js";
 import { limitsSnapshot } from "./data/limits.js";
 import { startFsBinaryServer } from "./data/fs-binary.js";
@@ -268,7 +272,8 @@ const mountFsApi = (app) => {
       req.query.all === "1" ? null : req.query.agentId || req.agent.id;
     res.json({
       ok: true,
-      events: readAudit(limit, agentId),
+      // Never return resolved vault plaintext / raw auth headers to agents.
+      events: readAudit(limit, agentId, { forAgent: true }),
       metrics: auditMetrics(),
     });
   });
@@ -321,11 +326,15 @@ export const startBridge = ({
   mountFsApi(app);
 
   app.get("/v1/whoami", authAgent, (req, res) => {
+    const orientation = hostOrientation(req.agent);
     res.json({
       agentId: req.agent.id,
       name: req.agent.name,
       uid: req.agent.uid,
       roots: dataApi.getRoots(req.agent),
+      shell: orientation.shell,
+      mcpFileTools: orientation.mcpFileTools,
+      oneBridge: orientation.oneBridge,
     });
   });
 
@@ -410,6 +419,49 @@ export const startBridge = ({
         : result.error,
     });
   });
+
+  // Install Assistant (in-container) uses the bridge — not host :3847 —
+  // so network-lock can keep the control plane host-only.
+  app.post(
+    "/v1/workspace/install-from-path",
+    authAgent,
+    requireDesktop,
+    async (req, res) => {
+      const workspacePath = req.body?.path || req.body?.workspacePath;
+      if (!workspacePath) {
+        return res.status(400).json({ ok: false, error: "path required" });
+      }
+      logBridge("workspace_install_from_path", {
+        path: String(workspacePath).slice(0, 200),
+        agentId: req.agent.id,
+      });
+      const result = await installAgentFromWorkspacePath(workspacePath);
+      res.status(result.ok ? 200 : 500).json(result);
+    },
+  );
+
+  app.get("/v1/workspace/apps", authAgent, requireDesktop, async (_req, res) => {
+    const result = await listWorkspaceInstalledApps();
+    res.status(result.ok ? 200 : 500).json(result);
+  });
+
+  app.post(
+    "/v1/workspace/uninstall-app",
+    authAgent,
+    requireDesktop,
+    async (req, res) => {
+      const packageId = req.body?.package || req.body?.packageId;
+      if (!packageId) {
+        return res.status(400).json({ ok: false, error: "package required" });
+      }
+      logBridge("workspace_uninstall_app", {
+        package: packageId,
+        agentId: req.agent.id,
+      });
+      const result = await uninstallWorkspaceApp(packageId);
+      res.status(result.ok ? 200 : 500).json(result);
+    },
+  );
 
   const server = app.listen(port, "127.0.0.1", () => {
     logBridge("bridge_listening", {

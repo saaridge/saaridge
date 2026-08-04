@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Report host account name (OneBridge virtualization). Real: /usr/bin/whoami.debian
+set -euo pipefail
+ID_FILE="${ONEBRIDGE_HOST_IDENTITY:-/opt/bridge/host-identity.json}"
+CRED="${BRIDGE_CREDENTIALS_FILE:-${ONEBRIDGE_SANDBOX_HOME:-/home/browser}/.bridge-credentials}"
+python3 - "$ID_FILE" "$CRED" <<'PY'
+import json, os, sys, getpass
+
+def load():
+    for p in (sys.argv[1], os.path.expanduser("~/.onebridge-host-identity.json")):
+        try:
+            if os.path.isfile(p):
+                return json.load(open(p))
+        except Exception:
+            pass
+    try:
+        if os.path.isfile(sys.argv[2]):
+            return json.load(open(sys.argv[2]))
+    except Exception:
+        pass
+    return {}
+
+d = load()
+user = (
+    d.get("username")
+    or d.get("hostUsername")
+    or d.get("user")
+    or ""
+)
+if not user:
+    # Fall back to native home basename (/Users/you → you)
+    home = d.get("homedir") or d.get("hostNativeHome") or ""
+    if home:
+        user = os.path.basename(home.rstrip("/"))
+if not user:
+    try:
+        user = getpass.getuser()
+    except Exception:
+        user = "user"
+print(user)
+PY

@@ -1,0 +1,8 @@
+#!/bin/bash
+# Soft shim: `sh -c '…'` → mediated host-shell; scripts stay local.
+set -euo pipefail
+REAL_SH=/bin/sh
+if [[ "${1:-}" == "-c" ]]; then
+  exec /opt/bridge/host-bin/host-shell "$@"
+fi
+exec "$REAL_SH" "$@"

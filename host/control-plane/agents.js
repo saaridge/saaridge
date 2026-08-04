@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import {
@@ -55,18 +56,42 @@ const writeMcpConfig = (agentDir, agent) => {
   fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify(mcp, null, 2));
 };
 
-const credentialsPayload = (agent) =>
-  JSON.stringify(
+const credentialsPayload = (agent) => {
+  const platform = os.platform();
+  return JSON.stringify(
     {
       agentId: agent.id,
       token: agent.token,
       localProxyPort: agent.localProxyPort,
       bridgeUrl: "http://host.docker.internal:7331",
       bridgeProxy: "http://host.docker.internal:7332",
+      hostMount: "/host",
+      hostWorkspace: `/host/workspaces/${agent.id}`,
+      hostShared: "/host/shared",
+      hostHome: "/host/home",
+      hostHostname: os.hostname(),
+      hostUsername: (() => {
+        try {
+          return os.userInfo().username;
+        } catch {
+          return path.basename(os.homedir());
+        }
+      })(),
+      hostNativeHome: os.homedir(),
+      hostPlatform: platform,
+      hostArch: os.arch(),
+      hostRelease: os.release(),
+      hostOsType:
+        platform === "darwin"
+          ? "Darwin"
+          : platform === "win32"
+            ? "Windows_NT"
+            : "Linux",
     },
     null,
     2,
   );
+};
 
 export const listInstalledAgents = () => listAgentsPublic();
 
@@ -159,7 +184,17 @@ export const installAgentFromHostPath = async (hostPath) => {
       );
     }
     await dockerExec(["mkdir", "-p", "/opt/bridge/host-bin"]);
-    for (const file of ["curl", "wget", "bridge-call"]) {
+    for (const file of [
+      "curl",
+      "wget",
+      "bridge-call",
+      "hostpath",
+      "uname",
+      "hostname",
+      "host-shell",
+      "bash",
+      "sh",
+    ]) {
       await dockerCp(
         path.join(repoRoot, "container", "host-bin", file),
         `${CONTAINER_NAME}:/opt/bridge/host-bin/${file}`,
@@ -181,6 +216,18 @@ export const installAgentFromHostPath = async (hostPath) => {
     );
     fs.writeFileSync(hostCredTmp, credentialsPayload(agent), { mode: 0o600 });
     await dockerCp(hostCredTmp, `${CONTAINER_NAME}:${credPath}`);
+    try {
+      const { hostIdentityJson, writeWorkspaceOrientation } = await import(
+        "../lib/host-identity.js"
+      );
+      writeWorkspaceOrientation(agentId);
+      const idTmp = path.join(repoRoot, "state", `.host-id-${agentId}.json`);
+      fs.writeFileSync(idTmp, hostIdentityJson(agentId), { mode: 0o644 });
+      await dockerCp(idTmp, `${CONTAINER_NAME}:/opt/bridge/host-identity.json`);
+      fs.unlinkSync(idTmp);
+    } catch {
+      /* best-effort */
+    }
     fs.unlinkSync(hostCredTmp);
     await dockerExec([
       "bash",

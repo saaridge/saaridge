@@ -240,6 +240,7 @@ class FsIpcClient:
             return
         s = self._socket_mod.create_connection((self.host, self.port), timeout=10)
         s.setsockopt(self._socket_mod.IPPROTO_TCP, self._socket_mod.TCP_NODELAY, 1)
+        s.settimeout(float(os.environ.get("HOSTFS_IPC_TIMEOUT", "10")))
         self._sock = s
         self._authed = False
         # AUTH
@@ -818,6 +819,7 @@ class HostFS(Fuse):
                         ),
                         "size": int(info.get("size") or 0),
                         "mtimeMs": float(info.get("mtimeMs") or 0),
+                        "cachedAt": time.time(),
                     }
             except OSError:
                 pass
@@ -844,6 +846,7 @@ class HostFS(Fuse):
                     "isDir": is_dir,
                     "size": size,
                     "mtimeMs": mtime_ms,
+                    "cachedAt": time.time(),
                 }
             self._dirs[fuse_dir] = clean
             if fuse_dir not in self._path_meta:
@@ -851,6 +854,7 @@ class HostFS(Fuse):
                     "isDir": True,
                     "size": 0,
                     "mtimeMs": time.time() * 1000,
+                    "cachedAt": time.time(),
                 }
 
     def _ingest_tree(self, root: str, tree_entries: list) -> None:
@@ -899,6 +903,7 @@ class HostFS(Fuse):
                     "isDir": True,
                     "size": 0,
                     "mtimeMs": time.time() * 1000,
+                    "cachedAt": time.time(),
                 }
             # Ensure every parent we saw has a listing (possibly empty).
             for parent, names in by_parent.items():
@@ -909,6 +914,7 @@ class HostFS(Fuse):
                         "isDir": bool(meta.get("isDir")),
                         "size": int(meta.get("size") or 0),
                         "mtimeMs": float(meta.get("mtimeMs") or 0),
+                        "cachedAt": time.time(),
                     }
             # Root may have zero children after excludes.
             if root not in self._dirs:
@@ -989,6 +995,7 @@ class HostFS(Fuse):
                         "isDir": True,
                         "size": 0,
                         "mtimeMs": time.time() * 1000,
+                        "cachedAt": time.time(),
                     }
                     for e in filtered:
                         child = self._child(p, e["name"])
@@ -996,6 +1003,7 @@ class HostFS(Fuse):
                             "isDir": bool(e.get("isDir")),
                             "size": int(e.get("size") or 0),
                             "mtimeMs": float(e.get("mtimeMs") or 0),
+                            "cachedAt": time.time(),
                         }
                 listed = filtered
             else:
@@ -1023,9 +1031,13 @@ class HostFS(Fuse):
                 if (time.time() - ts) < META_TTL_SEC:
                     return list(self._dirs[p])
                 self._dirs.pop(p, None)
-        if _under_excluded(p):
-            # Lazy: one shallow list only — never tree-recurse into dep dirs.
-            listed = self._list_shallow(p, include_excluded=True)
+        # Host home is huge (Documents, OneBridge, tool caches…). Tree-hydrating
+        # /home blocks the single-threaded FUSE loop for minutes → Cursor hangs
+        # on loading / agent tools. Always shallow-list under /home.
+        if p == "/home" or p.startswith("/home/") or _under_excluded(p):
+            listed = self._list_shallow(
+                p, include_excluded=_under_excluded(p) or False
+            )
         else:
             listed = self._hydrate_tree(p)
         with self._map_lock:
@@ -1034,27 +1046,31 @@ class HostFS(Fuse):
 
     def _stat_bridge(self, fuse_path: str) -> dict:
         p = self._norm(fuse_path)
+        now = time.time()
         with self._map_lock:
-            if p in self._path_meta:
-                return self._path_meta[p]
-        # Parent listing may already know this name.
-        parent = self._norm(os.path.dirname(p) or "/")
-        with self._map_lock:
-            if parent in self._dirs and p in self._path_meta:
-                return self._path_meta[p]
+            hit = self._path_meta.get(p)
+            if hit is not None:
+                age = now - float(hit.get("cachedAt") or 0)
+                # Expired or never stamped (legacy) → revalidate via API.
+                if hit.get("cachedAt") is not None and age < META_TTL_SEC:
+                    return hit
+                self._path_meta.pop(p, None)
         key = "stat:" + p
         worker, ev = self._coalesce(key)
         if not worker:
             ev.wait(timeout=60)
             with self._map_lock:
-                if p in self._path_meta:
-                    return self._path_meta[p]
+                hit = self._path_meta.get(p)
+                if hit is not None and hit.get("cachedAt") is not None:
+                    if (time.time() - float(hit.get("cachedAt") or 0)) < META_TTL_SEC:
+                        return hit
         try:
             info = self.api.stat(self._path(p))
             attr = {
                 "isDir": bool(info.get("isDirectory")),
                 "size": int(info.get("size") or 0),
                 "mtimeMs": float(info.get("mtimeMs") or 0),
+                "cachedAt": time.time(),
             }
             with self._map_lock:
                 self._path_meta[p] = attr
@@ -1113,7 +1129,48 @@ class HostFS(Fuse):
             ino=_ino_for(p),
         )
 
+    def _looks_like_bridge_state(self, fuse_path: str) -> bool:
+        """Path-shaped deny for bridge STATE_DIR without an API round-trip.
+
+        File managers call access() on every row; STAT-per-entry freezes Thunar.
+        Real deny for other paths still happens on getattr/open/read.
+        """
+        parts = [p for p in fuse_path.split("/") if p]
+        if "state" not in parts:
+            return False
+        i = parts.index("state")
+        rest = parts[i:]
+        if len(rest) == 1:
+            # …/state directory itself (this install's bridge state when under a
+            # clone that contains state/). Conservative: deny access() so
+            # managers don't try to expand it; getattr still authoritative.
+            return True
+        sensitive = {
+            "private",
+            "mitm-certs",
+            "logs",
+            "audit",
+            "agents",
+            "agents.json",
+            "bridge.token",
+            "tools.json",
+            "vault",
+            "install-downloads",
+            "staging",
+        }
+        return rest[1] in sensitive or rest[1].startswith("vault")
+
     def access(self, path, mode):
+        """Fast allow for normal paths; deny bridge-state shapes without STAT.
+
+        Do NOT call _stat_bridge here — Thunar/Nautilus access() every entry and
+        that N+1 API pattern makes /host look like a dead drive.
+        """
+        p = self._norm(path)
+        if p in ("/", "/workspaces", "/shared", "/home"):
+            return 0
+        if self._looks_like_bridge_state(p):
+            return -errno.EACCES
         return 0
 
     def statfs(self, path=None):

@@ -124,7 +124,7 @@
     for (const algo of algos) {
       const opt = document.createElement("option");
       opt.value = algo.id;
-      opt.textContent = algo.name ? `${algo.id} — ${algo.name}` : algo.id;
+      opt.textContent = algo.name || algo.id;
       policySel.appendChild(opt);
     }
 
@@ -172,8 +172,8 @@
         <div class="sub">${row.agentId}</div>`;
 
       const policyCell = document.createElement("td");
-      policyCell.innerHTML = `<div><strong>${row.algorithmId}</strong></div>
-        <div class="sub">${meta.name || ""}</div>`;
+      policyCell.innerHTML = `<div><strong>${meta.name || row.algorithmId}</strong></div>
+        <div class="sub">${row.algorithmId}</div>`;
 
       const actionCell = document.createElement("td");
       actionCell.style.textAlign = "right";
@@ -213,6 +213,43 @@
     fillOverrideForm();
   };
 
+  const renderCoverageSummary = (algorithms) => {
+    const body = $("coverageBody");
+    if (!body) return;
+    body.innerHTML = "";
+    for (const algo of algorithms || []) {
+      const block = document.createElement("div");
+      block.className = `coverage-policy${algo.enabledGlobally ? "" : " off"}`;
+      const title = document.createElement("strong");
+      title.textContent = `${algo.name}${algo.enabledGlobally ? "" : " (off)"}`;
+      block.appendChild(title);
+      const ul = document.createElement("ul");
+      const cats = (algo.categories || []).filter((c) => c.enabled);
+      if (!algo.enabledGlobally) {
+        const li = document.createElement("li");
+        li.textContent = "Turned off — assistants are not checked by this rule.";
+        ul.appendChild(li);
+      } else if (!cats.length) {
+        const li = document.createElement("li");
+        li.textContent = "Nothing selected in Customize.";
+        ul.appendChild(li);
+      } else {
+        for (const c of cats) {
+          const li = document.createElement("li");
+          li.textContent = c.label;
+          ul.appendChild(li);
+        }
+        if (algo.supportsKnownValues && (algo.knownValues || []).length) {
+          const li = document.createElement("li");
+          li.textContent = `Your phrases: ${(algo.knownValues || []).join(", ")}`;
+          ul.appendChild(li);
+        }
+      }
+      block.appendChild(ul);
+      body.appendChild(block);
+    }
+  };
+
   const reloadPolicies = async () => {
     setPolicyStatus("Loading…");
     try {
@@ -225,43 +262,349 @@
         agents: agentsRes.agents || [],
         global,
       };
-      $("policyMeta").textContent = `Private host config: ${status.configPath || ""}`;
+      $("policyMeta").textContent = `Saved only on this Mac: ${status.configPath || ""}`;
+
+      renderCoverageSummary(global.algorithms || []);
 
       const globalRoot = $("globalRows");
       globalRoot.innerHTML = "";
+      const modeLabels = {
+        redact: "Redact",
+        block: "Block",
+        allow: "Allow",
+      };
+      const modeExplain = {
+        redact: "Matched values are replaced; the rest continues.",
+        block: "The whole request is stopped.",
+        allow: "Matching content is left alone (free flow).",
+      };
       for (const algo of global.algorithms || []) {
-        const row = document.createElement("div");
-        row.className = "row";
-        const left = document.createElement("div");
-        left.innerHTML = `<div><strong>${algo.id}</strong>${
-          algo.enabledGlobally ? '<span class="tag">on</span>' : ""
-        }</div><div class="sub">${algo.name || ""}</div>`;
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "btn";
-        btn.textContent = algo.enabledGlobally ? "Disable global" : "Enable global";
-        btn.addEventListener("click", async () => {
-          btn.disabled = true;
+        const card = document.createElement("div");
+        card.className = `policy-card${algo.enabledGlobally ? "" : " disabled-card"}`;
+
+        const head = document.createElement("div");
+        head.className = "policy-card-head";
+
+        const title = document.createElement("h5");
+        title.appendChild(document.createTextNode(algo.name || algo.id));
+        const onBadge = document.createElement("span");
+        onBadge.className = `policy-badge${algo.enabledGlobally ? "" : " off"}`;
+        onBadge.textContent = algo.enabledGlobally ? "Enabled" : "Disabled";
+        title.appendChild(onBadge);
+        if (algo.enabledGlobally) {
+          const modeBadge = document.createElement("span");
+          modeBadge.className = "policy-badge mode";
+          modeBadge.textContent = modeLabels[algo.mode] || algo.mode || "Redact";
+          title.appendChild(modeBadge);
+        }
+        head.appendChild(title);
+
+        const infoWrap = document.createElement("div");
+        infoWrap.className = "policy-info";
+        const infoBtn = document.createElement("button");
+        infoBtn.type = "button";
+        infoBtn.className = "policy-info-btn";
+        infoBtn.setAttribute("aria-label", `About ${algo.name || algo.id}`);
+        infoBtn.setAttribute("aria-expanded", "false");
+        infoBtn.textContent = "i";
+        const tip = document.createElement("div");
+        tip.className = "policy-info-tip";
+        tip.setAttribute("role", "tooltip");
+        const tipTitle = document.createElement("strong");
+        tipTitle.textContent = algo.name || algo.id;
+        tip.appendChild(tipTitle);
+        tip.appendChild(
+          document.createTextNode(
+            algo.info ||
+              algo.description ||
+              "Controls how this kind of sensitive data is shown to assistants.",
+          ),
+        );
+        const tipMode = document.createElement("p");
+        tipMode.style.margin = "0.55rem 0 0";
+        tipMode.style.color = "#8fa79b";
+        const activeMode = algo.enabledGlobally
+          ? modeLabels[algo.mode] || algo.mode
+          : "Disabled";
+        tipMode.textContent = `Current setting: ${activeMode}. ${
+          algo.enabledGlobally
+            ? modeExplain[algo.mode] || ""
+            : "Turn on Enabled to use this rule."
+        }`;
+        tip.appendChild(tipMode);
+        infoBtn.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          const open = tip.classList.toggle("open");
+          infoBtn.setAttribute("aria-expanded", open ? "true" : "false");
+          document.querySelectorAll(".policy-info-tip.open").forEach((el) => {
+            if (el !== tip) {
+              el.classList.remove("open");
+              el.previousElementSibling?.setAttribute?.("aria-expanded", "false");
+            }
+          });
+        });
+        infoWrap.appendChild(infoBtn);
+        infoWrap.appendChild(tip);
+        head.appendChild(infoWrap);
+        card.appendChild(head);
+
+        const desc = document.createElement("p");
+        desc.className = "desc";
+        desc.textContent = algo.description || "";
+        card.appendChild(desc);
+
+        // What this checks — chips
+        const checksLabel = document.createElement("div");
+        checksLabel.className = "control-label";
+        checksLabel.textContent = "What this checks";
+        card.appendChild(checksLabel);
+        const chips = document.createElement("div");
+        chips.className = "chip-row";
+        const enabledCats = (algo.categories || []).filter((c) => c.enabled);
+        if (!enabledCats.length) {
+          const chip = document.createElement("span");
+          chip.className = "chip muted";
+          chip.textContent = "Nothing selected";
+          chips.appendChild(chip);
+        } else {
+          for (const c of enabledCats) {
+            const chip = document.createElement("span");
+            chip.className = "chip";
+            chip.textContent = c.label;
+            chips.appendChild(chip);
+          }
+        }
+        if (algo.customized) {
+          const chip = document.createElement("span");
+          chip.className = "chip muted";
+          chip.textContent = "Customized";
+          chips.appendChild(chip);
+        }
+        card.appendChild(chips);
+
+        const controls = document.createElement("div");
+        controls.className = "controls";
+
+        const modeCol = document.createElement("div");
+        const modeLabel = document.createElement("div");
+        modeLabel.className = "control-label";
+        modeLabel.textContent = "When found";
+        modeCol.appendChild(modeLabel);
+
+        const modes =
+          Array.isArray(algo.allowModes) && algo.allowModes.length
+            ? algo.allowModes
+            : ["redact", "block", "allow"];
+        const modeGroup = document.createElement("div");
+        modeGroup.className = "mode-group";
+        modeGroup.setAttribute("role", "radiogroup");
+        modeGroup.setAttribute("aria-label", `${algo.name} mode`);
+        for (const mode of modes) {
+          const lab = document.createElement("label");
+          const input = document.createElement("input");
+          input.type = "radio";
+          input.name = `mode-${algo.id}`;
+          input.value = mode;
+          input.checked = (algo.mode || "redact") === mode;
+          input.disabled = !algo.enabledGlobally;
+          input.addEventListener("change", async () => {
+            if (!input.checked) return;
+            try {
+              await api("/api/policies/mode", {
+                method: "POST",
+                body: JSON.stringify({ algorithmId: algo.id, mode }),
+              });
+              setPolicyStatus(`${algo.name}: ${modeLabels[mode]}`);
+              await reloadPolicies();
+            } catch (err) {
+              setPolicyStatus(String(err.message || err), true);
+            }
+          });
+          lab.appendChild(input);
+          lab.appendChild(document.createTextNode(modeLabels[mode] || mode));
+          modeGroup.appendChild(lab);
+        }
+        modeCol.appendChild(modeGroup);
+        controls.appendChild(modeCol);
+
+        const toggle = document.createElement("label");
+        toggle.className = "toggle-row";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = !!algo.enabledGlobally;
+        cb.addEventListener("change", async () => {
+          cb.disabled = true;
           try {
             await api("/api/policies/global", {
               method: "POST",
               body: JSON.stringify({
                 algorithmId: algo.id,
-                enabled: !algo.enabledGlobally,
+                enabled: cb.checked,
               }),
             });
             await reloadPolicies();
           } catch (err) {
             setPolicyStatus(String(err.message || err), true);
-            btn.disabled = false;
+            cb.disabled = false;
           }
         });
-        row.appendChild(left);
-        row.appendChild(btn);
-        globalRoot.appendChild(row);
+        toggle.appendChild(cb);
+        toggle.appendChild(
+          document.createTextNode(algo.enabledGlobally ? "Enabled" : "Disabled"),
+        );
+        controls.appendChild(toggle);
+        card.appendChild(controls);
+
+        // Customize disclosure
+        const customize = document.createElement("details");
+        customize.className = "customize";
+        const sum = document.createElement("summary");
+        sum.textContent = "Customize what this checks";
+        customize.appendChild(sum);
+        const body = document.createElement("div");
+        body.className = "customize-body";
+
+        for (const c of algo.categories || []) {
+          const row = document.createElement("label");
+          row.className = "cat-row";
+          const input = document.createElement("input");
+          input.type = "checkbox";
+          input.checked = !!c.enabled;
+          input.disabled = !algo.enabledGlobally;
+          input.addEventListener("change", async () => {
+            const map = {};
+            for (const x of algo.categories || []) {
+              map[x.id] = x.id === c.id ? input.checked : !!x.enabled;
+            }
+            try {
+              await api("/api/policies/categories", {
+                method: "POST",
+                body: JSON.stringify({
+                  algorithmId: algo.id,
+                  categories: map,
+                }),
+              });
+              await reloadPolicies();
+            } catch (err) {
+              setPolicyStatus(String(err.message || err), true);
+              input.checked = !input.checked;
+            }
+          });
+          const label = document.createElement("span");
+          label.className = "cat-label";
+          label.textContent = c.label;
+          const help = document.createElement("p");
+          help.className = "cat-help";
+          help.textContent = c.description || "";
+          row.appendChild(input);
+          row.appendChild(label);
+          row.appendChild(help);
+          body.appendChild(row);
+        }
+
+        if (algo.supportsKnownValues) {
+          const wordsBox = document.createElement("div");
+          wordsBox.className = "words-box";
+          const wordsHelp = document.createElement("p");
+          wordsHelp.className = "cat-help";
+          wordsHelp.style.margin = "0";
+          wordsHelp.textContent =
+            "Add names or phrases (at least 3 characters). Matching text is handled using the When found setting above.";
+          wordsBox.appendChild(wordsHelp);
+
+          const list = document.createElement("ul");
+          list.className = "words-list";
+          const values = [...(algo.knownValues || [])];
+          const renderWords = () => {
+            list.innerHTML = "";
+            if (!values.length) {
+              const empty = document.createElement("p");
+              empty.className = "words-empty";
+              empty.textContent = "No phrases yet.";
+              list.appendChild(empty);
+              return;
+            }
+            for (const word of values) {
+              const li = document.createElement("li");
+              const span = document.createElement("span");
+              span.textContent = word;
+              const rm = document.createElement("button");
+              rm.type = "button";
+              rm.className = "btn danger";
+              rm.textContent = "Remove";
+              rm.disabled = !algo.enabledGlobally;
+              rm.addEventListener("click", async () => {
+                const next = values.filter((w) => w !== word);
+                try {
+                  await api("/api/policies/known-values", {
+                    method: "POST",
+                    body: JSON.stringify({
+                      algorithmId: algo.id,
+                      values: next,
+                    }),
+                  });
+                  await reloadPolicies();
+                } catch (err) {
+                  setPolicyStatus(String(err.message || err), true);
+                }
+              });
+              li.appendChild(span);
+              li.appendChild(rm);
+              list.appendChild(li);
+            }
+          };
+          renderWords();
+          wordsBox.appendChild(list);
+
+          const addRow = document.createElement("div");
+          addRow.className = "words-add";
+          const input = document.createElement("input");
+          input.type = "text";
+          input.placeholder = "e.g. Jane Doe";
+          input.disabled = !algo.enabledGlobally;
+          const addBtn = document.createElement("button");
+          addBtn.type = "button";
+          addBtn.className = "btn primary";
+          addBtn.textContent = "Add";
+          addBtn.disabled = !algo.enabledGlobally;
+          const saveWord = async () => {
+            const v = input.value.trim();
+            if (v.length < 3) {
+              setPolicyStatus("Use at least 3 characters", true);
+              return;
+            }
+            const next = [...new Set([...values, v])];
+            try {
+              await api("/api/policies/known-values", {
+                method: "POST",
+                body: JSON.stringify({ algorithmId: algo.id, values: next }),
+              });
+              input.value = "";
+              await reloadPolicies();
+            } catch (err) {
+              setPolicyStatus(String(err.message || err), true);
+            }
+          };
+          addBtn.addEventListener("click", saveWord);
+          input.addEventListener("keydown", (ev) => {
+            if (ev.key === "Enter") {
+              ev.preventDefault();
+              void saveWord();
+            }
+          });
+          addRow.appendChild(input);
+          addRow.appendChild(addBtn);
+          wordsBox.appendChild(addRow);
+          body.appendChild(wordsBox);
+        }
+
+        customize.appendChild(body);
+        card.appendChild(customize);
+
+        globalRoot.appendChild(card);
       }
       if (!(global.algorithms || []).length) {
-        globalRoot.innerHTML = '<p class="sub">No algorithms registered</p>';
+        globalRoot.innerHTML = '<p class="sub">No policies registered</p>';
       }
 
       renderOverrides();
@@ -273,6 +616,13 @@
   };
 
   $("btnPolicyRefresh").addEventListener("click", () => reloadPolicies());
+
+  document.addEventListener("click", () => {
+    document.querySelectorAll(".policy-info-tip.open").forEach((el) => {
+      el.classList.remove("open");
+      el.previousElementSibling?.setAttribute?.("aria-expanded", "false");
+    });
+  });
 
   $("btnAddOverride")?.addEventListener("click", async () => {
     const agentId = $("overrideAgent")?.value;

@@ -5,6 +5,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
@@ -15,13 +16,17 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
+const require = createRequire(import.meta.url);
 const E2E_TEXT = "xyz";
+const E2E_SHIFT = "a@b!c";
 const TITLE = "OneBridge-KB-E2E";
 const OUT = "/tmp/onebridge-kb-e2e.out";
 
 const { ok, fail, skip, section, done } = createRunner("keyboard");
 
 const dockerExecBrowser = (script, { timeoutMs = 30000 } = {}) => {
+  // Use non-login bash: login shells remap HOME→/host/home (identity), which
+  // makes XFCE/xdotool STAT FUSE and can hang prepareTarget.
   const res = spawnSync(
     "docker",
     [
@@ -32,9 +37,13 @@ const dockerExecBrowser = (script, { timeoutMs = 30000 } = {}) => {
       "DISPLAY=:1",
       "-e",
       "HOME=/home/browser",
+      "-e",
+      "ONEBRIDGE_SANDBOX_HOME=/home/browser",
       "agent-bridge-box",
       "bash",
-      "-lc",
+      "--noprofile",
+      "--norc",
+      "-c",
       script,
     ],
     { encoding: "utf8", timeout: timeoutMs },
@@ -103,12 +112,48 @@ try {
   if (!main.includes("injectKeyToX") || !main.includes("ensureKeyPump")) {
     throw new Error("desktop/main.cjs no longer uses key-pump path");
   }
+  if (!main.includes("key-inject.cjs")) {
+    throw new Error("desktop/main.cjs must use key-inject.cjs mapping");
+  }
   if (main.includes("forwardKeyViaDom")) {
     throw new Error("desktop/main.cjs still depends on broken RFB DOM forward path");
   }
   ok("main.cjs uses HEAD key-pump path");
 } catch (e) {
   fail("key-pump script exists", e);
+}
+
+section("Shift punctuation maps to TYPE (not KEY shift+@)");
+try {
+  const { buildKeyPumpCommand: build } = require(
+    path.join(ROOT, "desktop", "key-inject.cjs"),
+  );
+  const cases = [
+    [{ type: "keyDown", key: "@", shift: true }, "TYPE @\n"],
+    [{ type: "keyDown", key: "!", shift: true }, "TYPE !\n"],
+    [{ type: "keyDown", key: "#", shift: true }, "TYPE #\n"],
+    [{ type: "keyDown", key: "A", shift: true }, "TYPE A\n"],
+    [{ type: "keyDown", key: "a", shift: false }, "TYPE a\n"],
+    [{ type: "keyDown", key: "z", control: true, shift: true }, "KEY ctrl+shift+z\n"],
+    [{ type: "keyDown", key: "z", meta: true }, "KEY ctrl+z\n"],
+  ];
+  for (const [input, expect] of cases) {
+    const got = build(input);
+    if (got !== expect) {
+      throw new Error(
+        `${JSON.stringify(input)} → ${JSON.stringify(got)} want ${JSON.stringify(expect)}`,
+      );
+    }
+  }
+  for (const key of ["@", "!", "#", "$"]) {
+    const got = build({ type: "keyDown", key, shift: true });
+    if (String(got).startsWith("KEY ")) {
+      throw new Error(`shifted ${key} must TYPE, got ${String(got).trim()}`);
+    }
+  }
+  ok("Shift+@/!/# TYPE; chords still KEY");
+} catch (e) {
+  fail("Shift punctuation mapping", e);
 }
 
 if (!dockerBoxRunning()) {
@@ -139,6 +184,21 @@ if (!dockerBoxRunning()) {
     }
     ok(`remote terminal shows "${E2E_TEXT}"`);
 
+    // Shift punctuation characters (@ !) must TYPE, not KEY shift+symbol.
+    prepareTarget();
+    for (const ch of E2E_SHIFT) {
+      pump.stdin.write(`TYPE ${ch}\n`);
+    }
+    pump.stdin.write("KEY Return\n");
+    await new Promise((r) => setTimeout(r, 800));
+    const shifted = dockerExec(`cat ${OUT} 2>/dev/null || true`);
+    if (shifted !== E2E_SHIFT) {
+      throw new Error(
+        `shifted punctuation not typed (expected ${JSON.stringify(E2E_SHIFT)}, got ${JSON.stringify(shifted)})`,
+      );
+    }
+    ok(`remote terminal shows shifted punctuation "${E2E_SHIFT}"`);
+
     // Auto-repeat: multiple BackSpace injections must delete characters.
     prepareTarget();
     for (const ch of "abcd") {
@@ -148,7 +208,7 @@ if (!dockerBoxRunning()) {
       pump.stdin.write("KEY BackSpace\n");
     }
     pump.stdin.write("KEY Return\n");
-    await new Promise((r) => setTimeout(r, 800));
+    await new Promise((r) => setTimeout(r, 1200));
     const afterBs = dockerExec(`cat ${OUT} 2>/dev/null || true`);
     if (afterBs !== "a") {
       throw new Error(

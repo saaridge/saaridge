@@ -49,6 +49,10 @@ import {
   setPolicyOverride,
   listGlobalPolicies,
   setGlobalPolicy,
+  setPolicyMode,
+  setPolicyCategories,
+  setPolicyKnownValues,
+  listPolicyCatalog,
   policyStatus,
   AI_POLICY_CONFIG_PATH,
 } from "../lib/ai-policy.js";
@@ -119,6 +123,44 @@ export const startControlPlane = ({ port = 3847 } = {}) => {
     const force = Boolean(req.body?.force);
     const result = await ensureStreamStack({ force });
     res.status(result.ok ? 200 : 500).json(result);
+  });
+
+  /**
+   * Mediate host pasteboard text before it enters the container (agent-visible).
+   * Fail-closed: deny/error → empty text.
+   */
+  app.post("/api/desktop/mediate-clipboard", async (req, res) => {
+    const raw = req.body?.text == null ? "" : String(req.body.text);
+    const desktopPub = getDesktopAgentPublic();
+    const desktop =
+      getAgentById("workspace-desktop") ||
+      (desktopPub?.id ? getAgentById(desktopPub.id) : null) ||
+      { id: "workspace-desktop" };
+    try {
+      const { onClipboardIngress } = await import("../bridge/control/index.js");
+      const result = await onClipboardIngress({ agent: desktop, text: raw });
+      if (result?.action === "deny") {
+        return res.json({
+          ok: true,
+          text: "",
+          denied: true,
+          reason: result.reason || "denied",
+        });
+      }
+      return res.json({
+        ok: true,
+        text: result?.text == null ? "" : String(result.text),
+        denied: false,
+        action: result?.action || "allow",
+      });
+    } catch (err) {
+      return res.json({
+        ok: true,
+        text: "",
+        denied: true,
+        reason: err?.message || "clipboard_mediate_error",
+      });
+    }
   });
 
   app.get("/api/agents", (_req, res) => {
@@ -329,6 +371,76 @@ export const startControlPlane = ({ port = 3847 } = {}) => {
     } catch (err) {
       const status = err?.code === "UNKNOWN_ALGORITHM" ? 404 : 500;
       res.status(status).json({ ok: false, error: err?.message || String(err) });
+    }
+  });
+
+  app.post("/api/policies/mode", (req, res) => {
+    try {
+      const algorithmId = String(req.body?.algorithmId || "");
+      const mode = String(req.body?.mode || "");
+      if (!algorithmId || !mode) {
+        return res
+          .status(400)
+          .json({ ok: false, error: "algorithmId and mode required" });
+      }
+      const algorithms = setPolicyMode(algorithmId, mode);
+      res.json({ ok: true, algorithms });
+    } catch (err) {
+      const status =
+        err?.code === "UNKNOWN_ALGORITHM"
+          ? 404
+          : err?.code === "INVALID_MODE"
+            ? 400
+            : 500;
+      res.status(status).json({ ok: false, error: err?.message || String(err) });
+    }
+  });
+
+  app.post("/api/policies/categories", (req, res) => {
+    try {
+      const algorithmId = String(req.body?.algorithmId || "");
+      const categories = req.body?.categories;
+      if (!algorithmId || !categories || typeof categories !== "object") {
+        return res.status(400).json({
+          ok: false,
+          error: "algorithmId and categories object required",
+        });
+      }
+      const algorithms = setPolicyCategories(algorithmId, categories);
+      res.json({ ok: true, algorithms });
+    } catch (err) {
+      const status = err?.code === "UNKNOWN_ALGORITHM" ? 404 : 500;
+      res.status(status).json({ ok: false, error: err?.message || String(err) });
+    }
+  });
+
+  app.post("/api/policies/known-values", (req, res) => {
+    try {
+      const algorithmId = String(req.body?.algorithmId || "words-i-protect");
+      const values = req.body?.values;
+      if (!Array.isArray(values)) {
+        return res
+          .status(400)
+          .json({ ok: false, error: "values array required" });
+      }
+      const algorithms = setPolicyKnownValues(algorithmId, values);
+      res.json({ ok: true, algorithms });
+    } catch (err) {
+      const status =
+        err?.code === "UNSUPPORTED"
+          ? 400
+          : err?.code === "UNKNOWN_ALGORITHM"
+            ? 404
+            : 500;
+      res.status(status).json({ ok: false, error: err?.message || String(err) });
+    }
+  });
+
+  app.get("/api/policies/catalog", (_req, res) => {
+    try {
+      res.json({ ok: true, policies: listPolicyCatalog() });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err?.message || String(err) });
     }
   });
 

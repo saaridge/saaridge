@@ -39,7 +39,7 @@ export const BUILTIN_TOOLS = [
   {
     name: "host_info",
     description:
-      "Return HOST identity (homedir, platform, hostname). Use host paths with other tools — the agent is virtualized onto the host via the bridge.",
+      "REQUIRED FIRST: host OS identity and paths. Then run host commands with host_exec (mediated). You are virtualized on the HOST OS. Prefer host_exec over container shell. MCP file tools accept host paths or /host/.... terminal_exec is disabled.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -47,9 +47,30 @@ export const BUILTIN_TOOLS = [
     kind: "builtin",
   },
   {
+    name: "host_exec",
+    description:
+      "Run a shell command on the HOST as the normal user (no sudo/admin). Bridge owns the process; stdout/stderr are mediated before you see them. cwd must be under allowed OneBridge/host roots (default: workspace). Prefer this for all host commands.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        command: { type: "string", description: "Shell command to run on the host" },
+        cwd: {
+          type: "string",
+          description: "Working directory (host path or /host/...). Default: agent workspace",
+        },
+        timeoutMs: {
+          type: "number",
+          description: "Timeout in ms (default 30000, max 120000)",
+        },
+      },
+      required: ["command"],
+    },
+    kind: "builtin",
+  },
+  {
     name: "terminal_exec",
     description:
-      "DISABLED: host shell is not available. Use Data API file tools and vault_http for mediated host/network access.",
+      "DISABLED: unmediated host shell. Use host_exec instead (mediated, user-level).",
     inputSchema: {
       type: "object",
       properties: {

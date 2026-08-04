@@ -3,21 +3,130 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { getAgents, saveAgents } from "./state.js";
-import { dockerCp, dockerExec, containerRunning } from "./docker.js";
+import { dockerCp, dockerExec, containerRunning, updateContainerBootStatus } from "./docker.js";
 import { logStep, logError } from "./logger.js";
 import { ROOT, CONTAINER_NAME } from "./paths.js";
+import { writeWorkspaceOrientation, hostIdentityJson, hostDisplayName } from "./host-identity.js";
 import { clearDesktopKeepInstall, restoreInstalledAppIcons } from "./desktop-launchers.js";
 import { defaultDataPolicy } from "../bridge/data/policy.js";
 import { provisionOneBridgeRoots } from "./auth.js";
 
 export const DESKTOP_AGENT_ID = "workspace-desktop";
 export const DESKTOP_PROXY_PORT = 17999;
+export { hostDisplayName };
 
-/** Short host label for Places / Desktop (e.g. Mohits-Mac-mini). */
-export const hostDisplayName = () =>
-  String(os.hostname() || "Host")
-    .replace(/\.local$/i, "")
-    .split(".")[0] || "Host";
+const HOSTFS_PHASE_PROGRESS = {
+  hostfs_start: 91,
+  hostfs_credentials: 91.5,
+  hostfs_watchdog: 92,
+  hostfs_mount: 93,
+  hostfs_browse: 94,
+  hostfs_remount: 94.5,
+  hostfs_ready: 95.5,
+  hostfs_error: 95,
+};
+
+const applyHostfsPhaseLine = (line) => {
+  const text = String(line || "").trim();
+  if (!text.startsWith("PHASE\t")) return;
+  const parts = text.split("\t");
+  const id = parts[1] || "hostfs_start";
+  const message = parts.slice(2).join("\t") || "Checking host drive…";
+  updateContainerBootStatus({
+    phase: id,
+    progress: HOSTFS_PHASE_PROGRESS[id] ?? 93,
+    message,
+  });
+};
+
+/** Run container hostfs-ready.sh and push PHASE lines to the boot UI. */
+const ensureHostfsReady = async () => {
+  updateContainerBootStatus({
+    phase: "hostfs_start",
+    progress: 91,
+    message: "Preparing host drive checks…",
+  });
+  let buf = "";
+  const phasePoll = setInterval(async () => {
+    try {
+      const res = await dockerExec(
+        ["bash", "-lc", "cat /tmp/hostfs-ready.phase 2>/dev/null || true"],
+        { timeoutMs: 1500 },
+      );
+      const raw = String(res.stdout || "").trim();
+      if (!raw) return;
+      const [id, ...rest] = raw.split("\t");
+      if (!id) return;
+      updateContainerBootStatus({
+        phase: id,
+        progress: HOSTFS_PHASE_PROGRESS[id] ?? 93,
+        message: rest.join("\t") || "Checking host drive…",
+      });
+    } catch {
+      /* ignore poll errors */
+    }
+  }, 400);
+
+  try {
+    let errBuf = "";
+    const ingest = (chunk, which) => {
+      if (which === "out") {
+        buf += chunk;
+        const lines = buf.split("\n");
+        buf = lines.pop() || "";
+        for (const line of lines) applyHostfsPhaseLine(line);
+      } else {
+        errBuf += chunk;
+        const lines = errBuf.split("\n");
+        errBuf = lines.pop() || "";
+        for (const line of lines) applyHostfsPhaseLine(line);
+      }
+    };
+    const res = await dockerExec(
+      [
+        "bash",
+        "-lc",
+        [
+          "chmod 755 /opt/bridge/hostfs-ready.sh 2>/dev/null || true",
+          "export BRIDGE_CREDENTIALS_FILE=/home/browser/.bridge-credentials",
+          "export BRIDGE_URL=http://host.docker.internal:7331",
+          "export HOSTFS_UID=$(id -u browser)",
+          "export HOSTFS_GID=$(id -g browser)",
+          "export HOSTFS_READY_TIMEOUT=\"${HOSTFS_READY_TIMEOUT:-45}\"",
+          "export HOSTFS_BROWSE_BUDGET=\"${HOSTFS_BROWSE_BUDGET:-3}\"",
+          "if command -v stdbuf >/dev/null 2>&1; then stdbuf -oL -eL /opt/bridge/hostfs-ready.sh; else /opt/bridge/hostfs-ready.sh; fi",
+        ].join("; "),
+      ],
+      {
+        timeoutMs: 60_000,
+        onStdout: (chunk) => ingest(chunk, "out"),
+        onStderr: (chunk) => ingest(chunk, "err"),
+      },
+    );
+    if (buf.trim()) applyHostfsPhaseLine(buf);
+    if (res.code !== 0) {
+      const detail =
+        String(res.stdout || res.stderr || "")
+          .split("\n")
+          .filter(Boolean)
+          .pop() || "Host drive browse check failed";
+      updateContainerBootStatus({
+        phase: "hostfs_error",
+        progress: 95,
+        message: detail.replace(/^\[hostfs-ready\]\s*/, ""),
+      });
+      return { ok: false, error: detail };
+    }
+    updateContainerBootStatus({
+      phase: "hostfs_ready",
+      progress: 95.5,
+      message: "Host drive folders respond in time",
+    });
+    return { ok: true };
+  } finally {
+    clearInterval(phasePoll);
+  }
+};
 
 /** Persistent bridge identity for the interactive desktop browser user. */
 export const ensureDesktopCredential = () => {
@@ -121,6 +230,23 @@ export const provisionDesktopSession = async () => {
     hostShared: "/host/shared",
     hostHome: "/host/home",
     hostHostname: hostName,
+    hostUsername: (() => {
+      try {
+        return os.userInfo().username;
+      } catch {
+        return path.basename(os.homedir());
+      }
+    })(),
+    hostNativeHome: os.homedir(),
+    hostPlatform: os.platform(),
+    hostArch: os.arch(),
+    hostRelease: os.release(),
+    hostOsType:
+      os.platform() === "darwin"
+        ? "Darwin"
+        : os.platform() === "win32"
+          ? "Windows_NT"
+          : "Linux",
   };
 
   const hostCred = path.join(ROOT, "state", ".desktop-cred.json");
@@ -141,6 +267,7 @@ export const provisionDesktopSession = async () => {
     "bridge-browser.sh",
     "bridge-mcp-stdio.mjs",
     "launch-browser.sh",
+    "launch-cursor.sh",
     "open-agent.sh",
     "open-install-assistant.sh",
     "gtk-file-picker.py",
@@ -154,8 +281,10 @@ export const provisionDesktopSession = async () => {
     "upgrade-xvfb-max.sh",
     "key-pump.sh",
     "mouse-pump.sh",
+    "clipboard-pump.sh",
     "hostfs-fuse.py",
     "hostfs-watchdog.sh",
+    "hostfs-ready.sh",
     "audio-watchdog.sh",
     "restart-browser.sh",
     "ensure-desktop-icon.py",
@@ -166,7 +295,18 @@ export const provisionDesktopSession = async () => {
     );
   }
   await dockerExec(["mkdir", "-p", "/opt/bridge/host-bin"]);
-  for (const file of ["curl", "wget", "bridge-call"]) {
+  for (const file of [
+    "curl",
+    "wget",
+    "bridge-call",
+    "hostpath",
+    "uname",
+    "hostname",
+    "lsb_release",
+    "host-shell",
+    "bash",
+    "sh",
+  ]) {
     await dockerCp(
       path.join(ROOT, "container", "host-bin", file),
       `${CONTAINER_NAME}:/opt/bridge/host-bin/${file}`,
@@ -207,7 +347,7 @@ export const provisionDesktopSession = async () => {
     "bash",
     "-lc",
     [
-            "chmod 755 /opt/bridge/bridge-browser.sh /opt/bridge/launch-browser.sh /opt/bridge/restart-browser.sh /opt/bridge/open-agent.sh /opt/bridge/open-install-assistant.sh /opt/bridge/gtk-file-picker.py /opt/bridge/repair-desktop.sh /opt/bridge/dedupe-xfce-panel.sh /opt/bridge/ensure-x-modes.sh /opt/bridge/resize-display.sh /opt/bridge/fit-windows.sh /opt/bridge/fix-vnc-stack.py /opt/bridge/key-pump.sh /opt/bridge/mouse-pump.sh /opt/bridge/agent-env.sh /opt/bridge/hostfs-fuse.py /opt/bridge/hostfs-watchdog.sh /opt/bridge/audio-watchdog.sh /opt/bridge/ensure-desktop-icon.py /opt/bridge/host-bin/* /usr/local/bin/start-desktop.sh /usr/local/bin/start-audio.sh /usr/local/bin/start-mic.sh /usr/local/bin/entrypoint.sh",
+            "chmod 755 /opt/bridge/bridge-browser.sh /opt/bridge/launch-browser.sh /opt/bridge/launch-cursor.sh /opt/bridge/restart-browser.sh /opt/bridge/open-agent.sh /opt/bridge/open-install-assistant.sh /opt/bridge/gtk-file-picker.py /opt/bridge/repair-desktop.sh /opt/bridge/dedupe-xfce-panel.sh /opt/bridge/ensure-x-modes.sh /opt/bridge/resize-display.sh /opt/bridge/fit-windows.sh /opt/bridge/fix-vnc-stack.py /opt/bridge/key-pump.sh /opt/bridge/mouse-pump.sh /opt/bridge/clipboard-pump.sh /opt/bridge/agent-env.sh /opt/bridge/hostfs-fuse.py /opt/bridge/hostfs-watchdog.sh /opt/bridge/hostfs-ready.sh /opt/bridge/audio-watchdog.sh /opt/bridge/ensure-desktop-icon.py /opt/bridge/host-bin/* /usr/local/bin/start-desktop.sh /usr/local/bin/start-audio.sh /usr/local/bin/start-mic.sh /usr/local/bin/entrypoint.sh",
       "chmod 644 /opt/bridge/*.mjs 2>/dev/null || true",
       "mkdir -p /host",
       // Keep RANDR modes available so viewer resize maps 1:1 (accurate clicks).
@@ -229,22 +369,9 @@ export const provisionDesktopSession = async () => {
         "BRIDGE_URL=http://host.docker.internal:7331 " +
         "HOSTFS_UID=$(id -u browser) HOSTFS_GID=$(id -g browser) " +
         "nohup /opt/bridge/hostfs-watchdog.sh >/tmp/hostfs-watchdog.log 2>&1 &",
-      // Wait briefly then recreate host-home link + Places bookmark only.
-      `HOST_LABEL=${JSON.stringify(hostName)}; ` +
-        "for i in $(seq 1 40); do " +
-        "[[ -d /host/home ]] && break; sleep 0.25; done; " +
-        "rm -f /home/browser/Projects /home/browser/Host\\ Home /home/browser/host-home " +
-        "'/home/browser/Desktop/Host Projects' '/home/browser/Desktop/Host-Projects' 2>/dev/null || true; " +
-        'ln -sfn /host/home "/home/browser/${HOST_LABEL} Home" 2>/dev/null || true; ' +
-        'ln -sfn /host/home "/home/browser/Desktop/${HOST_LABEL} Home" 2>/dev/null || true; ' +
-        "mkdir -p /home/browser/.config/gtk-3.0; " +
-        'printf "%s\\n" "file:///host/home ${HOST_LABEL} Home" ' +
-        "> /home/browser/.config/gtk-3.0/bookmarks; " +
-        "chown -R browser:browser /home/browser/.config/gtk-3.0 " +
-        '"/home/browser/${HOST_LABEL} Home" ' +
-        '"/home/browser/Desktop/${HOST_LABEL} Home" 2>/dev/null || true',
     ].join("; "),
   ]);
+
   await dockerCp(
     path.join(ROOT, "container", "novnc-onebridge.html"),
     `${CONTAINER_NAME}:/usr/share/novnc/novnc-onebridge.html`,
@@ -276,6 +403,63 @@ export const provisionDesktopSession = async () => {
   }
 
   await dockerCp(hostCred, `${CONTAINER_NAME}:/home/browser/.bridge-credentials`);
+  // Host OS identity for uname/hostname shims + agent orientation (all agents).
+  try {
+    const { hostIdentityJson, writeWorkspaceOrientation } = await import(
+      "./host-identity.js"
+    );
+    const orient = writeWorkspaceOrientation(agent.id);
+    const idPath = path.join(ROOT, "state", ".host-identity.json");
+    fs.writeFileSync(idPath, hostIdentityJson(agent.id), { mode: 0o644 });
+    await dockerCp(idPath, `${CONTAINER_NAME}:/opt/bridge/host-identity.json`);
+    await dockerCp(
+      idPath,
+      `${CONTAINER_NAME}:/home/browser/.onebridge-host-identity.json`,
+    );
+    // Mirror orientation into sandbox home so agents still see host-only
+    // identity if Cursor restores /home/browser as the open folder.
+    await dockerExec([
+      "bash",
+      "-c",
+      "mkdir -p /home/browser/.cursor/rules && chown -R browser:browser /home/browser/.cursor",
+    ]);
+    await dockerCp(orient.agentsMd, `${CONTAINER_NAME}:/home/browser/AGENTS.md`);
+    await dockerCp(
+      orient.rulePath,
+      `${CONTAINER_NAME}:/home/browser/.cursor/rules/onebridge-host-os.mdc`,
+    );
+    await dockerCp(
+      path.join(ROOT, "container", "sync-host-os-release.sh"),
+      `${CONTAINER_NAME}:/opt/bridge/sync-host-os-release.sh`,
+    );
+    await dockerCp(
+      path.join(ROOT, "container", "install-host-identity-bins.sh"),
+      `${CONTAINER_NAME}:/opt/bridge/install-host-identity-bins.sh`,
+    );
+    await dockerCp(
+      path.join(ROOT, "container", "install-sandbox-profile.sh"),
+      `${CONTAINER_NAME}:/opt/bridge/install-sandbox-profile.sh`,
+    );
+    await dockerCp(
+      path.join(ROOT, "container", "host-bin", "whoami"),
+      `${CONTAINER_NAME}:/opt/bridge/host-bin/whoami`,
+    );
+    await dockerExec([
+      "bash",
+      "-c",
+      [
+        "chmod 755 /opt/bridge/sync-host-os-release.sh /opt/bridge/install-host-identity-bins.sh /opt/bridge/install-sandbox-profile.sh /opt/bridge/host-bin/*",
+        "/opt/bridge/sync-host-os-release.sh",
+        "/opt/bridge/install-host-identity-bins.sh",
+        "/opt/bridge/install-sandbox-profile.sh",
+      ].join(" && "),
+    ]);
+    fs.unlinkSync(idPath);
+  } catch (err) {
+    logError("Could not install host identity in container", {
+      detail: String(err?.message || err),
+    });
+  }
   fs.unlinkSync(hostCred);
 
   await dockerExec([
@@ -287,6 +471,44 @@ export const provisionDesktopSession = async () => {
       `echo ${agent.localProxyPort} > /var/run/bridge/active-proxy-port`,
       "chmod 644 /var/run/bridge/active-proxy-port",
     ].join(" && "),
+  ]);
+
+  // Mount + timed folder browse (updates boot UI phase labels).
+  const hostfs = await ensureHostfsReady();
+  if (!hostfs.ok) {
+    return {
+      ok: false,
+      error: hostfs.error || "Host drive failed browse readiness check",
+    };
+  }
+
+  // Places / Desktop host-home link once /host is confirmed browsable.
+  await dockerExec([
+    "bash",
+    "-lc",
+    [
+      `HOST_LABEL=${JSON.stringify(hostName)}`,
+      "rm -f /home/browser/Projects /home/browser/Host\\ Home /home/browser/host-home " +
+        "'/home/browser/Desktop/Host Projects' '/home/browser/Desktop/Host-Projects' " +
+        "/home/browser/Unknown_*\\ Home /home/browser/Desktop/Unknown_*\\ Home " +
+        "/home/browser/host-layout.json 2>/dev/null || true",
+      "for d in Documents Music Pictures Public Templates Videos; do " +
+        "[[ -d /home/browser/\$d ]] || continue; " +
+        "[[ -z \"\$(find /home/browser/\$d -mindepth 1 -maxdepth 1 2>/dev/null | head -1)\" ]] && rmdir /home/browser/\$d 2>/dev/null || true; " +
+        "done",
+      'ln -sfn /host/home "/home/browser/${HOST_LABEL} Home" 2>/dev/null || true',
+      'ln -sfn /host/home "/home/browser/Desktop/${HOST_LABEL} Home" 2>/dev/null || true',
+      "if [[ -d /host/home/Downloads ]]; then " +
+        "if [[ -L /home/browser/Downloads ]] || [[ ! -e /home/browser/Downloads ]]; then " +
+        "ln -sfn /host/home/Downloads /home/browser/Downloads; " +
+        "elif [[ -d /home/browser/Downloads ]] && [[ -z \"\$(find /home/browser/Downloads -mindepth 1 -maxdepth 1 2>/dev/null | head -1)\" ]]; then " +
+        "rmdir /home/browser/Downloads 2>/dev/null; ln -sfn /host/home/Downloads /home/browser/Downloads; fi; fi",
+      "mkdir -p /home/browser/.config/gtk-3.0",
+      'printf "%s\\n" "file:///host/home ${HOST_LABEL} Home" > /home/browser/.config/gtk-3.0/bookmarks',
+      "printf '%s\\n' 'enabled=False' 'filename_encoding=UTF-8' > /home/browser/.config/user-dirs.conf",
+      "chown -R browser:browser /home/browser/.config/gtk-3.0 /home/browser/.config/user-dirs.conf 2>/dev/null || true",
+      'chown -h browser:browser "/home/browser/${HOST_LABEL} Home" "/home/browser/Desktop/${HOST_LABEL} Home" /home/browser/Downloads 2>/dev/null || true',
+    ].join("; "),
   ]);
 
   // Keep auth-proxy up, but do not kill the user's browser or whole desktop.

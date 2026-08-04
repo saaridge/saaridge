@@ -12,6 +12,7 @@ Read and obey [`CONSTRAINTS.md`](../../CONSTRAINTS.md) for this repo.
 - Add hostname/URL allowlists or static MITM passthrough entries (e.g. `linkedin.com`) to “fix” browsing.
 - Soft-open container egress or re-enable host `terminal_exec`.
 - Bypass [`host/bridge/control/lib.js`](../../host/bridge/control/lib.js) for host or network text the agent sees.
+- Ship app- or agent-specific workarounds (named product trust paths, per-app passthrough, one-off launch hacks); use shared container/bridge mechanisms instead.
 
 ## Always preserve
 
@@ -20,3 +21,4 @@ Read and obey [`CONSTRAINTS.md`](../../CONSTRAINTS.md) for this repo.
 - Encrypted vault at rest under `state/private/` (bridge-only).
 - Fail-closed network lock (IPv4 + IPv6 + DNS pin).
 - Adaptive (runtime) MITM passthrough only — no checked-in site lists. See `CONSTRAINTS.md`.
+- Treat the **host operator as trusted** (ideal, non-malicious). Do not add complexity that only defends against a hostile host.

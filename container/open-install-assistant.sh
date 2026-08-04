@@ -21,10 +21,33 @@ LOG=/tmp/open-install-assistant.log
 DONE_FLAG=/tmp/onebridge-install-done
 mkdir -p "$HOME/Downloads"
 
-CONTROL_URL="${ONEBRIDGE_CONTROL_URL:-http://host.docker.internal:3847}"
+# Host install APIs go through the bridge (:7331), not control plane (:3847).
+# Control plane is host-only; network-lock blocks container → :3847.
+BRIDGE_URL="${BRIDGE_URL:-${ONEBRIDGE_BRIDGE_URL:-http://host.docker.internal:7331}}"
+BRIDGE_URL="${BRIDGE_URL%/}"
+CRED_FILE="${BRIDGE_CREDENTIALS_FILE:-$HOME/.bridge-credentials}"
+if [[ -z "${BRIDGE_TOKEN:-}" && -f "$CRED_FILE" ]]; then
+  BRIDGE_TOKEN="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("token",""))' "$CRED_FILE" 2>/dev/null || true)"
+fi
 PICKER_PY="${ONEBRIDGE_FILE_PICKER:-/opt/bridge/gtk-file-picker.py}"
 LIST_APPS_PY="${ONEBRIDGE_LIST_APPS:-/opt/bridge/list-workspace-apps.py}"
 PROGRESS_PID=""
+
+bridge_curl() {
+  # Usage: bridge_curl METHOD PATH [curl -d args...]
+  local method="$1"
+  local path="$2"
+  shift 2
+  if [[ -z "${BRIDGE_TOKEN:-}" ]]; then
+    echo "[install] missing BRIDGE_TOKEN" >>"$LOG"
+    return 1
+  fi
+  curl -sS --connect-timeout 5 \
+    -X "$method" "${BRIDGE_URL}${path}" \
+    -H "Authorization: Bearer ${BRIDGE_TOKEN}" \
+    -H 'Content-Type: application/json' \
+    "$@"
+}
 
 echo "[install $(date -Is)] start" >>"$LOG"
 
@@ -111,21 +134,18 @@ do_install() {
 
   LOCAL_CLIENT="${ONEBRIDGE_OPS_CLIENT:-/opt/bridge/workspace-ops-client.py}"
   set +e
-  # Prefer OS-local install (.deb / .AppImage) — no control plane required.
+  # Prefer OS-local install (.deb / .AppImage) — no host bridge required.
   RESP="$(python3 "$LOCAL_CLIENT" install "$FILE" 2>>"$LOG")"
   local_ec=$?
   NEED_HOST=0
   if [[ -n "${RESP:-}" ]]; then
     python3 -c 'import json,sys; raise SystemExit(0 if json.loads(sys.argv[1]).get("needsHost") else 1)' "$RESP" 2>/dev/null && NEED_HOST=1
   fi
-  # Fall back to control plane for assistant zips, or if local helper is down.
+  # Fall back to host bridge for assistant zips, or if local helper is down.
   if [[ $NEED_HOST -eq 1 || $local_ec -ne 0 || -z "${RESP:-}" ]]; then
-    echo "[install] trying control plane (need_host=$NEED_HOST local_ec=$local_ec)" >>"$LOG"
+    echo "[install] trying host bridge (need_host=$NEED_HOST local_ec=$local_ec)" >>"$LOG"
     PAYLOAD="$(python3 -c 'import json,sys; print(json.dumps({"path": sys.argv[1]}))' "$FILE")"
-    HOST_RESP="$(curl -sS --connect-timeout 5 --max-time 600 \
-      -X POST "${CONTROL_URL}/api/agents/install-from-workspace-path" \
-      -H 'Content-Type: application/json' \
-      -d "$PAYLOAD" 2>>"$LOG")"
+    HOST_RESP="$(bridge_curl POST /v1/workspace/install-from-path --max-time 600 -d "$PAYLOAD" 2>>"$LOG")"
     host_ec=$?
     if [[ $host_ec -eq 0 && -n "${HOST_RESP:-}" ]]; then
       RESP="$HOST_RESP"
@@ -170,12 +190,11 @@ except Exception:
 do_uninstall() {
   local LIST RESP curl_ec PKG NAME OK ERR APPS_JSON COUNT
   set +e
-  # Prefer local list (works even when control plane is down); merge with API when available.
+  # Prefer local list (works even when bridge is down); merge with API when available.
   APPS_JSON="$(python3 "$LIST_APPS_PY" 2>>"$LOG" || echo '[]')"
   COUNT="$(python3 -c 'import json,sys; print(len(json.loads(sys.argv[1])))' "$APPS_JSON" 2>/dev/null || echo 0)"
   if [[ "$COUNT" == "0" ]]; then
-    LIST="$(curl -sS --connect-timeout 5 --max-time 30 \
-      "${CONTROL_URL}/api/agents/workspace-apps" 2>>"$LOG")"
+    LIST="$(bridge_curl GET /v1/workspace/apps --max-time 30 2>>"$LOG")"
     curl_ec=$?
     if [[ $curl_ec -eq 0 && -n "${LIST:-}" ]]; then
       APPS_JSON="$(python3 -c 'import json,sys
@@ -212,15 +231,12 @@ except Exception:
 
   PAYLOAD="$(python3 -c 'import json,sys; print(json.dumps({"package": sys.argv[1]}))' "$PKG")"
   set +e
-  RESP="$(curl -sS --connect-timeout 5 --max-time 300 \
-    -X POST "${CONTROL_URL}/api/agents/uninstall-workspace-app" \
-    -H 'Content-Type: application/json' \
-    -d "$PAYLOAD" 2>>"$LOG")"
+  RESP="$(bridge_curl POST /v1/workspace/uninstall-app --max-time 300 -d "$PAYLOAD" 2>>"$LOG")"
   curl_ec=$?
-  # Fall back to local uninstall when control plane is unreachable.
-  # Do NOT use sudo here — agents must not elevate; host ops go via control plane / ops daemon.
+  # Fall back to local uninstall when host bridge is unreachable.
+  # Do NOT use sudo here — agents must not elevate; host ops go via bridge / ops daemon.
   if [[ $curl_ec -ne 0 || -z "${RESP:-}" ]]; then
-    echo "[uninstall] control plane unreachable (curl_ec=$curl_ec); trying local ops client" >>"$LOG"
+    echo "[uninstall] host bridge unreachable (curl_ec=$curl_ec); trying local ops client" >>"$LOG"
     LOCAL_CLIENT="${ONEBRIDGE_OPS_CLIENT:-/opt/bridge/workspace-ops-client.py}"
     LOCAL_UNINSTALL="${ONEBRIDGE_UNINSTALL:-/opt/bridge/uninstall-workspace-app.sh}"
     if [[ -x "$LOCAL_CLIENT" || -f "$LOCAL_CLIENT" ]]; then
@@ -231,7 +247,7 @@ except Exception:
       curl_ec=$?
     else
       echo "[uninstall] no non-sudo uninstall path available" >>"$LOG"
-      RESP='{"ok":false,"error":"Control plane unreachable; sudo uninstall is disabled. Retry from OneBridge host."}'
+      RESP='{"ok":false,"error":"Host bridge unreachable; sudo uninstall is disabled. Retry from OneBridge host."}'
       curl_ec=1
     fi
   fi

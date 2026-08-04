@@ -26,8 +26,13 @@ export const logTraffic = (entry) => {
   };
   fs.appendFileSync(TRAFFIC_FILE, JSON.stringify(row) + "\n");
   const preview = (entry.body || "").slice(0, 120).replace(/\s+/g, " ");
+  // Never print resolved secrets to host console.
+  const safePreview =
+    entry.bodyRedacted || entry.vaultResolved || entry.hadVault
+      ? "<redacted>"
+      : preview;
   console.log(
-    `[traffic] agent=${entry.agentId || "?"} ${entry.direction} ${entry.method || ""} ${entry.url || entry.host || ""} ${entry.statusCode || ""} ${preview}`,
+    `[traffic] agent=${entry.agentId || "?"} ${entry.direction} ${entry.method || ""} ${entry.url || entry.host || ""} ${entry.statusCode || ""} ${safePreview}`,
   );
 };
 

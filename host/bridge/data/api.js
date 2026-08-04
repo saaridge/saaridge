@@ -4,6 +4,8 @@ import {
   maxReadBytes,
   maxWriteBytes,
   effectiveRoots,
+  isBridgeStatePath,
+  filterBridgeStateListing,
 } from "./policy.js";
 import { transformRead, transformWrite, transformList } from "./transform.js";
 import { audit } from "./audit.js";
@@ -57,6 +59,8 @@ const auditFail = (agent, op, err, detail) => {
 const warmTreeAsync = (realPath) => {
   // Never deep-warm ignore-list trees (explicit access is shallow only).
   if (pathHasExcludedComponent(realPath)) return;
+  // Never warm under bridge STATE_DIR.
+  if (isBridgeStatePath(realPath)) return;
   // Fire-and-forget: populate tree memo so IDE FUSE hydrate is instant.
   setImmediate(() => {
     (async () => {
@@ -79,6 +83,7 @@ const warmTreeAsync = (realPath) => {
           maxDepth,
           exclude: AGENT_FS_EXCLUDES,
           maxEntries,
+          skipPath: isBridgeStatePath,
         });
         fsMemo.setTreeMemo(
           realPath,
@@ -136,6 +141,8 @@ export const list = async (
       if (explicitExcluded || !includeFlag) {
         entries = filterExcludedEntries(entries);
       }
+      // CONSTRAINTS §3: never list this install's STATE_DIR (vault/tokens/MITM).
+      entries = filterBridgeStateListing(real, entries);
       // Agent/IDE browse warms tree memo for FUSE folder open (non-excluded only).
       warmTreeAsync(real);
       auditOk(agent, "list", {
@@ -195,6 +202,7 @@ export const tree = async (
           maxDepth: depth,
           exclude: exclude || AGENT_FS_EXCLUDES,
           maxEntries: cap,
+          skipPath: isBridgeStatePath,
         });
         fsMemo.setTreeMemo(
           real,
@@ -206,6 +214,8 @@ export const tree = async (
           info.size,
         );
       }
+      // Defense in depth: drop any STATE_DIR entries (incl. stale memo).
+      entries = filterBridgeStateListing(real, entries);
       auditOk(agent, "tree", {
         path: real,
         count: entries.length,

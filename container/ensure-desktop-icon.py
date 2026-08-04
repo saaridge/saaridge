@@ -56,7 +56,13 @@ def rewrite(src: str, dest: str, pkg: str) -> None:
                 rest = [p for p in parts[1:] if not p.startswith("%")]
                 flags = []
                 low = bin0.lower()
-                if any(x in low for x in ("cursor", "chrom", "code", "electron")):
+                is_cursor = "cursor" in low
+                # Cursor: route through launch-cursor.sh (proxy + MITM CA env).
+                if is_cursor and os.path.isfile("/opt/bridge/launch-cursor.sh"):
+                    bin0 = "/opt/bridge/launch-cursor.sh"
+                    rest = []
+                    flags = []
+                elif any(x in low for x in ("cursor", "chrom", "code", "electron")):
                     for f in ("--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"):
                         if f not in rest:
                             flags.append(f)
@@ -67,7 +73,7 @@ def rewrite(src: str, dest: str, pkg: str) -> None:
                     or os.environ.get("ONEBRIDGE_PROJECTS")
                     or ""
                 ).strip()
-                if "cursor" in low and project and not any(
+                if is_cursor and project and not any(
                     p.startswith("/host/") or p == project for p in rest
                 ):
                     rest.append(project)

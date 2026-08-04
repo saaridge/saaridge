@@ -58,7 +58,8 @@ try {
 }
 
 try {
-  const big = Buffer.alloc(3 * 1024 * 1024, 0x61); // 3 MiB of 'a'
+  const big = Buffer.alloc(3 * 1024 * 1024);
+  for (let i = 0; i < big.length; i++) big[i] = i & 0xff; // patterned binary (not an encoded-blob lookalike)
   const rel = path.join(workspaceRootFor(agentId), "chunk-test.bin");
   await write(agent, rel, big.subarray(0, 1024 * 1024), {
     offset: 0,
@@ -77,7 +78,7 @@ try {
     length: 64,
     encoding: "buffer",
   });
-  if (part.bytes !== 64 || part.data[0] !== 0x61) {
+  if (part.bytes !== 64 || part.data[0] !== ((1024 * 1024) & 0xff)) {
     throw new Error("chunk mismatch");
   }
   const full = await read(agent, rel, { encoding: "buffer" });

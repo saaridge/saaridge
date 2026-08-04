@@ -171,7 +171,7 @@ if ! stream_listening; then
   exit 1
 fi
 
-# Virtual host microphone (pipe-source + :6083). Non-fatal if script missing.
+# Virtual host microphone (input-only pipe-source + :6083). Non-fatal if script missing.
 START_MIC="${START_MIC:-/usr/local/bin/start-mic.sh}"
 if [[ -x "$START_MIC" ]]; then
   if ! "$START_MIC" >>/tmp/start-mic.log 2>&1; then

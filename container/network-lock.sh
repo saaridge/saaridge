@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Allow only host bridge MCP/Data API (:7331), inspecting proxy (:7332),
-# FS IPC (:7333), and control plane (:3847). FAIL CLOSED — no soft-open egress.
+# and FS IPC (:7333). FAIL CLOSED — no soft-open egress.
+# Control plane (:3847) is host-only (127.0.0.1) — not reachable from the container.
 #
 # Hardening:
 #  - IPv6 OUTPUT DROP (no IPv6 bypass of IPv4 lock)
@@ -11,7 +12,6 @@ BRIDGE_HOST="${BRIDGE_HOST:-host.docker.internal}"
 BRIDGE_PORT="${BRIDGE_PORT:-7331}"
 BRIDGE_PROXY_PORT="${BRIDGE_PROXY_PORT:-7332}"
 BRIDGE_FS_PORT="${BRIDGE_FS_PORT:-${HOSTFS_IPC_PORT:-7333}}"
-CONTROL_PORT="${CONTROL_PORT:-3847}"
 RESOLV_CONF="${RESOLV_CONF:-/etc/resolv.conf}"
 
 # Parse nameserver IPs from resolv.conf (pure; also used by tests via --print-dns).
@@ -70,7 +70,6 @@ done
 iptables -A OUTPUT -d "$BRIDGE_IP" -p tcp --dport "$BRIDGE_PORT" -j ACCEPT
 iptables -A OUTPUT -d "$BRIDGE_IP" -p tcp --dport "$BRIDGE_PROXY_PORT" -j ACCEPT
 iptables -A OUTPUT -d "$BRIDGE_IP" -p tcp --dport "$BRIDGE_FS_PORT" -j ACCEPT
-iptables -A OUTPUT -d "$BRIDGE_IP" -p tcp --dport "$CONTROL_PORT" -j ACCEPT
 iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 # Default policy already DROP; keep explicit terminal DROP for clarity
 iptables -A OUTPUT -j DROP
@@ -90,7 +89,8 @@ if command -v ip6tables >/dev/null 2>&1; then
   ip6tables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
   ip6tables -A OUTPUT -j DROP || true
 else
-  echo "[network-lock] WARN: ip6tables missing — IPv6 may be unfiltered" >&2
+  echo "[network-lock] FATAL: ip6tables not available — refusing IPv6 soft-open" >&2
+  exit 1
 fi
 
 # Harden: prevent same-UID ptrace of siblings where possible (best-effort)
@@ -98,4 +98,4 @@ if [[ -w /proc/sys/kernel/yama/ptrace_scope ]]; then
   echo 1 > /proc/sys/kernel/yama/ptrace_scope || true
 fi
 
-echo "[network-lock] egress locked to ${BRIDGE_IP}:{${BRIDGE_PORT},${BRIDGE_PROXY_PORT},${BRIDGE_FS_PORT},${CONTROL_PORT}}; dns=${DNS_SERVERS[*]}; ipv6=drop"
+echo "[network-lock] egress locked to ${BRIDGE_IP}:{${BRIDGE_PORT},${BRIDGE_PROXY_PORT},${BRIDGE_FS_PORT}}; dns=${DNS_SERVERS[*]}; ipv6=drop"

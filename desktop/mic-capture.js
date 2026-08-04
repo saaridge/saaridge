@@ -137,11 +137,12 @@
         ws.send(pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength));
       } catch (_) {}
     };
-    const gain = audioCtx.createGain();
-    gain.gain.value = 0;
+    // ScriptProcessor must reach destination to run; gain 0 = no Mac sidetone.
+    const mute = audioCtx.createGain();
+    mute.gain.value = 0;
     sourceNode.connect(processor);
-    processor.connect(gain);
-    gain.connect(audioCtx.destination);
+    processor.connect(mute);
+    mute.connect(audioCtx.destination);
 
     connectWs();
     post({ state: "sharing", message: "Sharing microphone with workspace" });

@@ -25,13 +25,31 @@ for arg in "$@"; do
   esac
 done
 
+# Scan --post-file / --body-file for vault://
+if [[ "$NEED_MEDIATE" -eq 0 ]]; then
+  prev=""
+  for arg in "$@"; do
+    if [[ "$prev" == "--post-file" || "$prev" == "--body-file" ]]; then
+      if [[ -f "$arg" ]] && grep -q 'vault://' "$arg" 2>/dev/null; then
+        NEED_MEDIATE=1
+        break
+      fi
+    fi
+    if [[ "$prev" == "--post-data" || "$prev" == "--body-data" ]] && [[ "$arg" == *vault://* ]]; then
+      NEED_MEDIATE=1
+      break
+    fi
+    prev="$arg"
+  done
+fi
+
 if [[ "$NEED_MEDIATE" -eq 1 ]]; then
   if [[ ! -x /opt/bridge/host-bin/bridge-call ]]; then
     echo "wget shim: vault:// requires bridge-call (MEDIATE) but it is missing" >&2
     exit 1
   fi
   ARGS_JSON="$(python3 - "$@" <<'PY'
-import json, sys
+import json, sys, os
 args = sys.argv[1:]
 method = "GET"
 url = None
@@ -60,6 +78,14 @@ while i < len(args):
         continue
     if a in ("--post-data", "--body-data") and i + 1 < len(args):
         body = args[i + 1]
+        method = "POST"
+        i += 2
+        continue
+    if a in ("--post-file", "--body-file") and i + 1 < len(args):
+        path = args[i + 1]
+        if os.path.isfile(path):
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                body = fh.read()
         method = "POST"
         i += 2
         continue

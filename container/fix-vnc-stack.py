@@ -105,6 +105,14 @@ def kill_targets() -> list[int]:
     return killed
 
 
+def wait_ports_free(timeout_s: float = 3.0) -> None:
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if not port_listening(5900) and not port_listening(6080):
+            return
+        time.sleep(0.1)
+
+
 def start_stack() -> None:
     env = os.environ.copy()
     env["DISPLAY"] = ":1"
@@ -160,6 +168,7 @@ def main() -> int:
     killed = kill_targets()
     print("killed", killed)
     time.sleep(0.6)
+    wait_ports_free()
     start_stack()
 
     for _ in range(20):

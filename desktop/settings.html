@@ -71,6 +71,14 @@
         flex-direction: column;
         min-height: 0;
         overflow: hidden;
+        height: 100%;
+      }
+      .pane {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
       }
       .pane-header {
         display: flex;
@@ -93,10 +101,16 @@
         gap: 0.45rem;
         flex-shrink: 0;
       }
+      /* flex:1 + height:0 is the reliable Electron scroll pattern */
       .pane-body {
-        flex: 1;
-        overflow: auto;
-        padding: 1rem 1.15rem 1.25rem;
+        flex: 1 1 auto;
+        height: 0;
+        min-height: 0;
+        overflow-y: scroll;
+        overflow-x: hidden;
+        padding: 1rem 1.15rem 1.75rem;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior: contain;
       }
       .pane[hidden] { display: none !important; }
       h4 {
@@ -173,10 +187,13 @@
       }
       .section {
         border: 1px solid var(--line);
-        border-radius: 10px;
-        padding: 0.7rem 0.75rem;
+        border-radius: 12px;
+        padding: 0.85rem 0.9rem 0.95rem;
         background: #121a17;
-        margin-bottom: 0.75rem;
+        margin-bottom: 1rem;
+      }
+      .section > h4 {
+        margin: 0 0 0.65rem;
       }
       .row {
         display: flex;
@@ -244,6 +261,333 @@
         }
         .add-override .span-2 { grid-column: 1 / -1; }
       }
+      .policy-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+      }
+      .policy-card {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 1rem 1.05rem;
+        background: var(--soft);
+      }
+      .policy-card.disabled-card {
+        opacity: 0.72;
+      }
+      .policy-card-head {
+        display: flex;
+        align-items: flex-start;
+        gap: 0.5rem;
+        margin-bottom: 0.4rem;
+      }
+      .policy-card h5 {
+        margin: 0;
+        font-size: 1rem;
+        font-weight: 650;
+        color: var(--text);
+        line-height: 1.35;
+        flex: 1;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.4rem;
+      }
+      .policy-badge {
+        display: inline-flex;
+        align-items: center;
+        font-size: 0.65rem;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+        padding: 0.15rem 0.4rem;
+        border-radius: 999px;
+        color: var(--accent);
+        background: rgba(61, 186, 138, 0.16);
+      }
+      .policy-badge.off {
+        color: #c9a0a0;
+        background: rgba(196, 92, 92, 0.14);
+      }
+      .policy-badge.mode {
+        color: #d7e6df;
+        background: rgba(231, 240, 235, 0.08);
+        border: 1px solid var(--line);
+        text-transform: none;
+        font-weight: 600;
+        letter-spacing: 0;
+      }
+      .policy-info {
+        position: relative;
+        flex-shrink: 0;
+      }
+      .policy-info-btn {
+        appearance: none;
+        width: 1.5rem;
+        height: 1.5rem;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: #0b100e;
+        color: var(--muted);
+        font: 700 0.78rem/1 Georgia, "Times New Roman", serif;
+        font-style: italic;
+        cursor: pointer;
+        padding: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .policy-info-btn:hover,
+      .policy-info-btn:focus-visible {
+        color: var(--accent);
+        border-color: rgba(61, 186, 138, 0.45);
+        outline: none;
+      }
+      .policy-info-btn[aria-expanded="true"] {
+        color: var(--accent);
+        border-color: rgba(61, 186, 138, 0.55);
+        background: rgba(61, 186, 138, 0.12);
+      }
+      .policy-info-tip {
+        display: none;
+        position: absolute;
+        z-index: 20;
+        right: 0;
+        top: calc(100% + 0.4rem);
+        width: min(24rem, calc(100vw - 13rem));
+        padding: 0.75rem 0.85rem;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        background: #0b100e;
+        color: var(--text);
+        font-size: 0.8rem;
+        font-weight: 400;
+        font-style: normal;
+        line-height: 1.5;
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+      }
+      .policy-info-tip.open { display: block; }
+      .policy-info-tip strong {
+        display: block;
+        margin-bottom: 0.35rem;
+        font-size: 0.78rem;
+      }
+      .policy-card .desc {
+        color: #b7c9c0;
+        font-size: 0.84rem;
+        line-height: 1.5;
+        margin: 0 0 0.85rem;
+      }
+      .policy-card .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem 1rem;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .control-label {
+        font-size: 0.68rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--muted);
+        margin: 0 0 0.35rem;
+      }
+      .mode-group {
+        display: inline-flex;
+        flex-wrap: wrap;
+        gap: 0;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        overflow: hidden;
+        background: #0b100e;
+      }
+      .mode-group label {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0;
+        padding: 0.4rem 0.7rem;
+        border: 0;
+        border-right: 1px solid var(--line);
+        border-radius: 0;
+        font-size: 0.8rem;
+        color: var(--text);
+        cursor: pointer;
+        user-select: none;
+        background: transparent;
+        min-width: 4.25rem;
+      }
+      .mode-group label:last-child { border-right: 0; }
+      .mode-group label:has(input:disabled) {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+      .mode-group label:has(input:checked) {
+        background: rgba(61, 186, 138, 0.2);
+        color: var(--accent);
+        font-weight: 600;
+      }
+      .mode-group input {
+        position: absolute;
+        opacity: 0;
+        pointer-events: none;
+      }
+      .toggle-row {
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+        font-size: 0.84rem;
+        color: var(--text);
+        margin: 0;
+      }
+      .toggle-row input {
+        width: 1rem;
+        height: 1rem;
+        accent-color: var(--accent);
+      }
+      .coverage-summary {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: #121a17;
+        margin-bottom: 1rem;
+        overflow: hidden;
+      }
+      .coverage-summary > summary {
+        cursor: pointer;
+        list-style: none;
+        padding: 0.75rem 0.9rem;
+        font-size: 0.88rem;
+        font-weight: 600;
+        color: var(--text);
+        user-select: none;
+      }
+      .coverage-summary > summary::-webkit-details-marker { display: none; }
+      .coverage-summary > summary::after {
+        content: "Show";
+        float: right;
+        font-size: 0.75rem;
+        font-weight: 500;
+        color: var(--muted);
+      }
+      .coverage-summary[open] > summary::after { content: "Hide"; }
+      .coverage-body {
+        padding: 0 0.9rem 0.85rem;
+        border-top: 1px solid var(--line);
+      }
+      .coverage-policy {
+        margin-top: 0.65rem;
+      }
+      .coverage-policy strong {
+        display: block;
+        font-size: 0.82rem;
+        margin-bottom: 0.25rem;
+      }
+      .coverage-policy ul {
+        margin: 0;
+        padding-left: 1.1rem;
+        color: #b7c9c0;
+        font-size: 0.78rem;
+        line-height: 1.45;
+      }
+      .coverage-policy.off strong { color: var(--muted); }
+      .chip-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+        margin: 0 0 0.7rem;
+      }
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        font-size: 0.72rem;
+        padding: 0.2rem 0.5rem;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: #0b100e;
+        color: #c5d6ce;
+      }
+      .chip.muted {
+        color: var(--muted);
+        border-style: dashed;
+      }
+      .customize {
+        margin-top: 0.35rem;
+        border-top: 1px dashed var(--line);
+        padding-top: 0.45rem;
+      }
+      .customize > summary {
+        cursor: pointer;
+        list-style: none;
+        font-size: 0.8rem;
+        color: var(--accent);
+        font-weight: 600;
+        padding: 0.25rem 0;
+        user-select: none;
+      }
+      .customize > summary::-webkit-details-marker { display: none; }
+      .customize-body {
+        margin-top: 0.45rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.55rem;
+      }
+      .cat-row {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 0.45rem 0.55rem;
+        align-items: start;
+      }
+      .cat-row input {
+        margin-top: 0.15rem;
+        width: 1rem;
+        height: 1rem;
+        accent-color: var(--accent);
+      }
+      .cat-row .cat-label {
+        font-size: 0.84rem;
+        color: var(--text);
+        font-weight: 600;
+      }
+      .cat-row .cat-help {
+        grid-column: 2;
+        font-size: 0.75rem;
+        color: var(--muted);
+        line-height: 1.4;
+        margin: -0.15rem 0 0;
+      }
+      .words-box {
+        display: flex;
+        flex-direction: column;
+        gap: 0.45rem;
+      }
+      .words-add {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 0.4rem;
+      }
+      .words-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 0.3rem;
+      }
+      .words-list li {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        padding: 0.35rem 0.5rem;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #0b100e;
+        font-size: 0.82rem;
+      }
+      .words-empty {
+        font-size: 0.78rem;
+        color: var(--muted);
+      }
     </style>
   </head>
   <body>
@@ -272,13 +616,19 @@
           </header>
           <div class="pane-body">
             <p class="help">
-              Global policies apply to all agents. Add per-agent overrides only when you
-              need an exception — remove an override to follow global again.
+              Choose what assistants on this Mac are allowed to see.
+              For each rule: <strong>Redact</strong> replaces matches,
+              <strong>Block</strong> stops the whole request,
+              <strong>Allow</strong> lets that kind of data through.
             </p>
             <div class="meta" id="policyMeta">Loading…</div>
+            <details class="coverage-summary" id="coverageSummary">
+              <summary>What we watch</summary>
+              <div class="coverage-body" id="coverageBody"></div>
+            </details>
             <div class="section">
-              <h4 style="margin-top:0">Global policies</h4>
-              <div id="globalRows"></div>
+              <h4>Data visibility policies</h4>
+              <div class="policy-list" id="globalRows"></div>
             </div>
             <div class="section">
               <h4 style="margin-top:0">Per-agent overrides</h4>

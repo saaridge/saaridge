@@ -224,6 +224,9 @@ server.on("connect", (req, clientSocket, head) => {
       const idx = buffer.indexOf("\r\n\r\n");
       if (idx < 0) return;
       clearTimeout(timer);
+      // Pause before removing the listener so TLS/HTTP bytes that arrive in the
+      // same tick are not dropped (blank pages / empty MITM bodies).
+      upstream.pause();
       upstream.off("data", onData);
       const header = buffer.slice(0, idx).toString("utf8");
       const rest = buffer.slice(idx + 4);
@@ -243,10 +246,18 @@ server.on("connect", (req, clientSocket, head) => {
         upstream.destroy();
         return;
       }
-      if (rest.length) clientSocket.write(rest);
+      if (rest.length) {
+        try {
+          clientSocket.write(rest);
+        } catch (_) {
+          upstream.destroy();
+          return;
+        }
+      }
       if (head?.length) upstream.write(head);
       upstream.pipe(clientSocket);
       clientSocket.pipe(upstream);
+      upstream.resume();
     };
     upstream.on("data", onData);
     upstream.on("end", () => {

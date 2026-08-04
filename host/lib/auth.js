@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { getAgents, saveAgents } from "./state.js";
 import { defaultDataPolicy } from "../bridge/data/policy.js";
 import { workspaceRootFor, sharedRoot, oneBridgeRoot } from "../bridge/data/paths.js";
+import { writeWorkspaceOrientation } from "./host-identity.js";
 
 const NEXT_UID_START = 12000;
 
@@ -13,6 +14,11 @@ export const provisionOneBridgeRoots = (agentId) => {
   const shared = sharedRoot();
   fs.mkdirSync(ws, { recursive: true });
   fs.mkdirSync(shared, { recursive: true });
+  try {
+    writeWorkspaceOrientation(agentId);
+  } catch {
+    /* best-effort orientation files */
+  }
   return { root, workspace: ws, shared };
 };
 

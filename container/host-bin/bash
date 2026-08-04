@@ -1,0 +1,26 @@
+#!/bin/bash
+# Soft shim: agent-style `bash -c '…'` → mediated host-shell.
+# Scripts (`bash file.sh`) and explicit /bin/bash stay on the container.
+# Shebang must be /bin/bash to avoid recursing through this shim.
+set -euo pipefail
+REAL_BASH=/bin/bash
+if [[ ! -x "$REAL_BASH" ]]; then
+  REAL_BASH=/usr/bin/bash
+fi
+
+forward=0
+args=("$@")
+if [[ "${1:-}" == "-c" || "${1:-}" == "-lc" ]]; then
+  forward=1
+elif [[ "${1:-}" == "-l" && "${2:-}" == "-c" ]]; then
+  forward=1
+elif [[ "${1:-}" == "-c"?* ]]; then
+  # rare: bash -ccommand
+  forward=1
+fi
+
+# Only forward when this looks like an agent one-liner, not `bash script.sh`.
+if [[ "$forward" -eq 1 ]]; then
+  exec /opt/bridge/host-bin/host-shell "$@"
+fi
+exec "$REAL_BASH" "$@"

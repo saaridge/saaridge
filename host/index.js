@@ -1,6 +1,15 @@
 import { startBridge } from "./bridge/server.js";
 import { startControlPlane } from "./control-plane/server.js";
+import { purgeEphemeralAgents } from "./lib/ephemeral-agents.js";
 import { logStep } from "./lib/logger.js";
+
+const { removedIds } = purgeEphemeralAgents();
+if (removedIds.length) {
+  logStep("Purged ephemeral test agents", {
+    count: removedIds.length,
+    ids: removedIds,
+  });
+}
 
 logStep("Starting host control plane + bridge", {
   note: "Per-agent tokens; MCP :7331; passthrough proxy :7332; FS IPC :7333",

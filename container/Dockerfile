@@ -17,7 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb x11vnc \
     x11-xserver-utils xterm \
     xfce4 xfce4-terminal dbus-x11 \
-    wmctrl xdotool \
+    wmctrl xdotool xclip \
     novnc websockify \
     pulseaudio pulseaudio-utils ffmpeg \
     libnss3-tools \
@@ -70,6 +70,10 @@ COPY container/dedupe-xfce-panel.sh /opt/bridge/dedupe-xfce-panel.sh
 COPY container/host-bin/ /opt/bridge/host-bin/
 COPY container/hostfs-fuse.py /opt/bridge/hostfs-fuse.py
 COPY container/hostfs-watchdog.sh /opt/bridge/hostfs-watchdog.sh
+COPY container/hostfs-ready.sh /opt/bridge/hostfs-ready.sh
+COPY container/sync-host-os-release.sh /opt/bridge/sync-host-os-release.sh
+COPY container/install-host-identity-bins.sh /opt/bridge/install-host-identity-bins.sh
+COPY container/install-sandbox-profile.sh /opt/bridge/install-sandbox-profile.sh
 COPY --from=hostfs-builder /src/target/release/onebridge-hostfs /opt/bridge/onebridge-hostfs
 COPY container/audio-watchdog.sh /opt/bridge/audio-watchdog.sh
 COPY container/trust-mitm-ca.sh /usr/local/bin/trust-mitm-ca.sh
@@ -94,6 +98,10 @@ RUN chmod +x /opt/bridge/bridge-browser.sh /opt/bridge/launch-browser.sh \
       /opt/bridge/dedupe-xfce-panel.sh \
       /opt/bridge/hostfs-fuse.py \
       /opt/bridge/hostfs-watchdog.sh \
+      /opt/bridge/hostfs-ready.sh \
+      /opt/bridge/sync-host-os-release.sh \
+      /opt/bridge/install-host-identity-bins.sh \
+      /opt/bridge/install-sandbox-profile.sh \
       /opt/bridge/onebridge-hostfs \
       /opt/bridge/audio-watchdog.sh \
       /opt/bridge/agent-env.sh /opt/bridge/host-bin/* \

@@ -11,6 +11,7 @@ export {
   onFsList,
   onNetRequest,
   onNetResponse,
+  onClipboardIngress,
   resolveVaultForUpstream,
   hasVaultRefs,
   requiresMediate,
