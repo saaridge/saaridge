@@ -67,7 +67,7 @@ const startCapture = () => {
   stopCapture();
   // Prefer Pulse monitor; fall back to default source
   const device =
-    process.env.PULSE_MONITOR || "onebridge.monitor";
+    process.env.PULSE_MONITOR || "saaridge.monitor";
   const args = [
     "-f",
     "pulse",
@@ -126,7 +126,7 @@ const server = http.createServer((req, res) => {
     return;
   }
   res.writeHead(200, { "Content-Type": "text/plain" });
-  res.end("OneBridge audio WebSocket — connect via ws://host:6082/\n");
+  res.end("Saaridge audio WebSocket — connect via ws://host:6082/\n");
 });
 
 server.on("upgrade", (req, socket) => {

@@ -215,7 +215,7 @@ try {
   if (
     !requiresMediate({
       url: "https://api.example/",
-      headers: { "X-OneBridge-Mediate": "1" },
+      headers: { "X-Saaridge-Mediate": "1" },
       body: "",
     })
   ) {

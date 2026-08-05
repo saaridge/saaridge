@@ -115,7 +115,7 @@ def _menu(Gtk) -> int:
         sys.stdout.write("install")
         sys.stdout.flush()
         try:
-            open("/tmp/onebridge-menu-action", "w", encoding="utf-8").write("install")
+            open("/tmp/saaridge-menu-action", "w", encoding="utf-8").write("install")
         except OSError:
             pass
         os._exit(0)
@@ -123,13 +123,13 @@ def _menu(Gtk) -> int:
         sys.stdout.write("uninstall")
         sys.stdout.flush()
         try:
-            open("/tmp/onebridge-menu-action", "w", encoding="utf-8").write("uninstall")
+            open("/tmp/saaridge-menu-action", "w", encoding="utf-8").write("uninstall")
         except OSError:
             pass
         os._exit(0)
     # Log unexpected responses to help diagnose VNC click quirks
     try:
-        open("/tmp/onebridge-menu-action", "w", encoding="utf-8").write(f"cancel:{resp}")
+        open("/tmp/saaridge-menu-action", "w", encoding="utf-8").write(f"cancel:{resp}")
     except OSError:
         pass
     return 1
@@ -220,7 +220,7 @@ def _choose_app(Gtk, args) -> int:
     sys.stdout.write(pkg)
     sys.stdout.flush()
     try:
-        open("/tmp/onebridge-uninstall-pkg", "w", encoding="utf-8").write(pkg)
+        open("/tmp/saaridge-uninstall-pkg", "w", encoding="utf-8").write(pkg)
     except OSError:
         pass
     os._exit(0)
@@ -266,7 +266,7 @@ def _message(Gtk, kind: str, text: str) -> int:
 
 
 def _progress(Gtk, label: str) -> int:
-    """Show a pulsing progress window until /tmp/onebridge-install-done appears."""
+    """Show a pulsing progress window until /tmp/saaridge-install-done appears."""
     gpointer = ctypes.c_void_p
     gint = ctypes.c_int
     gchar_p = ctypes.c_char_p
@@ -315,7 +315,7 @@ def _progress(Gtk, label: str) -> int:
     GTK_WIN_POS_CENTER = 1
     GTK_ORIENTATION_VERTICAL = 1
 
-    done_path = "/tmp/onebridge-install-done"
+    done_path = "/tmp/saaridge-install-done"
     try:
         os.remove(done_path)
     except OSError:
@@ -437,7 +437,7 @@ def _pick(Gtk, GLib, args) -> int:
     sys.stdout.write(path)
     sys.stdout.flush()
     try:
-        with open("/tmp/onebridge-picked-path", "w", encoding="utf-8") as fh:
+        with open("/tmp/saaridge-picked-path", "w", encoding="utf-8") as fh:
             fh.write(path)
     except OSError:
         pass

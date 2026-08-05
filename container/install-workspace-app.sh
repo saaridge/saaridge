@@ -64,7 +64,7 @@ install_deb() {
       "python3 /opt/bridge/record-workspace-package.py add $(printf %q "$PKG") $(printf %q "$DISPLAY_NAME") deb" \
       2>/dev/null || true
   fi
-  chown -R browser:browser /home/browser/Desktop /home/browser/.local/share/applications /home/browser/.local/share/onebridge 2>/dev/null || true
+  chown -R browser:browser /home/browser/Desktop /home/browser/.local/share/applications /home/browser/.local/share/saaridge 2>/dev/null || true
 
   python3 -c 'import json,sys; print(json.dumps({"ok":True,"displayName":sys.argv[1],"kind":"deb","desktopIcon":sys.argv[2] or None,"package":sys.argv[3] or None}))' \
     "$DISPLAY_NAME" "$DESKTOP_ICON" "${PKG:-}"
@@ -86,7 +86,7 @@ Exec=${DEST} --no-sandbox
 Icon=application-x-executable
 Terminal=false
 Categories=Utility;
-X-OneBridge-Package=appimage:${NAME}
+X-Saaridge-Package=appimage:${NAME}
 EOF
   cp -f "/home/browser/.local/share/applications/${NAME}.desktop" "/home/browser/Desktop/${NAME}.desktop"
   chmod +x "/home/browser/Desktop/${NAME}.desktop" "/home/browser/.local/share/applications/${NAME}.desktop"
@@ -96,7 +96,7 @@ EOF
       "python3 /opt/bridge/record-workspace-package.py add $(printf %q "appimage:${NAME}") $(printf %q "$NAME") appimage" \
       2>/dev/null || true
   fi
-  chown -R browser:browser /home/browser/Applications /home/browser/Desktop /home/browser/.local/share/applications /home/browser/.local/share/onebridge 2>/dev/null || true
+  chown -R browser:browser /home/browser/Applications /home/browser/Desktop /home/browser/.local/share/applications /home/browser/.local/share/saaridge 2>/dev/null || true
   if pgrep -x xfdesktop >/dev/null 2>&1; then
     su -s /bin/bash browser -c "export DISPLAY=:1; xfdesktop --reload" 2>/dev/null || true
   fi
@@ -114,5 +114,5 @@ case "$LOWER" in
     ;;
 esac
 
-echo '{"ok":false,"error":"Unsupported package. Use a .deb or .AppImage (assistant zips need OneBridge host).","needsHost":true}'
+echo '{"ok":false,"error":"Unsupported package. Use a .deb or .AppImage (assistant zips need Saaridge host).","needsHost":true}'
 exit 1

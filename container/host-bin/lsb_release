@@ -4,13 +4,13 @@ import json
 import os
 import sys
 
-ID_FILE = os.environ.get("ONEBRIDGE_HOST_IDENTITY", "/opt/bridge/host-identity.json")
+ID_FILE = os.environ.get("SAARIDGE_HOST_IDENTITY", "/opt/bridge/host-identity.json")
 
 
 def load():
     for p in (
         ID_FILE,
-        os.path.expanduser("~/.onebridge-host-identity.json"),
+        os.path.expanduser("~/.saaridge-host-identity.json"),
         "/opt/bridge/host-identity.json",
     ):
         try:

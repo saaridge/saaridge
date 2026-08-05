@@ -1,9 +1,9 @@
 ---
-description: OneBridge mediation guarantee — never weaken vault/host data control or add URL passthrough lists
+description: Saaridge mediation guarantee — never weaken vault/host data control or add URL passthrough lists
 alwaysApply: true
 ---
 
-# OneBridge mediation guarantee
+# Saaridge mediation guarantee
 
 Read and obey [`CONSTRAINTS.md`](../../CONSTRAINTS.md) for this repo.
 

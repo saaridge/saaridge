@@ -4,14 +4,17 @@
 #
 # Host project data is NOT bind-mounted. Container apps use /host (FUSE → Data API).
 # Docker Desktop: requires /dev/fuse; SYS_ADMIN is needed for FUSE mounts.
+#
+# mem/cpus/shm/tmpfs/RESOLUTION defaults below may be overridden at runtime by
+# generated docker-compose.resources.yml (Settings → Resources).
 
 services:
   agent-box:
     build:
       context: .
       dockerfile: container/Dockerfile
-    image: agent-bridge-box:local
-    container_name: agent-bridge-box
+    image: saaridge/saaridge-workspace:0.0.1
+    container_name: saaridge-box
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -32,6 +35,7 @@ services:
       DISPLAY: ":1"
       RESOLUTION: 1920x1080x24
       HOSTFS_MOUNT: /host
+    pull_policy: never
     shm_size: "1gb"
     devices:
       - /dev/fuse

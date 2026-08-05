@@ -2,7 +2,7 @@
  * Framed binary FS protocol over TCP (default 127.0.0.1:7333).
  *
  * Note: host MITM proxy already owns :7332 — FS IPC uses :7333
- * (BRIDGE_FS_PORT / ONEBRIDGE_FS_PORT).
+ * (BRIDGE_FS_PORT / SAARIDGE_FS_PORT).
  *
  * Frame: u32 BE length | u8 op | u32 BE reqId | payload
  * Length = 1 + 4 + payload.length (bytes after the length field).
@@ -35,7 +35,7 @@ const OP_NAME = Object.fromEntries(
   Object.entries(OPS).map(([k, v]) => [v, k]),
 );
 
-const DEFAULT_PORT = Number(process.env.BRIDGE_FS_PORT || process.env.ONEBRIDGE_FS_PORT || 7333) || 7333;
+const DEFAULT_PORT = Number(process.env.BRIDGE_FS_PORT || process.env.SAARIDGE_FS_PORT || 7333) || 7333;
 
 const encodeFrame = (op, reqId, payloadObj) => {
   const payload = Buffer.from(JSON.stringify(payloadObj ?? {}), "utf8");
@@ -279,6 +279,8 @@ export const startFsBinaryServer = ({
   });
   server.on("error", (err) => {
     logBridge("fs_ipc_error", { error: err?.message || String(err), port });
+    console.error(`[fs-ipc] listen failed on :${port}:`, err?.message || err);
+    process.exit(1);
   });
   return { server, port, host };
 };

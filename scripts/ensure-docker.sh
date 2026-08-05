@@ -4,12 +4,12 @@ set -euo pipefail
 
 alert() {
   local msg="$1"
-  echo "[onebridge] $msg" >&2
+  echo "[saaridge] $msg" >&2
   if [[ "$(uname -s)" == "Darwin" ]] && command -v osascript >/dev/null 2>&1; then
     # Escape for AppleScript string literal
     local as_msg="${msg//\\/\\\\}"
     as_msg="${as_msg//\"/\\\"}"
-    osascript -e "display dialog \"${as_msg}\" buttons {\"OK\"} default button \"OK\" with title \"OneBridge\" with icon stop" \
+    osascript -e "display dialog \"${as_msg}\" buttons {\"OK\"} default button \"OK\" with title \"Saaridge\" with icon stop" \
       >/dev/null 2>&1 || true
   fi
 }
@@ -33,10 +33,10 @@ docker_daemon_ok() {
 start_docker_daemon() {
   if [[ "$(uname -s)" == "Darwin" ]]; then
     if [[ -d "/Applications/Docker.app" ]]; then
-      echo "[onebridge] starting Docker Desktop…"
+      echo "[saaridge] starting Docker Desktop…"
       open -a Docker
     elif [[ -d "$HOME/Applications/Docker.app" ]]; then
-      echo "[onebridge] starting Docker Desktop…"
+      echo "[saaridge] starting Docker Desktop…"
       open -a "$HOME/Applications/Docker.app"
     else
       return 1
@@ -49,7 +49,7 @@ start_docker_daemon() {
     if systemctl is-active --quiet docker 2>/dev/null; then
       return 0
     fi
-    echo "[onebridge] starting docker service…"
+    echo "[saaridge] starting docker service…"
     if command -v sudo >/dev/null 2>&1; then
       sudo systemctl start docker 2>/dev/null || systemctl start docker 2>/dev/null || return 1
     else
@@ -66,25 +66,31 @@ start_docker_daemon() {
 
 ensure_docker() {
   if ! docker_installed; then
-    alert "Docker is not installed. Please install Docker Desktop, then open OneBridge again."
+    alert "Docker is not installed. Please install Docker Desktop, then open Saaridge again."
     exit 1
   fi
 
   # Prefer PATH docker; on macOS Docker.app may exist before CLI is linked.
   if ! command -v docker >/dev/null 2>&1; then
-    if [[ -x "/usr/local/bin/docker" ]]; then
-      export PATH="/usr/local/bin:$PATH"
-    elif [[ -x "/opt/homebrew/bin/docker" ]]; then
-      export PATH="/opt/homebrew/bin:$PATH"
-    fi
+    for d in \
+      /usr/local/bin \
+      /opt/homebrew/bin \
+      /Applications/Docker.app/Contents/Resources/bin \
+      "$HOME/Applications/Docker.app/Contents/Resources/bin"
+    do
+      if [[ -x "$d/docker" ]]; then
+        export PATH="$d:$PATH"
+        break
+      fi
+    done
   fi
 
   if docker_daemon_ok; then
-    echo "[onebridge] Docker is running"
+    echo "[saaridge] Docker is running"
     return 0
   fi
 
-  echo "[onebridge] Docker is installed but not running — starting it…"
+  echo "[saaridge] Docker is installed but not running — starting it…"
   if ! start_docker_daemon; then
     alert "Could not start Docker. Please open Docker Desktop manually, wait until it is running, then try again."
     exit 1
@@ -93,7 +99,7 @@ ensure_docker() {
   local i
   for i in $(seq 1 90); do
     if docker_daemon_ok; then
-      echo "[onebridge] Docker is ready"
+      echo "[saaridge] Docker is ready"
       return 0
     fi
     sleep 1

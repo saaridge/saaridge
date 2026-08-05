@@ -17,21 +17,21 @@
   };
 
   btnSettings?.addEventListener("click", () => {
-    void window.onebridge?.openSettings?.("policies");
+    void window.saaridge?.openSettings?.("policies");
   });
 
   // Clicking the bar (non-buttons) should return keyboard to the desktop.
   document.body.addEventListener("pointerup", (ev) => {
     if (ev.target.closest("button")) return;
-    void window.onebridge?.focusDesktop?.();
+    void window.saaridge?.focusDesktop?.();
   });
 
   (async () => {
     try {
-      if (window.onebridge?.platform && window.onebridge.platform !== "darwin") {
+      if (window.saaridge?.platform && window.saaridge.platform !== "darwin") {
         document.querySelector(".titlebar")?.style.setProperty("padding-left", "12px");
       }
-      const urls = await window.onebridge?.getUrls?.();
+      const urls = await window.saaridge?.getUrls?.();
       const control = urls?.control || "http://127.0.0.1:3847";
       try {
         const r = await fetch(`${control}/api/workspace/os`);

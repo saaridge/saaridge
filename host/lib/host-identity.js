@@ -7,7 +7,7 @@ import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { workspaceRootFor, sharedRoot, oneBridgeRoot } from "../bridge/data/paths.js";
+import { workspaceRootFor, sharedRoot, saaridgeRoot } from "../bridge/data/paths.js";
 
 const unameSysname = (platform) => {
   if (platform === "darwin") return "Darwin";
@@ -95,7 +95,7 @@ export const buildHostIdentity = (agentId = "unknown") => {
     homedir,
     /** Shell/FUSE home the agent should treat as $HOME. */
     home: "/host/home",
-    oneBridge: oneBridgeRoot(),
+    saaridge: saaridgeRoot(),
     workspaceHost: workspaceRootFor(id),
     sharedHost: sharedRoot(),
     shell: {
@@ -149,11 +149,11 @@ pwd         # prefer ${id.shell.workspace} or ${id.shell.home}
 `;
 };
 
-/** Ensure AGENTS.md + .onebridge/host-identity.json exist in the agent workspace. */
+/** Ensure AGENTS.md + .saaridge/host-identity.json exist in the agent workspace. */
 export const writeWorkspaceOrientation = (agentId) => {
   const ws = workspaceRootFor(agentId);
   fs.mkdirSync(ws, { recursive: true });
-  const ob = path.join(ws, ".onebridge");
+  const ob = path.join(ws, ".saaridge");
   fs.mkdirSync(ob, { recursive: true });
   fs.writeFileSync(path.join(ob, "host-identity.json"), hostIdentityJson(agentId));
   const agentsMd = path.join(ws, "AGENTS.md");
@@ -161,11 +161,11 @@ export const writeWorkspaceOrientation = (agentId) => {
   fs.writeFileSync(agentsMd, md);
   const rulesDir = path.join(ws, ".cursor", "rules");
   fs.mkdirSync(rulesDir, { recursive: true });
-  const rulePath = path.join(rulesDir, "onebridge-host-os.mdc");
+  const rulePath = path.join(rulesDir, "saaridge-host-os.mdc");
   fs.writeFileSync(
     rulePath,
     `---
-description: OneBridge host OS identity (authoritative)
+description: Saaridge host OS identity (authoritative)
 alwaysApply: true
 ---
 

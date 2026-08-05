@@ -38,8 +38,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
          '# Host-home write is granted on the host bridge — never via container sudo.' \
          '# Only workspace-app uninstall may run as root without a password:' \
          'browser ALL=(root) NOPASSWD: /opt/bridge/uninstall-workspace-app.sh' \
-         > /etc/sudoers.d/onebridge-uninstall \
-    && chmod 440 /etc/sudoers.d/onebridge-uninstall \
+         > /etc/sudoers.d/saaridge-uninstall \
+    && chmod 440 /etc/sudoers.d/saaridge-uninstall \
     && echo 'user_allow_other' >> /etc/fuse.conf
 
 WORKDIR /opt/bridge
@@ -74,12 +74,12 @@ COPY container/hostfs-ready.sh /opt/bridge/hostfs-ready.sh
 COPY container/sync-host-os-release.sh /opt/bridge/sync-host-os-release.sh
 COPY container/install-host-identity-bins.sh /opt/bridge/install-host-identity-bins.sh
 COPY container/install-sandbox-profile.sh /opt/bridge/install-sandbox-profile.sh
-COPY --from=hostfs-builder /src/target/release/onebridge-hostfs /opt/bridge/onebridge-hostfs
+COPY --from=hostfs-builder /src/target/release/saaridge-hostfs /opt/bridge/saaridge-hostfs
 COPY container/audio-watchdog.sh /opt/bridge/audio-watchdog.sh
 COPY container/trust-mitm-ca.sh /usr/local/bin/trust-mitm-ca.sh
 COPY container/start-audio.sh /usr/local/bin/start-audio.sh
 COPY container/start-mic.sh /usr/local/bin/start-mic.sh
-COPY container/novnc-onebridge.html /usr/share/novnc/novnc-onebridge.html
+COPY container/novnc-saaridge.html /usr/share/novnc/novnc-saaridge.html
 COPY container/network-lock.sh /usr/local/bin/network-lock.sh
 COPY container/start-desktop.sh /usr/local/bin/start-desktop.sh
 COPY container/entrypoint.sh /usr/local/bin/entrypoint.sh
@@ -102,7 +102,7 @@ RUN chmod +x /opt/bridge/bridge-browser.sh /opt/bridge/launch-browser.sh \
       /opt/bridge/sync-host-os-release.sh \
       /opt/bridge/install-host-identity-bins.sh \
       /opt/bridge/install-sandbox-profile.sh \
-      /opt/bridge/onebridge-hostfs \
+      /opt/bridge/saaridge-hostfs \
       /opt/bridge/audio-watchdog.sh \
       /opt/bridge/agent-env.sh /opt/bridge/host-bin/* \
       /usr/local/bin/network-lock.sh /usr/local/bin/start-desktop.sh \

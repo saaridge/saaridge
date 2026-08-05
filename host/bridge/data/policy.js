@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  oneBridgeRoot,
+  saaridgeRoot,
   sharedRoot,
   workspaceRootFor,
   resolveHostPath,
@@ -172,15 +172,15 @@ export const assertNotPrivateVaultPath = (inputPath) => {
 /**
  * Build effective path policy for an agent.
  * Strict default:
- *   RW: ~/OneBridge/workspaces/<id>
- *   RO: ~/OneBridge/shared + host home (~) for browse-only navigation
+ *   RW: ~/Saaridge/workspaces/<id>
+ *   RO: ~/Saaridge/shared + host home (~) for browse-only navigation
  * Host-home WRITE requires policy.hostHomeWrite (host-user consent).
  */
 export const effectiveRoots = (agent) => {
   const id = agent?.id || "unknown";
   const ws = workspaceRootFor(id);
   const shared = sharedRoot();
-  const bridge = oneBridgeRoot();
+  const bridge = saaridgeRoot();
   const home = path.resolve(os.homedir());
   const hostHomeWrite = Boolean(agent?.policy?.hostHomeWrite);
 
@@ -201,7 +201,7 @@ export const effectiveRoots = (agent) => {
     readOnly = [shared];
   }
 
-  // RW stays under OneBridge only — unless host user granted home write.
+  // RW stays under Saaridge only — unless host user granted home write.
   const underBridge = (p) => {
     const r = path.resolve(p);
     const base = path.resolve(bridge);
@@ -266,7 +266,8 @@ export const assertWritable = (agent, inputPath) => {
         /* best-effort prompt */
       }
       const e = new Error(
-        "Host home is read-only until the host user grants write access in OneBridge. Do not use sudo — approve “Allow home write” in the desktop app or control plane.",
+        "Host home is read-only until the host user grants write access in Saaridge. " +
+          "Approve “Allow home write”, or choose “Skip anyway” to continue without write access.",
       );
       e.code = "EROFS";
       e.needHostHomeWrite = true;
@@ -290,9 +291,9 @@ export const maxWriteBytes = (agent) =>
 export const defaultDataPolicy = (agentId) => ({
   allowAllProxy: true,
   tools: null,
-  paths: [`~/OneBridge/workspaces/${agentId}`],
+  paths: [`~/Saaridge/workspaces/${agentId}`],
   // Host home (~) is browse-only until hostHomeWrite consent.
-  pathsReadOnly: ["~/OneBridge/shared", "~"],
+  pathsReadOnly: ["~/Saaridge/shared", "~"],
   hostHomeWrite: false,
   hostHomeWriteAt: null,
   urls: null,

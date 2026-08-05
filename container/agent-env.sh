@@ -11,7 +11,7 @@ if [[ -z "$_CRED" || ! -f "$_CRED" ]]; then
   for _try in \
     "${BRIDGE_CREDENTIALS_FILE:-}" \
     /home/browser/.bridge-credentials \
-    "${ONEBRIDGE_SANDBOX_HOME:-}/.bridge-credentials" \
+    "${SAARIDGE_SANDBOX_HOME:-}/.bridge-credentials" \
     "${HOME:-}/.bridge-credentials"
   do
     if [[ -n "${_try}" && -f "${_try}" ]]; then
@@ -41,20 +41,20 @@ export BRIDGE_URL="${BRIDGE_URL:-http://host.docker.internal:7331}"
 export BRIDGE_PROXY_HOST="${BRIDGE_PROXY_HOST:-host.docker.internal}"
 export BRIDGE_PROXY_PORT="${BRIDGE_PROXY_PORT:-7332}"
 
-export ONEBRIDGE_HOST_HOME="${ONEBRIDGE_HOST_HOME:-/host/home}"
-export ONEBRIDGE_SANDBOX_HOME="${ONEBRIDGE_SANDBOX_HOME:-/home/browser}"
+export SAARIDGE_HOST_HOME="${SAARIDGE_HOST_HOME:-/host/home}"
+export SAARIDGE_SANDBOX_HOME="${SAARIDGE_SANDBOX_HOME:-/home/browser}"
 # Agent-facing HOME is always the mediated host home. Apps that need the
 # Linux sandbox (Chromium profile, Cursor user-data, XFCE) must set
-# HOME="$ONEBRIDGE_SANDBOX_HOME" themselves (launch-browser / start-desktop).
+# HOME="$SAARIDGE_SANDBOX_HOME" themselves (launch-browser / start-desktop).
 # Do not gate on `test -d` — that STAT hangs when FUSE is wedged and leaves
 # agents on /home/browser.
-export HOME="$ONEBRIDGE_HOST_HOME"
+export HOME="$SAARIDGE_HOST_HOME"
 # Host-bin shims first: curl/wget/uname + mediated host shell
 export PATH="/opt/bridge/host-bin:${PATH}"
 # Default shell for agent terminals: commands run on the host via the bridge.
 if [[ -x /opt/bridge/host-bin/host-shell ]]; then
   export SHELL=/opt/bridge/host-bin/host-shell
-  export ONEBRIDGE_HOST_SHELL=1
+  export SAARIDGE_HOST_SHELL=1
 fi
 
 # Node 22+: honor HTTP(S)_PROXY for fetch (agents that call network in-process)
@@ -71,44 +71,44 @@ if [[ -S "${PULSE_RUNTIME_PATH}/native" ]]; then
 fi
 
 # Hint for agents: filesystem + privileged network live on the HOST via MCP/FUSE
-export ONEBRIDGE_HOST_VIA="mcp+proxy+fuse"
+export SAARIDGE_HOST_VIA="mcp+proxy+fuse"
 export BROWSER="${BROWSER:-/opt/bridge/bridge-browser.sh}"
 
-# Mediated host project tree (FUSE → Data API → ~/OneBridge on the host)
-export ONEBRIDGE_HOST_MOUNT="${ONEBRIDGE_HOST_MOUNT:-/host}"
-export ONEBRIDGE_SHARED="${ONEBRIDGE_SHARED:-/host/shared}"
+# Mediated host project tree (FUSE → Data API → ~/Saaridge on the host)
+export SAARIDGE_HOST_MOUNT="${SAARIDGE_HOST_MOUNT:-/host}"
+export SAARIDGE_SHARED="${SAARIDGE_SHARED:-/host/shared}"
 # Host home browse tree (FUSE → Data API → os.homedir(), read-only)
-export ONEBRIDGE_HOST_HOME="${ONEBRIDGE_HOST_HOME:-/host/home}"
+export SAARIDGE_HOST_HOME="${SAARIDGE_HOST_HOME:-/host/home}"
 if [[ -n "$_CRED" && -f "$_CRED" ]]; then
   _AGENT_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("agentId",""))' "$_CRED" 2>/dev/null || true)"
   _WS_HINT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("hostWorkspace",""))' "$_CRED" 2>/dev/null || true)"
   _HOME_HINT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("hostHome",""))' "$_CRED" 2>/dev/null || true)"
   _HOST_NAME="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("hostHostname",""))' "$_CRED" 2>/dev/null || true)"
   if [[ -n "${_WS_HINT:-}" ]]; then
-    export ONEBRIDGE_PROJECTS="$_WS_HINT"
+    export SAARIDGE_PROJECTS="$_WS_HINT"
   elif [[ -n "${_AGENT_ID:-}" ]]; then
-    export ONEBRIDGE_PROJECTS="/host/workspaces/${_AGENT_ID}"
+    export SAARIDGE_PROJECTS="/host/workspaces/${_AGENT_ID}"
   fi
   if [[ -n "${_HOME_HINT:-}" ]]; then
-    export ONEBRIDGE_HOST_HOME="$_HOME_HINT"
+    export SAARIDGE_HOST_HOME="$_HOME_HINT"
   fi
   if [[ -n "${_HOST_NAME:-}" ]]; then
-    export ONEBRIDGE_HOST_NAME="$_HOST_NAME"
+    export SAARIDGE_HOST_NAME="$_HOST_NAME"
   fi
 fi
-export ONEBRIDGE_PROJECTS="${ONEBRIDGE_PROJECTS:-/host/workspaces/workspace-desktop}"
-export ONEBRIDGE_HOST_HOME="${ONEBRIDGE_HOST_HOME:-/host/home}"
-export ONEBRIDGE_HOST_NAME="${ONEBRIDGE_HOST_NAME:-Host}"
+export SAARIDGE_PROJECTS="${SAARIDGE_PROJECTS:-/host/workspaces/workspace-desktop}"
+export SAARIDGE_HOST_HOME="${SAARIDGE_HOST_HOME:-/host/home}"
+export SAARIDGE_HOST_NAME="${SAARIDGE_HOST_NAME:-Host}"
 # Docker Desktop sometimes reports Unknown_<mac> — useless Places/Desktop label.
-if [[ "${ONEBRIDGE_HOST_NAME}" == Unknown_* ]]; then
-  export ONEBRIDGE_HOST_NAME=Host
+if [[ "${SAARIDGE_HOST_NAME}" == Unknown_* ]]; then
+  export SAARIDGE_HOST_NAME=Host
 fi
 # Cursor / editors: open projects under this path (not container-local copies)
-export CURSOR_PROJECT_DIR="${CURSOR_PROJECT_DIR:-$ONEBRIDGE_PROJECTS}"
-export ONEBRIDGE_HOST_EXEC_CWD="${ONEBRIDGE_HOST_EXEC_CWD:-$ONEBRIDGE_PROJECTS}"
+export CURSOR_PROJECT_DIR="${CURSOR_PROJECT_DIR:-$SAARIDGE_PROJECTS}"
+export SAARIDGE_HOST_EXEC_CWD="${SAARIDGE_HOST_EXEC_CWD:-$SAARIDGE_PROJECTS}"
 
 # Host OS identity (authoritative for agents — not sandbox Linux).
-export ONEBRIDGE_HOST_IDENTITY="${ONEBRIDGE_HOST_IDENTITY:-/opt/bridge/host-identity.json}"
+export SAARIDGE_HOST_IDENTITY="${SAARIDGE_HOST_IDENTITY:-/opt/bridge/host-identity.json}"
 if [[ -n "$_CRED" && -f "$_CRED" ]]; then
   eval "$(python3 - "$_CRED" <<'PY'
 import json, sys
@@ -118,42 +118,42 @@ def exp(k, v):
         return
     v = str(v).replace("'", "'\"'\"'")
     print(f"export {k}='{v}'")
-exp("ONEBRIDGE_HOST_PLATFORM", c.get("hostPlatform"))
-exp("ONEBRIDGE_HOST_ARCH", c.get("hostArch"))
-exp("ONEBRIDGE_HOST_RELEASE", c.get("hostRelease"))
-exp("ONEBRIDGE_HOST_OSTYPE", c.get("hostOsType"))
-exp("ONEBRIDGE_HOST_NATIVE_HOME", c.get("hostNativeHome"))
-exp("ONEBRIDGE_HOST_USERNAME", c.get("hostUsername"))
+exp("SAARIDGE_HOST_PLATFORM", c.get("hostPlatform"))
+exp("SAARIDGE_HOST_ARCH", c.get("hostArch"))
+exp("SAARIDGE_HOST_RELEASE", c.get("hostRelease"))
+exp("SAARIDGE_HOST_OSTYPE", c.get("hostOsType"))
+exp("SAARIDGE_HOST_NATIVE_HOME", c.get("hostNativeHome"))
+exp("SAARIDGE_HOST_USERNAME", c.get("hostUsername"))
 PY
 )" 2>/dev/null || true
 fi
 # Match host uname(1) family for naive probes (Darwin/Linux/…).
-if [[ -n "${ONEBRIDGE_HOST_OSTYPE:-}" ]]; then
-  export OSTYPE="${ONEBRIDGE_HOST_OSTYPE}"
+if [[ -n "${SAARIDGE_HOST_OSTYPE:-}" ]]; then
+  export OSTYPE="${SAARIDGE_HOST_OSTYPE}"
 fi
-if [[ -n "${ONEBRIDGE_HOST_USERNAME:-}" ]]; then
-  export USER="${ONEBRIDGE_HOST_USERNAME}"
-  export LOGNAME="${ONEBRIDGE_HOST_USERNAME}"
+if [[ -n "${SAARIDGE_HOST_USERNAME:-}" ]]; then
+  export USER="${SAARIDGE_HOST_USERNAME}"
+  export LOGNAME="${SAARIDGE_HOST_USERNAME}"
 fi
 
 # Shell orientation for agents (host-only).
-export ONEBRIDGE_SHELL_NOTE="OS=${ONEBRIDGE_HOST_OSTYPE:-host}. Home=${ONEBRIDGE_HOST_HOME}. Workspace=${ONEBRIDGE_PROJECTS}."
+export SAARIDGE_SHELL_NOTE="OS=${SAARIDGE_HOST_OSTYPE:-host}. Home=${SAARIDGE_HOST_HOME}. Workspace=${SAARIDGE_PROJECTS}."
 # Write layout for agents; do NOT clobber a full host-identity.json from the bridge.
 python3 - <<PY 2>/dev/null || true
 import json, os
 layout = {
   "virtualizedOnHost": True,
-  "platform": os.environ.get("ONEBRIDGE_HOST_PLATFORM"),
-  "osType": os.environ.get("ONEBRIDGE_HOST_OSTYPE"),
-  "arch": os.environ.get("ONEBRIDGE_HOST_ARCH"),
-  "release": os.environ.get("ONEBRIDGE_HOST_RELEASE"),
-  "hostname": os.environ.get("ONEBRIDGE_HOST_NAME"),
-  "mount": os.environ.get("ONEBRIDGE_HOST_MOUNT", "/host"),
-  "workspace": os.environ.get("ONEBRIDGE_PROJECTS"),
-  "shared": os.environ.get("ONEBRIDGE_SHARED", "/host/shared"),
-  "home": os.environ.get("ONEBRIDGE_HOST_HOME", "/host/home"),
+  "platform": os.environ.get("SAARIDGE_HOST_PLATFORM"),
+  "osType": os.environ.get("SAARIDGE_HOST_OSTYPE"),
+  "arch": os.environ.get("SAARIDGE_HOST_ARCH"),
+  "release": os.environ.get("SAARIDGE_HOST_RELEASE"),
+  "hostname": os.environ.get("SAARIDGE_HOST_NAME"),
+  "mount": os.environ.get("SAARIDGE_HOST_MOUNT", "/host"),
+  "workspace": os.environ.get("SAARIDGE_PROJECTS"),
+  "shared": os.environ.get("SAARIDGE_SHARED", "/host/shared"),
+  "home": os.environ.get("SAARIDGE_HOST_HOME", "/host/home"),
   "terminal_exec": "disabled",
-  "note": os.environ.get("ONEBRIDGE_SHELL_NOTE"),
+  "note": os.environ.get("SAARIDGE_SHELL_NOTE"),
 }
 for d in ("/opt/bridge",):
     try:
@@ -173,20 +173,20 @@ except OSError:
 # Merge credentials into identity only when we have real host platform fields.
 cred = os.environ.get("BRIDGE_CREDENTIALS_FILE") or os.path.expanduser("~/.bridge-credentials")
 identity_path = "/opt/bridge/host-identity.json"
-home_id = os.path.join(os.environ.get("HOME") or "/tmp", ".onebridge-host-identity.json")
+home_id = os.path.join(os.environ.get("HOME") or "/tmp", ".saaridge-host-identity.json")
 try:
     c = json.load(open(cred)) if os.path.isfile(cred) else {}
 except Exception:
     c = {}
-plat = c.get("hostPlatform") or os.environ.get("ONEBRIDGE_HOST_PLATFORM")
+plat = c.get("hostPlatform") or os.environ.get("SAARIDGE_HOST_PLATFORM")
 if plat:
-    arch = c.get("hostArch") or os.environ.get("ONEBRIDGE_HOST_ARCH") or "arm64"
+    arch = c.get("hostArch") or os.environ.get("SAARIDGE_HOST_ARCH") or "arm64"
     machine = "arm64" if arch == "arm64" else ("x86_64" if arch == "x64" else arch)
-    sysname = c.get("hostOsType") or os.environ.get("ONEBRIDGE_HOST_OSTYPE") or (
+    sysname = c.get("hostOsType") or os.environ.get("SAARIDGE_HOST_OSTYPE") or (
         "Darwin" if plat == "darwin" else ("Windows_NT" if plat == "win32" else "Linux")
     )
-    host = c.get("hostHostname") or os.environ.get("ONEBRIDGE_HOST_NAME") or "host"
-    release = c.get("hostRelease") or os.environ.get("ONEBRIDGE_HOST_RELEASE") or ""
+    host = c.get("hostHostname") or os.environ.get("SAARIDGE_HOST_NAME") or "host"
+    release = c.get("hostRelease") or os.environ.get("SAARIDGE_HOST_RELEASE") or ""
     identity = {
         "virtualizedOnHost": True,
         "hostname": host,
@@ -224,10 +224,10 @@ export HOSTFS_IPC="${HOSTFS_IPC:-0}"
 # Force all HTTP(S) clients (Node fetch, Python requests if configured, MCP servers)
 # through the local auth-proxy → host MITM. Fail-closed iptables blocks non-proxy egress.
 # Shared MITM CA for every process in the container (CONSTRAINTS: generic only).
-_OB_CA="${ONEBRIDGE_MITM_CA:-/opt/bridge/certs/onebridge-mitm-ca.crt}"
+_OB_CA="${SAARIDGE_MITM_CA:-/opt/bridge/certs/saaridge-mitm-ca.crt}"
 # OpenSSL-style env vars *replace* the default trust store — use system+MITM
 # bundle so adaptive TUNNEL (real public certs) still verifies.
-_OB_BUNDLE="${ONEBRIDGE_CA_BUNDLE:-/opt/bridge/certs/ca-bundle.crt}"
+_OB_BUNDLE="${SAARIDGE_CA_BUNDLE:-/opt/bridge/certs/ca-bundle.crt}"
 if [[ ! -f "$_OB_BUNDLE" ]]; then
   _OB_BUNDLE="$_OB_CA"
 fi
@@ -248,9 +248,9 @@ fi
 unset _OB_CA _OB_BUNDLE
 
 # Host-home Places link lives in the *sandbox* home (XFCE), never under /host/home.
-_HOME_DIR="${ONEBRIDGE_SANDBOX_HOME:-/home/browser}"
+_HOME_DIR="${SAARIDGE_SANDBOX_HOME:-/home/browser}"
 # Bound FUSE probes — skip quietly if hostfs is wedged.
-if timeout 1 test -d "$ONEBRIDGE_HOST_HOME" 2>/dev/null; then
+if timeout 1 test -d "$SAARIDGE_HOST_HOME" 2>/dev/null; then
   rm -f "${_HOME_DIR}/Projects" "${_HOME_DIR}/Host Home" "${_HOME_DIR}/host-home" \
     "${_HOME_DIR}/Desktop/Host Projects" "${_HOME_DIR}/Desktop/Host-Projects" \
     "${_HOME_DIR}/host-layout.json" 2>/dev/null || true
@@ -260,13 +260,13 @@ if timeout 1 test -d "$ONEBRIDGE_HOST_HOME" 2>/dev/null; then
       rmdir "${_HOME_DIR}/${_d}" 2>/dev/null || true
     fi
   done
-  ln -sfn "$ONEBRIDGE_HOST_HOME" "${_HOME_DIR}/${ONEBRIDGE_HOST_NAME} Home" 2>/dev/null || true
-  if [[ -d "${ONEBRIDGE_HOST_HOME}/Downloads" ]]; then
+  ln -sfn "$SAARIDGE_HOST_HOME" "${_HOME_DIR}/${SAARIDGE_HOST_NAME} Home" 2>/dev/null || true
+  if [[ -d "${SAARIDGE_HOST_HOME}/Downloads" ]]; then
     if [[ -L "${_HOME_DIR}/Downloads" ]] || [[ ! -e "${_HOME_DIR}/Downloads" ]]; then
-      ln -sfn "${ONEBRIDGE_HOST_HOME}/Downloads" "${_HOME_DIR}/Downloads" 2>/dev/null || true
+      ln -sfn "${SAARIDGE_HOST_HOME}/Downloads" "${_HOME_DIR}/Downloads" 2>/dev/null || true
     elif [[ -d "${_HOME_DIR}/Downloads" ]] && [[ -z "$(find "${_HOME_DIR}/Downloads" -mindepth 1 -maxdepth 1 2>/dev/null | head -1)" ]]; then
       rmdir "${_HOME_DIR}/Downloads" 2>/dev/null || true
-      ln -sfn "${ONEBRIDGE_HOST_HOME}/Downloads" "${_HOME_DIR}/Downloads" 2>/dev/null || true
+      ln -sfn "${SAARIDGE_HOST_HOME}/Downloads" "${_HOME_DIR}/Downloads" 2>/dev/null || true
     fi
   fi
 fi

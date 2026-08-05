@@ -34,8 +34,8 @@ for path in paths:
         text = open(path, encoding="utf-8", errors="replace").read()
     except OSError:
         continue
-    if f"X-OneBridge-Package={pkg}" in text or (
-        pkg == "cursor" and "Name=Cursor" in text and "X-OneBridge-Package=" in text
+    if f"X-Saaridge-Package={pkg}" in text or (
+        pkg == "cursor" and "Name=Cursor" in text and "X-Saaridge-Package=" in text
     ):
         try:
             os.remove(path)
@@ -46,7 +46,7 @@ PY
   if [[ -f /opt/bridge/record-workspace-package.py ]]; then
     su -s /bin/bash browser -c "python3 /opt/bridge/record-workspace-package.py remove $(printf %q "$pkg")" 2>/dev/null || true
   fi
-  chown -R browser:browser /home/browser/Desktop /home/browser/.local/share/applications /home/browser/.local/share/onebridge 2>/dev/null || true
+  chown -R browser:browser /home/browser/Desktop /home/browser/.local/share/applications /home/browser/.local/share/saaridge 2>/dev/null || true
   if pgrep -x xfdesktop >/dev/null 2>&1; then
     su -s /bin/bash browser -c "export DISPLAY=${DISPLAY}; xfdesktop --reload" 2>/dev/null || true
   fi

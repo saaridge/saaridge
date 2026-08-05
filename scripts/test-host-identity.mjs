@@ -24,13 +24,13 @@ const read = (rel) => fs.readFileSync(path.join(ROOT, rel), "utf8");
 section("source: agent-env always sets HOME to host home");
 try {
   const src = read("container/agent-env.sh");
-  if (!/export HOME="\$ONEBRIDGE_HOST_HOME"/.test(src)) {
-    throw new Error("agent-env must export HOME=$ONEBRIDGE_HOST_HOME unconditionally");
+  if (!/export HOME="\$SAARIDGE_HOST_HOME"/.test(src)) {
+    throw new Error("agent-env must export HOME=$SAARIDGE_HOST_HOME unconditionally");
   }
-  if (/if timeout 1 test -d "\$ONEBRIDGE_HOST_HOME"[\s\S]*export HOME=/.test(src)) {
+  if (/if timeout 1 test -d "\$SAARIDGE_HOST_HOME"[\s\S]*export HOME=/.test(src)) {
     throw new Error("HOME remap must not be gated on FUSE test -d");
   }
-  if (!src.includes('ONEBRIDGE_SANDBOX_HOME:-/home/browser')) {
+  if (!src.includes('SAARIDGE_SANDBOX_HOME:-/home/browser')) {
     throw new Error("sandbox home must remain available for apps");
   }
   ok("agent-env HOME=/host/home; sandbox kept for apps");
@@ -41,10 +41,10 @@ try {
 section("source: profile.d identity without FUSE");
 try {
   const src = read("container/trust-mitm-ca.sh");
-  if (!src.includes("onebridge-identity.sh")) {
-    throw new Error("must install onebridge-identity.sh");
+  if (!src.includes("saaridge-identity.sh")) {
+    throw new Error("must install saaridge-identity.sh");
   }
-  if (/onebridge-identity\.sh[\s\S]*export HOME="\$\{ONEBRIDGE_HOST_HOME\}"/.test(src)) {
+  if (/saaridge-identity\.sh[\s\S]*export HOME="\$\{SAARIDGE_HOST_HOME\}"/.test(src)) {
     throw new Error("identity profile.d must NOT set HOME (FUSE .profile hang)");
   }
   if (!src.includes("/opt/bridge/host-bin")) {
@@ -91,7 +91,7 @@ try {
 section("source: desktop stays on sandbox HOME");
 try {
   const src = read("container/start-desktop.sh");
-  if (!src.includes('export HOME="${ONEBRIDGE_SANDBOX_HOME}"')) {
+  if (!src.includes('export HOME="${SAARIDGE_SANDBOX_HOME}"')) {
     throw new Error("start-desktop must pin HOME back to sandbox after agent-env");
   }
   const browser = read("container/launch-browser.sh");
@@ -104,7 +104,7 @@ try {
 }
 
 if (!dockerBoxRunning()) {
-  skip("live container identity", "agent-bridge-box not running");
+  skip("live container identity", "saaridge-box not running");
 } else {
   section("live: login shell HOME + uname");
   try {
@@ -114,7 +114,7 @@ if (!dockerBoxRunning()) {
         "exec",
         "-u",
         "browser",
-        "agent-bridge-box",
+        "saaridge-box",
         "bash",
         "-lc",
         'printf "HOME=%s\\n" "$HOME"; printf "UNAME=%s\\n" "$(uname -s)"; printf "WHICH=%s\\n" "$(command -v uname)"; printf "OS=%s\\n" "$(grep ^PRETTY_NAME= /etc/os-release | head -1)"',
@@ -150,7 +150,7 @@ if (!dockerBoxRunning()) {
         "exec",
         "-u",
         "browser",
-        "agent-bridge-box",
+        "saaridge-box",
         "bash",
         "-c",
         'printf "U=%s\\n" "$(/usr/bin/uname -s)"; printf "W=%s\\n" "$(/usr/bin/whoami)"; printf "H=%s\\n" "$HOME"',
@@ -180,7 +180,7 @@ if (!dockerBoxRunning()) {
     const t0 = Date.now();
     const res = spawnSync(
       "docker",
-      ["exec", "agent-bridge-box", "bash", "-lc", "echo ok"],
+      ["exec", "saaridge-box", "bash", "-lc", "echo ok"],
       { encoding: "utf8", timeout: 5000 },
     );
     const ms = Date.now() - t0;

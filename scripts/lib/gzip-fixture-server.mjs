@@ -9,7 +9,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { ensureMitmCa } from "../../host/lib/mitm-certs.js";
 
-export const FIXTURE_MARKER = "ONEBRIDGE_GZIP_PROXY_MARKER_v1";
+export const FIXTURE_MARKER = "SAARIDGE_GZIP_PROXY_MARKER_v1";
 
 export function startGzipFixtureServer({ host = "localhost" } = {}) {
   const { certPath, keyPath: caKeyPath } = ensureMitmCa();

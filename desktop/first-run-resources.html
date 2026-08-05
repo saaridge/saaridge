@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Welcome to Saaridge</title>
+    <style>
+      :root {
+        --bg: #0b100e;
+        --panel: #151f1b;
+        --text: #e8f2ec;
+        --muted: #8aa396;
+        --line: #2a3a33;
+        --accent: #3dba8a;
+        --soft: #1c2923;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        height: 100%;
+        font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: radial-gradient(1200px 600px at 20% -10%, #16352b 0%, var(--bg) 55%);
+        color: var(--text);
+      }
+      .wrap {
+        min-height: 100%;
+        display: flex;
+        flex-direction: column;
+        padding: 1.5rem 1.75rem 1.25rem;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        margin-bottom: 1.1rem;
+      }
+      .brand img {
+        width: 48px;
+        height: 48px;
+        border-radius: 12px;
+      }
+      .brand h1 {
+        margin: 0;
+        font-size: 1.35rem;
+        font-weight: 650;
+        letter-spacing: -0.02em;
+      }
+      .brand p {
+        margin: 0.15rem 0 0;
+        color: var(--muted);
+        font-size: 0.85rem;
+      }
+      .card {
+        background: color-mix(in srgb, var(--panel) 92%, transparent);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 1rem 1.1rem 1.15rem;
+        flex: 1;
+      }
+      .card h2 {
+        margin: 0 0 0.35rem;
+        font-size: 0.95rem;
+      }
+      .help {
+        margin: 0 0 1rem;
+        color: var(--muted);
+        font-size: 0.82rem;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.75rem 1rem;
+      }
+      label {
+        display: grid;
+        gap: 0.3rem;
+        font-size: 0.75rem;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      select {
+        border: 1px solid var(--line);
+        background: #0b100e;
+        color: var(--text);
+        border-radius: 8px;
+        padding: 0.55rem 0.65rem;
+        font: inherit;
+        text-transform: none;
+        letter-spacing: normal;
+      }
+      .foot {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        margin-top: 1rem;
+      }
+      .note {
+        color: var(--muted);
+        font-size: 0.78rem;
+        max-width: 28rem;
+      }
+      .actions { display: flex; gap: 0.5rem; }
+      .btn {
+        border: 1px solid var(--line);
+        background: var(--soft);
+        color: var(--text);
+        border-radius: 9px;
+        padding: 0.55rem 0.9rem;
+        font: inherit;
+        cursor: pointer;
+      }
+      .btn.primary {
+        background: var(--accent);
+        border-color: color-mix(in srgb, var(--accent) 70%, #000);
+        color: #04140e;
+        font-weight: 600;
+      }
+      .btn:disabled { opacity: 0.55; cursor: wait; }
+      .status { color: var(--muted); font-size: 0.8rem; min-height: 1.2em; }
+      .status.err { color: #f07178; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="brand">
+        <img id="logo" src="assets/icon.png" alt="Saaridge" />
+        <div>
+          <h1>Welcome to Saaridge</h1>
+          <p>Choose how much of this computer the workspace may use</p>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Workspace resources</h2>
+        <p class="help">
+          Defaults are a good starting point. You can change these later in
+          Settings → Resources. Applying starts the workspace (may download the
+          image on first launch).
+        </p>
+        <div class="grid">
+          <label>Memory<select id="resMemory"></select></label>
+          <label>CPUs<select id="resCpus"></select></label>
+          <label>Shared memory<select id="resShm"></select></label>
+          <label>/tmp size<select id="resTmpfs"></select></label>
+          <label style="grid-column: 1 / -1">Display resolution<select id="resResolution"></select></label>
+        </div>
+        <p class="status" id="status"></p>
+      </div>
+      <div class="foot">
+        <p class="note">
+          Limits cannot exceed Docker Desktop → Resources. Continue uses these
+          values for the first workspace start.
+        </p>
+        <div class="actions">
+          <button type="button" class="btn" id="btnDefaults">Use defaults</button>
+          <button type="button" class="btn primary" id="btnContinue">Continue</button>
+        </div>
+      </div>
+    </div>
+    <script src="first-run-resources.js"></script>
+  </body>
+</html>

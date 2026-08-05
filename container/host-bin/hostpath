@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Map host-native paths → container FUSE paths for shell use.
-# Usage: hostpath /Users/me/OneBridge/workspaces/foo
+# Usage: hostpath /Users/me/Saaridge/workspaces/foo
 #        hostpath ~/Documents/x
 #        eval "$(hostpath --exports)"   # print cd/export hints
 set -euo pipefail
@@ -17,10 +17,10 @@ import os, sys, re
 host_home = sys.argv[1].strip() or None
 args = sys.argv[2:]
 
-mount = os.environ.get("ONEBRIDGE_HOST_MOUNT", "/host")
-projects = os.environ.get("ONEBRIDGE_PROJECTS", f"{mount}/workspaces/workspace-desktop")
-shared = os.environ.get("ONEBRIDGE_SHARED", f"{mount}/shared")
-chome = os.environ.get("ONEBRIDGE_HOST_HOME", f"{mount}/home")
+mount = os.environ.get("SAARIDGE_HOST_MOUNT", "/host")
+projects = os.environ.get("SAARIDGE_PROJECTS", f"{mount}/workspaces/workspace-desktop")
+shared = os.environ.get("SAARIDGE_SHARED", f"{mount}/shared")
+chome = os.environ.get("SAARIDGE_HOST_HOME", f"{mount}/home")
 
 def rewrite(p: str) -> str:
     if not p:
@@ -28,11 +28,11 @@ def rewrite(p: str) -> str:
     s = os.path.expanduser(p)
     if s.startswith("/host/") or s == "/host":
         return s
-    # ~/OneBridge/... or absolute .../OneBridge/...
-    m = re.search(r"(?:^|/)OneBridge(?:/|$)", s)
-    if "OneBridge" in s:
-        idx = s.find("OneBridge")
-        rest = s[idx + len("OneBridge") :].lstrip("/")
+    # ~/Saaridge/... or absolute .../Saaridge/...
+    m = re.search(r"(?:^|/)Saaridge(?:/|$)", s)
+    if "Saaridge" in s:
+        idx = s.find("Saaridge")
+        rest = s[idx + len("Saaridge") :].lstrip("/")
         return f"{mount}/{rest}" if rest else mount
     # /Users/<name>/... or /home/<name>/... → /host/home/...
     m = re.match(r"^/(?:Users|home)/[^/]+(?:/(.*))?$", s)
@@ -45,10 +45,10 @@ def rewrite(p: str) -> str:
     return s
 
 if args == ["--exports"]:
-    print(f'export ONEBRIDGE_HOST_MOUNT="{mount}"')
-    print(f'export ONEBRIDGE_PROJECTS="{projects}"')
-    print(f'export ONEBRIDGE_SHARED="{shared}"')
-    print(f'export ONEBRIDGE_HOST_HOME="{chome}"')
+    print(f'export SAARIDGE_HOST_MOUNT="{mount}"')
+    print(f'export SAARIDGE_PROJECTS="{projects}"')
+    print(f'export SAARIDGE_SHARED="{shared}"')
+    print(f'export SAARIDGE_HOST_HOME="{chome}"')
     print(f'cd "{projects}" 2>/dev/null || true')
     raise SystemExit(0)
 

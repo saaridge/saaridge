@@ -26,7 +26,7 @@ import {
   runInstallCommandsWithRetry,
   manualInstallHint,
 } from "../lib/agent-setup.js";
-import { CONTAINER_NAME, ROOT } from "../lib/paths.js";
+import { CONTAINER_NAME, ROOT, STATE_DIR } from "../lib/paths.js";
 
 const repoRoot = ROOT;
 
@@ -126,7 +126,7 @@ export const installAgentFromHostPath = async (hostPath) => {
       tokenFingerprint: agent.token.slice(0, 8),
       hostWorkspace: agent.hostWorkspace,
     });
-    push("Provisioned OneBridge workspace", true, {
+    push("Provisioned Saaridge workspace", true, {
       path: agent.hostWorkspace,
     });
 
@@ -209,11 +209,8 @@ export const installAgentFromHostPath = async (hostPath) => {
 
     // Credentials file: only this UID can read (write via host temp + docker cp).
     const credPath = `${workdir}/.bridge-credentials`;
-    const hostCredTmp = path.join(
-      repoRoot,
-      "state",
-      `.cred-${agentId}.json`,
-    );
+    const hostCredTmp = path.join(STATE_DIR, `.cred-${agentId}.json`);
+    fs.mkdirSync(STATE_DIR, { recursive: true });
     fs.writeFileSync(hostCredTmp, credentialsPayload(agent), { mode: 0o600 });
     await dockerCp(hostCredTmp, `${CONTAINER_NAME}:${credPath}`);
     try {
@@ -221,7 +218,7 @@ export const installAgentFromHostPath = async (hostPath) => {
         "../lib/host-identity.js"
       );
       writeWorkspaceOrientation(agentId);
-      const idTmp = path.join(repoRoot, "state", `.host-id-${agentId}.json`);
+      const idTmp = path.join(STATE_DIR, `.host-id-${agentId}.json`);
       fs.writeFileSync(idTmp, hostIdentityJson(agentId), { mode: 0o644 });
       await dockerCp(idTmp, `${CONTAINER_NAME}:/opt/bridge/host-identity.json`);
       fs.unlinkSync(idTmp);

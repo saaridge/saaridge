@@ -4,7 +4,7 @@ set -euo pipefail
 
 AGENT_ID="${1:-}"
 AGENT_NAME="${2:-Assistant}"
-HTML="/home/browser/.local/share/onebridge/agents/${AGENT_ID}.html"
+HTML="/home/browser/.local/share/saaridge/agents/${AGENT_ID}.html"
 
 export DISPLAY="${DISPLAY:-:1}"
 export HOME="${HOME:-/home/browser}"

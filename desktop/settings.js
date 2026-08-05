@@ -1,19 +1,24 @@
 (() => {
   let control = "http://127.0.0.1:3847";
-  let providers = [];
   let policyCache = { agents: [], global: { algorithms: [] } };
 
   const $ = (id) => document.getElementById(id);
   const params = new URLSearchParams(location.search);
+  const paneParam = params.get("pane");
   const initialPane =
-    params.get("pane") === "apikey"
-      ? "apikey"
-      : params.get("pane") === "microphone"
-        ? "microphone"
-        : "policies";
+    paneParam === "microphone" || paneParam === "resources"
+      ? paneParam
+      : "policies";
 
   const setPolicyStatus = (msg, isErr = false) => {
     const el = $("policyStatus");
+    if (!el) return;
+    el.textContent = msg || "";
+    el.classList.toggle("err", !!isErr);
+  };
+
+  const setResourcesStatus = (msg, isErr = false) => {
+    const el = $("resourcesStatus");
     if (!el) return;
     el.textContent = msg || "";
     el.classList.toggle("err", !!isErr);
@@ -32,16 +37,16 @@
   const showPane = (pane) => {
     const policies = pane === "policies";
     const mic = pane === "microphone";
-    const apikey = pane === "apikey";
+    const resources = pane === "resources";
     $("pane-policies").hidden = !policies;
     $("pane-microphone").hidden = !mic;
-    $("pane-apikey").hidden = !apikey;
+    $("pane-resources").hidden = !resources;
     $("navPolicies").classList.toggle("active", policies);
     $("navMic").classList.toggle("active", mic);
-    $("navApiKey").classList.toggle("active", apikey);
+    $("navResources").classList.toggle("active", resources);
     if (policies) void reloadPolicies();
     else if (mic) void reloadMic();
-    else void reloadApiKey();
+    else void reloadResources();
   };
 
   document.querySelectorAll(".nav-btn").forEach((btn) => {
@@ -51,7 +56,7 @@
   const closeSettings = () => window.close();
   $("btnClosePolicies")?.addEventListener("click", closeSettings);
   $("btnCloseMic")?.addEventListener("click", closeSettings);
-  $("keyCancel")?.addEventListener("click", closeSettings);
+  $("btnCloseResources")?.addEventListener("click", closeSettings);
 
   const modeLabel = (mode) =>
     mode === "on" ? "Force on" : mode === "off" ? "Force off" : "Follow global";
@@ -673,7 +678,7 @@
 
   const reloadMic = async () => {
     try {
-      const prefs = await window.onebridge?.getMicPrefs?.();
+      const prefs = await window.saaridge?.getMicPrefs?.();
       const on = !!prefs?.shareMic;
       micToggle.checked = on;
       micToggleLabel.textContent = on ? "On" : "Off";
@@ -693,7 +698,7 @@
     micToggleLabel.textContent = shareMic ? "On" : "Off";
     micToggle.disabled = true;
     try {
-      const r = await window.onebridge?.setMicPrefs?.({ shareMic });
+      const r = await window.saaridge?.setMicPrefs?.({ shareMic });
       applyMicStatus(
         r?.status || {
           state: shareMic ? "waiting" : "off",
@@ -711,116 +716,90 @@
     }
   });
 
-  window.onebridge?.onMicStatus?.((payload) => applyMicStatus(payload));
+  window.saaridge?.onMicStatus?.((payload) => applyMicStatus(payload));
 
-  // --- API key ---
-  const providerSelect = $("providerSelect");
-  const modelSelect = $("modelSelect");
-  const apiKeyInput = $("apiKeyInput");
-  const apiKeyLabel = $("apiKeyLabel");
-  const keyStatus = $("keyStatus");
-  const keyForm = $("keyForm");
-
-  const selectedProvider = () =>
-    providers.find((x) => x.id === providerSelect.value) || null;
-
-  const fillModels = (providerId, preferredModel) => {
-    const p = providers.find((x) => x.id === providerId);
-    const models = p?.models || [];
-    modelSelect.innerHTML = "";
-    for (const m of models) {
+  // --- Resources ---
+  const fillSelect = (el, options, selected) => {
+    if (!el) return;
+    el.innerHTML = "";
+    const values = [...options];
+    if (selected && !values.includes(String(selected))) {
+      values.unshift(String(selected));
+    }
+    for (const v of values) {
       const opt = document.createElement("option");
-      opt.value = m;
-      opt.textContent = m;
-      modelSelect.appendChild(opt);
-    }
-    if (
-      preferredModel &&
-      [...modelSelect.options].some((o) => o.value === preferredModel)
-    ) {
-      modelSelect.value = preferredModel;
-    } else if (p?.defaultModel) {
-      modelSelect.value = p.defaultModel;
+      opt.value = v;
+      opt.textContent = v;
+      if (String(v) === String(selected)) opt.selected = true;
+      el.appendChild(opt);
     }
   };
 
-  const updateProviderInfo = () => {
-    const p = selectedProvider();
-    if (!p) return;
-    $("providerName").textContent = p.label;
-    $("providerDesc").textContent = p.description || "";
-    $("providerHint").textContent =
-      p.needsKey === false
-        ? "No API key required for local Ollama."
-        : `Key format: ${p.keyHint || "see provider docs"}`;
-    const docs = $("providerDocs");
-    if (p.docsUrl) {
-      docs.href = p.docsUrl;
-      docs.textContent = `Get a ${p.label} API key`;
-      docs.hidden = false;
-    } else {
-      docs.hidden = true;
-    }
-    const needsKey = p.needsKey !== false;
-    apiKeyLabel.style.display = needsKey ? "grid" : "none";
-    if (!needsKey) apiKeyInput.value = "";
-  };
-
-  providerSelect.addEventListener("change", () => {
-    fillModels(providerSelect.value);
-    updateProviderInfo();
-  });
-
-  keyForm.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const p = selectedProvider();
+  const reloadResources = async () => {
+    setResourcesStatus("");
     try {
-      const r = await fetch(`${control}/api/llm/settings`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          provider: providerSelect.value,
-          model: modelSelect.value,
-          apiKey: p?.needsKey === false ? "" : apiKeyInput.value.trim(),
-        }),
-      });
-      const j = await r.json();
-      if (!j.ok) throw new Error(j.error || "Save failed");
-      window.close();
-    } catch (err) {
-      keyStatus.textContent = String(err.message || err);
-      keyStatus.classList.add("err");
-    }
-  });
-
-  const reloadApiKey = async () => {
-    keyStatus.classList.remove("err");
-    try {
-      const r = await fetch(`${control}/api/llm/settings`);
-      const j = await r.json();
-      providers = j.settings?.providers || [];
-      providerSelect.innerHTML = "";
-      for (const p of providers) {
-        const opt = document.createElement("option");
-        opt.value = p.id;
-        opt.textContent = p.label;
-        providerSelect.appendChild(opt);
+      const j = await api("/api/resources");
+      const r = j.resources || {};
+      const presets = j.presets || {};
+      fillSelect($("resMemory"), presets.memory || [], r.memory);
+      fillSelect($("resCpus"), presets.cpus || [], r.cpus);
+      fillSelect($("resShm"), presets.shmSize || [], r.shmSize);
+      fillSelect($("resTmpfs"), presets.tmpfsSize || [], r.tmpfsSize);
+      fillSelect($("resResolution"), presets.resolution || [], r.resolution);
+      if ($("resourcesMeta")) {
+        $("resourcesMeta").textContent = `Saved on this Mac: ${j.configPath || ""}`;
       }
-      providerSelect.value = j.settings?.provider || providers[0]?.id || "gemini";
-      fillModels(providerSelect.value, j.settings?.model);
-      updateProviderInfo();
-      keyStatus.textContent = j.settings?.configured
-        ? `Active: ${j.settings.label || j.settings.provider}`
-        : "Not configured yet";
+      if ($("resourcesNote")) {
+        $("resourcesNote").textContent =
+          j.note ||
+          "Apply restarts the workspace. Limits cannot exceed Docker Desktop resources.";
+      }
     } catch (err) {
-      keyStatus.textContent = String(err.message || err);
-      keyStatus.classList.add("err");
+      setResourcesStatus(String(err.message || err), true);
     }
   };
+
+  $("btnResourcesApply")?.addEventListener("click", async () => {
+    const btn = $("btnResourcesApply");
+    const payload = {
+      memory: $("resMemory")?.value,
+      cpus: $("resCpus")?.value,
+      shmSize: $("resShm")?.value,
+      tmpfsSize: $("resTmpfs")?.value,
+      resolution: $("resResolution")?.value,
+    };
+    btn.disabled = true;
+    setResourcesStatus("Applying (workspace restarting)…");
+    let poll = null;
+    try {
+      // Fire apply; poll boot while it runs so the status line stays live.
+      const applyPromise = api("/api/resources/apply", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      poll = setInterval(async () => {
+        try {
+          const bootRes = await fetch(`${control}/api/container/boot`);
+          const bootJson = await bootRes.json();
+          const msg = bootJson?.boot?.message;
+          if (msg) setResourcesStatus(msg);
+        } catch (_) {}
+      }, 800);
+      const j = await applyPromise;
+      if (!j.ok) throw new Error(j.error || "Apply failed");
+      setResourcesStatus("Applied — workspace ready");
+      await reloadResources();
+    } catch (err) {
+      setResourcesStatus(String(err.message || err), true);
+    } finally {
+      if (poll) clearInterval(poll);
+      btn.disabled = false;
+    }
+  });
 
   (async () => {
     try {
-      const urls = await window.onebridge?.getUrls?.();
+      const urls = await window.saaridge?.getUrls?.();
       if (urls?.control) control = urls.control;
     } catch (_) {}
     showPane(initialPane);

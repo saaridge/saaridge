@@ -2,19 +2,20 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { buildHostIdentity } from "../../lib/host-identity.js";
+import { HOST_ROOT_DIRNAME } from "../../lib/brand.js";
 
-/** Host root for all mediated project data. */
-export const oneBridgeRoot = () => path.join(os.homedir(), "OneBridge");
+/** Host root for all mediated project data (~/Saaridge). */
+export const saaridgeRoot = () => path.join(os.homedir(), HOST_ROOT_DIRNAME);
 
-export const sharedRoot = () => path.join(oneBridgeRoot(), "shared");
+export const sharedRoot = () => path.join(saaridgeRoot(), "shared");
 
 export const workspaceRootFor = (agentId) =>
-  path.join(oneBridgeRoot(), "workspaces", String(agentId || "unknown"));
+  path.join(saaridgeRoot(), "workspaces", String(agentId || "unknown"));
 
 /** Remove an agent's host workspace tree (tests / uninstall cleanup). */
 export const removeAgentWorkspace = (agentId) => {
   const ws = workspaceRootFor(agentId);
-  const root = path.resolve(oneBridgeRoot());
+  const root = path.resolve(saaridgeRoot());
   const resolved = path.resolve(ws);
   if (!resolved.startsWith(root + path.sep) || resolved === root) {
     throw new Error(`refusing to remove non-workspace path: ${resolved}`);
@@ -31,7 +32,7 @@ export const removeAgentWorkspace = (agentId) => {
  */
 export const resolveHostPath = (input) => {
   if (input == null || input === "") {
-    return oneBridgeRoot();
+    return saaridgeRoot();
   }
   let p = String(input);
   if (p.includes("\0")) {
@@ -43,7 +44,7 @@ export const resolveHostPath = (input) => {
 
   // Container FUSE layout → host paths (mediated).
   if (p === "/host" || p === "/host/") {
-    return oneBridgeRoot();
+    return saaridgeRoot();
   }
   if (p === "/host/home" || p.startsWith("/host/home/")) {
     const rest = p === "/host/home" ? "" : p.slice("/host/home/".length);
@@ -56,11 +57,11 @@ export const resolveHostPath = (input) => {
   if (p === "/host/workspaces" || p.startsWith("/host/workspaces/")) {
     const rest = p === "/host/workspaces" ? "" : p.slice("/host/workspaces/".length);
     return rest
-      ? path.join(oneBridgeRoot(), "workspaces", rest)
-      : path.join(oneBridgeRoot(), "workspaces");
+      ? path.join(saaridgeRoot(), "workspaces", rest)
+      : path.join(saaridgeRoot(), "workspaces");
   }
   if (p.startsWith("/host/")) {
-    return path.join(oneBridgeRoot(), p.slice("/host/".length));
+    return path.join(saaridgeRoot(), p.slice("/host/".length));
   }
 
   // Desktop symlink: /home/browser/<Hostname> Home/... → host home
@@ -115,7 +116,7 @@ export const toContainerPath = (hostAbsPath, agentId = null) => {
   if (hostAbsPath == null || hostAbsPath === "") return "/host";
   let p = path.resolve(String(hostAbsPath));
   const home = path.resolve(os.homedir());
-  const bridge = path.resolve(oneBridgeRoot());
+  const bridge = path.resolve(saaridgeRoot());
   const shared = path.resolve(sharedRoot());
   const wsRoot = path.resolve(path.join(bridge, "workspaces"));
 
@@ -150,7 +151,7 @@ export const hostOrientation = (agent) => {
   const id = String(agent?.id || "unknown");
   const identity = buildHostIdentity(id);
   const home = identity.homedir;
-  const bridge = oneBridgeRoot();
+  const bridge = saaridgeRoot();
   const workspace = workspaceRootFor(id);
   const shared = sharedRoot();
   return {
@@ -174,7 +175,7 @@ export const hostOrientation = (agent) => {
       workspace,
       shared,
       hostHome: home,
-      oneBridge: bridge,
+      saaridge: bridge,
       note: "read_file/write_file/list_dir accept host paths OR /host/... ",
     },
     paths: {

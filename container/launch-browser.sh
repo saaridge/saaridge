@@ -4,7 +4,7 @@ set -euo pipefail
 
 export DISPLAY="${DISPLAY:-:1}"
 # Editor/agent may remap HOME → /host/home; keep Chromium state in the sandbox.
-SANDBOX_HOME="${ONEBRIDGE_SANDBOX_HOME:-/home/browser}"
+SANDBOX_HOME="${SAARIDGE_SANDBOX_HOME:-/home/browser}"
 export HOME="${SANDBOX_HOME}"
 export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$SANDBOX_HOME/.config}"
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$SANDBOX_HOME/.cache}"
@@ -15,8 +15,8 @@ export PULSE_STATE_PATH="${PULSE_STATE_PATH:-$SANDBOX_HOME/.config/pulse}"
 CRED_FILE="${BRIDGE_CREDENTIALS_FILE:-$SANDBOX_HOME/.bridge-credentials}"
 
 if [[ ! -f "$CRED_FILE" ]]; then
-  zenity --error --text="Browser is not ready yet. Open OneBridge and click Start workspace." 2>/dev/null \
-    || xmessage "Browser is not ready yet. Start the workspace from OneBridge." 2>/dev/null \
+  zenity --error --text="Browser is not ready yet. Open Saaridge and click Start workspace." 2>/dev/null \
+    || xmessage "Browser is not ready yet. Start the workspace from Saaridge." 2>/dev/null \
     || true
   exit 1
 fi

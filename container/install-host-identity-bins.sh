@@ -4,8 +4,8 @@
 # Real binaries kept as *.debian for recovery / packaging.
 set -euo pipefail
 
-HOST_BIN="${ONEBRIDGE_HOST_BIN:-/opt/bridge/host-bin}"
-BACKUP_DIR="${ONEBRIDGE_BIN_BACKUP:-/usr/lib/onebridge/bin-debian}"
+HOST_BIN="${SAARIDGE_HOST_BIN:-/opt/bridge/host-bin}"
+BACKUP_DIR="${SAARIDGE_BIN_BACKUP:-/usr/lib/saaridge/bin-debian}"
 
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "[install-host-identity-bins] need root" >&2

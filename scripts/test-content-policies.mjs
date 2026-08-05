@@ -13,7 +13,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const { ok, fail, section, done } = createRunner("content-policies");
 
-const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "onebridge-policy-"));
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "saaridge-policy-"));
 const configPath = path.join(tmpDir, "ai-policies.json");
 process.env.AI_POLICY_CONFIG = configPath;
 

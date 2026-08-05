@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>OneBridge — Safe Agent Workspace</title>
+    <title>Saaridge — Safe Agent Workspace</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -519,7 +519,7 @@
         <div class="brand">
           <div class="mark" aria-hidden="true"></div>
           <div>
-            <h1>OneBridge</h1>
+            <h1>Saaridge</h1>
             <p>Run AI assistants in a locked, supervised workspace</p>
           </div>
         </div>
@@ -534,8 +534,8 @@
           <h2>Add assistants. Keep your computer protected.</h2>
           <p class="lede">
             Assistants work inside a sealed workspace. They can only reach your files,
-            websites, and commands through OneBridge — with a private key for each assistant.
-            Day-to-day use the <strong>OneBridge desktop app</strong>
+            websites, and commands through Saaridge — with a private key for each assistant.
+            Day-to-day use the <strong>Saaridge desktop app</strong>
             (<code>npm run app</code>): workspace view and AI policies in one window.
           </p>
           <div class="cta-row">
@@ -556,7 +556,7 @@
           <p>Built for people who want AI help without opening the whole machine.</p>
           <ul class="safe-list">
             <li>Each assistant has its own private access key</li>
-            <li>Internet from the workspace goes through OneBridge</li>
+            <li>Internet from the workspace goes through Saaridge</li>
             <li>Your project files are not copied into the workspace</li>
             <li>You can remove an assistant completely in one click</li>
           </ul>
@@ -636,7 +636,7 @@
       <section class="card panel" style="margin-top: 1rem; animation-delay: 0.08s">
         <h3>Capabilities the assistants can use</h3>
         <p class="help">
-          These are the actions OneBridge can perform on this computer when an assistant asks.
+          These are the actions Saaridge can perform on this computer when an assistant asks.
           Built-in actions come ready. You can also add simple custom actions.
         </p>
 
@@ -696,7 +696,7 @@
       const FRIENDLY_STEPS = [
         [/Validated host path/i, "Checked the folder you selected"],
         [/Issued per-agent token/i, "Created a private access key for this assistant"],
-        [/Wrote mcp\.json/i, "Connected the assistant to OneBridge"],
+        [/Wrote mcp\.json/i, "Connected the assistant to Saaridge"],
         [/Super-container ready/i, "Safe workspace is ready"],
         [/Created isolated container user/i, "Gave the assistant its own locked account"],
         [/Installed agent files/i, "Installed the assistant into the workspace"],
@@ -756,7 +756,7 @@
           $("ensureBtn").disabled = !!running;
         } catch {
           $("statusCluster").innerHTML =
-            '<span class="pill bad"><span class="dot"></span>Can’t reach OneBridge</span>';
+            '<span class="pill bad"><span class="dot"></span>Can’t reach Saaridge</span>';
         }
       };
 
@@ -1119,7 +1119,7 @@
       $("openDesktopBtn").onclick = () => {
         // Custom viewer: overflow:hidden + no scale so trackpad scroll reaches remote apps
         window.open(
-          "http://127.0.0.1:6081/novnc-onebridge.html",
+          "http://127.0.0.1:6081/novnc-saaridge.html",
           "_blank",
           "noopener,noreferrer",
         );

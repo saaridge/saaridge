@@ -12,9 +12,9 @@ import { CONTAINER_NAME, ROOT } from "./paths.js";
 import { logError, logStep } from "./logger.js";
 import path from "node:path";
 
-const NOVNC_HTTP = process.env.ONEBRIDGE_NOVNC_URL || "http://127.0.0.1:6081";
-const NOVNC_HOST = process.env.ONEBRIDGE_NOVNC_HOST || "127.0.0.1";
-const NOVNC_WS_PORT = Number(process.env.ONEBRIDGE_NOVNC_WS_PORT || 6081);
+const NOVNC_HTTP = process.env.SAARIDGE_NOVNC_URL || "http://127.0.0.1:6081";
+const NOVNC_HOST = process.env.SAARIDGE_NOVNC_HOST || "127.0.0.1";
+const NOVNC_WS_PORT = Number(process.env.SAARIDGE_NOVNC_WS_PORT || 6081);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -107,7 +107,7 @@ export const probeRfbViaWebsockify = (
 
 /** Inside-container checks: Xvfb, :5900 RFB banner, :6080 listen. */
 export const inspectStreamInsideContainer = async () => {
-  // Use bash -c (not -lc): login shells source /etc/profile.d/onebridge.sh →
+  // Use bash -c (not -lc): login shells source /etc/profile.d/saaridge.sh →
   // agent-env.sh which STATs /host (FUSE) and can hang forever when hostfs is wedged.
   const res = await dockerExec(
     [
@@ -159,7 +159,7 @@ echo "XVFB=$XVFB RFB=$RFB WS=$WS FUSE=$FUSE"
 export const getStreamHealth = async () => {
   // Host-side probes first — enough to know the Electron viewer can connect.
   const [novncHttp, hostWsPort, hostRfb] = await Promise.all([
-    probeHttp(`${NOVNC_HTTP}/novnc-onebridge.html`),
+    probeHttp(`${NOVNC_HTTP}/novnc-saaridge.html`),
     probeTcp(NOVNC_HOST, NOVNC_WS_PORT),
     probeRfbViaWebsockify(),
   ]);
@@ -241,7 +241,7 @@ export const ensureStreamStack = async (opts = {}) => {
         "-c",
         [
           "pkill -f 'hostfs-watchdog.sh' 2>/dev/null || true",
-          "rm -f /tmp/onebridge-hostfs-watchdog.lock /tmp/onebridge-hostfs-fuse.pid",
+          "rm -f /tmp/saaridge-hostfs-watchdog.lock /tmp/saaridge-hostfs-fuse.pid",
           "for p in $(pgrep -f 'python3.*hostfs-fuse\\.py' || true); do kill -9 \"$p\" 2>/dev/null || true; done",
           "fusermount3 -uz /host 2>/dev/null || umount -l /host 2>/dev/null || true",
           "nohup /opt/bridge/hostfs-watchdog.sh >>/tmp/hostfs-watchdog.log 2>&1 &",

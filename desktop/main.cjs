@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * OneBridge desktop shell.
+ * Saaridge desktop shell.
  *
  * Keyboard-critical design: the workspace noVNC page is the MAIN window
  * webContents (so macOS delivers keystrokes to it). Chrome (Settings, etc.)
@@ -26,13 +26,123 @@ const fs = require("node:fs");
 const readline = require("node:readline");
 const { createHash } = require("node:crypto");
 
-const ROOT = path.resolve(__dirname, "..");
+/** Repo root in dev; packaged install uses extraResources/saaridge-root. */
+const resolveRoot = () => {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, "saaridge-root");
+  }
+  return path.resolve(__dirname, "..");
+};
+
+const ROOT = resolveRoot();
 const CONTROL = "http://127.0.0.1:3847";
-const DESKTOP = "http://127.0.0.1:6081/novnc-onebridge.html?titlebar=44";
+const DESKTOP = "http://127.0.0.1:6081/novnc-saaridge.html?titlebar=44";
 const CHROME_INJECT = fs.readFileSync(
   path.join(__dirname, "inject-workspace-chrome.js"),
   "utf8",
 );
+
+app.setName("Saaridge");
+if (process.platform === "darwin") {
+  app.setAboutPanelOptions({
+    applicationName: "Saaridge",
+    applicationVersion: app.getVersion?.() || "0.0.1",
+    version: `${app.getVersion?.() || "0.0.1"} (alpha)`,
+    copyright: "Copyright © 2026 Saariv",
+  });
+}
+
+/** Avoid Electron's opaque "JavaScript error in the main process" dialog. */
+let lastUncaughtDialogAt = 0;
+process.on("uncaughtException", (err) => {
+  const detail = String(err?.stack || err?.message || err);
+  try {
+    fs.appendFileSync("/tmp/saaridge-desktop-main.log", `[uncaught] ${detail}\n`);
+  } catch (_) {}
+  // docker CLI PATH misses are handled below — don't spam modal dialogs.
+  if (/spawn docker ENOENT/i.test(detail)) return;
+  const now = Date.now();
+  if (now - lastUncaughtDialogAt < 15_000) return;
+  lastUncaughtDialogAt = now;
+  try {
+    dialog.showErrorBox("Saaridge error", detail.slice(0, 1800));
+  } catch (_) {}
+});
+process.on("unhandledRejection", (reason) => {
+  const detail = String(reason?.stack || reason?.message || reason);
+  try {
+    fs.appendFileSync(
+      "/tmp/saaridge-desktop-main.log",
+      `[unhandledRejection] ${detail}\n`,
+    );
+  } catch (_) {}
+});
+
+/** Writable state for packaged apps (vault/policies/resources). */
+const stateDir = () => path.join(app.getPath("userData"), "state");
+
+/**
+ * Packaged macOS apps get PATH=/usr/bin:/bin:/usr/sbin:/sbin — bare `docker`
+ * fails with ENOENT. Resolve absolute CLI path like the host does.
+ */
+let cachedDockerBin = null;
+const resolveDockerBin = () => {
+  if (cachedDockerBin) return cachedDockerBin;
+  if (process.env.DOCKER_BIN && fs.existsSync(process.env.DOCKER_BIN)) {
+    cachedDockerBin = process.env.DOCKER_BIN;
+    return cachedDockerBin;
+  }
+  const home = app.getPath("home");
+  const candidates = [
+    "/usr/local/bin/docker",
+    "/opt/homebrew/bin/docker",
+    "/Applications/Docker.app/Contents/Resources/bin/docker",
+    path.join(home, "Applications/Docker.app/Contents/Resources/bin/docker"),
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) {
+        cachedDockerBin = candidate;
+        return cachedDockerBin;
+      }
+    } catch (_) {}
+  }
+  cachedDockerBin = "docker";
+  return cachedDockerBin;
+};
+
+const withDockerPath = (env = process.env) => {
+  const binDir = path.dirname(resolveDockerBin());
+  const extras = [
+    binDir,
+    "/usr/local/bin",
+    "/opt/homebrew/bin",
+    "/Applications/Docker.app/Contents/Resources/bin",
+  ];
+  const parts = String(env.PATH || "/usr/bin:/bin:/usr/sbin:/sbin")
+    .split(":")
+    .filter(Boolean);
+  for (const dir of extras.reverse()) {
+    if (dir && !parts.includes(dir)) parts.unshift(dir);
+  }
+  return { ...env, PATH: parts.join(":") };
+};
+
+const hostEnv = () => {
+  const env = withDockerPath({
+    ...process.env,
+    SAARIDGE_ROOT: ROOT,
+    SAARIDGE_STATE_DIR: stateDir(),
+    SAARIDGE_PACKAGED: app.isPackaged ? "1" : "0",
+    SAARIDGE_PREFER_PULL: app.isPackaged ? "1" : process.env.SAARIDGE_PREFER_PULL || "0",
+  });
+  delete env.ELECTRON_RUN_AS_NODE;
+  if (app.isPackaged) {
+    env.SAARIDGE_NODE = process.execPath;
+    env.SAARIDGE_ELECTRON_AS_NODE = "1";
+  }
+  return env;
+};
 
 let mainWindow = null;
 let hostChild = null;
@@ -65,11 +175,102 @@ const writeMicPrefs = (prefs) => {
   return next;
 };
 
+const iconPath = () => {
+  // Prefer packaged asar assets (build-resources is installer-only).
+  const assetsPng = path.join(__dirname, "assets", "icon.png");
+  if (fs.existsSync(assetsPng)) return assetsPng;
+  if (process.platform === "darwin") {
+    const icns = path.join(__dirname, "build-resources", "icon.icns");
+    if (fs.existsSync(icns)) return icns;
+  }
+  if (process.platform === "win32") {
+    const ico = path.join(__dirname, "build-resources", "icon.ico");
+    if (fs.existsSync(ico)) return ico;
+  }
+  return assetsPng;
+};
+
+const APP_ICON = iconPath();
+
+/** True once the user has confirmed workspace resource limits. */
+const resourcesConfigured = async () => {
+  const local = path.join(stateDir(), "private", "resources.json");
+  if (fs.existsSync(local)) return true;
+  const r = await fetchJson(`${CONTROL}/api/resources`, {}, 3000);
+  return Boolean(r.ok && r.body?.configured);
+};
+
+/**
+ * First launch: ask for memory/CPU/etc before creating the workspace.
+ * Blocks until the user continues (saves prefs via control plane).
+ */
+let firstRunResourcesResolve = null;
+
+const promptFirstRunResources = () =>
+  new Promise((resolve) => {
+    firstRunResourcesResolve = resolve;
+    const dlg = new BrowserWindow({
+      width: 560,
+      height: 560,
+      parent: mainWindow || undefined,
+      modal: Boolean(mainWindow),
+      show: true,
+      resizable: false,
+      minimizable: false,
+      maximizable: false,
+      closable: false,
+      title: "Welcome to Saaridge",
+      backgroundColor: "#0b100e",
+      icon: APP_ICON,
+      webPreferences: {
+        preload: path.join(__dirname, "preload.cjs"),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+      },
+    });
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      if (firstRunResourcesResolve === resolve) {
+        firstRunResourcesResolve = null;
+      }
+      try {
+        // Allow programmatic close after Continue.
+        dlg.setClosable(true);
+        if (!dlg.isDestroyed()) dlg.close();
+      } catch (_) {}
+      resolve();
+    };
+    dlg.on("closed", () => {
+      if (!settled) {
+        settled = true;
+        if (firstRunResourcesResolve === resolve) {
+          firstRunResourcesResolve = null;
+        }
+        resolve();
+      }
+    });
+    void dlg.loadFile(path.join(__dirname, "first-run-resources.html"));
+    promptFirstRunResources._finish = finish;
+  });
+
+const maybePromptFirstRunResources = async () => {
+  if (await resourcesConfigured()) return;
+  sendBoot({
+    phase: "resources",
+    progress: 18,
+    message: "Choose workspace resources…",
+  });
+  await promptFirstRunResources();
+};
+
 const broadcastMicStatus = (payload) => {
   micStatus = { ...micStatus, ...payload };
   for (const win of BrowserWindow.getAllWindows()) {
     try {
-      win.webContents.send("onebridge:mic-status-broadcast", micStatus);
+      win.webContents.send("saaridge:mic-status-broadcast", micStatus);
     } catch (_) {}
   }
 };
@@ -77,7 +278,7 @@ const broadcastMicStatus = (payload) => {
 const stopMicCapture = () => {
   if (micCaptureWin && !micCaptureWin.isDestroyed()) {
     try {
-      micCaptureWin.webContents.send("onebridge:mic-command", "stop");
+      micCaptureWin.webContents.send("saaridge:mic-command", "stop");
     } catch (_) {}
     try {
       micCaptureWin.destroy();
@@ -89,7 +290,7 @@ const stopMicCapture = () => {
 const startMicCapture = () => {
   if (micCaptureWin && !micCaptureWin.isDestroyed()) {
     try {
-      micCaptureWin.webContents.send("onebridge:mic-command", "start");
+      micCaptureWin.webContents.send("saaridge:mic-command", "start");
     } catch (_) {}
     return;
   }
@@ -164,7 +365,7 @@ const waitFor = async (url, label, attempts = 60) => {
 
 const sendBoot = (payload) => {
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send("onebridge:boot", payload);
+    mainWindow.webContents.send("saaridge:boot", payload);
   }
 };
 
@@ -184,7 +385,7 @@ const focusDesktop = () => {
     .executeJavaScript(
       `(() => {
         try {
-          const r = window.__onebridgeRfb;
+          const r = window.__saaridgeRfb;
           const s = document.getElementById('screen');
           if (s) { s.tabIndex = 0; s.focus(); }
           if (r) {
@@ -295,7 +496,7 @@ const installAppMenu = () => {
 const ensureKeyPump = () => {
   if (keyPump && !keyPump.killed) return keyPump;
   keyPump = spawn(
-    "docker",
+    resolveDockerBin(),
     [
       "exec",
       "-i",
@@ -303,11 +504,14 @@ const ensureKeyPump = () => {
       "browser",
       "-e",
       "DISPLAY=:1",
-      "agent-bridge-box",
+      "saaridge-box",
       "/opt/bridge/key-pump.sh",
     ],
-    { stdio: ["pipe", "ignore", "ignore"] },
+    { stdio: ["pipe", "ignore", "ignore"], env: withDockerPath() },
   );
+  keyPump.on("error", () => {
+    keyPump = null;
+  });
   keyPump.on("exit", () => {
     keyPump = null;
   });
@@ -317,7 +521,7 @@ const ensureKeyPump = () => {
 const ensureMousePump = () => {
   if (mousePump && !mousePump.killed) return mousePump;
   mousePump = spawn(
-    "docker",
+    resolveDockerBin(),
     [
       "exec",
       "-i",
@@ -325,11 +529,14 @@ const ensureMousePump = () => {
       "browser",
       "-e",
       "DISPLAY=:1",
-      "agent-bridge-box",
+      "saaridge-box",
       "/opt/bridge/mouse-pump.sh",
     ],
-    { stdio: ["pipe", "ignore", "ignore"] },
+    { stdio: ["pipe", "ignore", "ignore"], env: withDockerPath() },
   );
+  mousePump.on("error", () => {
+    mousePump = null;
+  });
   mousePump.on("exit", () => {
     mousePump = null;
   });
@@ -339,7 +546,7 @@ const ensureMousePump = () => {
 const ensureClipboardPump = () => {
   if (clipboardPump && !clipboardPump.killed) return clipboardPump;
   clipboardPump = spawn(
-    "docker",
+    resolveDockerBin(),
     [
       "exec",
       "-i",
@@ -347,14 +554,21 @@ const ensureClipboardPump = () => {
       "browser",
       "-e",
       "DISPLAY=:1",
-      "agent-bridge-box",
+      "saaridge-box",
       "stdbuf",
       "-oL",
       "-eL",
       "/opt/bridge/clipboard-pump.sh",
     ],
-    { stdio: ["pipe", "pipe", "ignore"] },
+    { stdio: ["pipe", "pipe", "ignore"], env: withDockerPath() },
   );
+  clipboardPump.on("error", () => {
+    clipboardPump = null;
+    try {
+      clipboardRl?.close();
+    } catch (_) {}
+    clipboardRl = null;
+  });
   clipboardRl = readline.createInterface({
     input: clipboardPump.stdout,
     crlfDelay: Infinity,
@@ -419,7 +633,7 @@ const mediateHostClipboardText = async (text) => {
     if (!clipboardSizeWarned) {
       clipboardSizeWarned = true;
       console.warn(
-        "[onebridge] clipboard sync skipped: text exceeds 512KiB cap",
+        "[saaridge] clipboard sync skipped: text exceeds 512KiB cap",
       );
     }
     return null; // signal skip
@@ -741,7 +955,7 @@ const openDesktop = async () => {
   desktopLive = true;
   await injectWorkspaceChrome();
   restartInputPumps();
-  // Titlebar inset is already applied by novnc-onebridge.html (?titlebar=44).
+  // Titlebar inset is already applied by novnc-saaridge.html (?titlebar=44).
   setTimeout(focusDesktop, 100);
   setTimeout(focusDesktop, 500);
 };
@@ -757,7 +971,7 @@ const ensureDocker = async () => {
   await new Promise((resolve, reject) => {
     const child = spawn("bash", [script], {
       cwd: ROOT,
-      env: process.env,
+      env: withDockerPath(),
     });
     let err = "";
     child.stdout?.on("data", (d) => {
@@ -770,7 +984,7 @@ const ensureDocker = async () => {
         sendBoot({
           phase: "docker",
           progress: 2,
-          message: line.replace(/^\[onebridge\]\s*/i, ""),
+          message: line.replace(/^\[saaridge\]\s*/i, ""),
         });
       }
     });
@@ -785,7 +999,7 @@ const ensureDocker = async () => {
         sendBoot({
           phase: "docker",
           progress: 2,
-          message: line.replace(/^\[onebridge\]\s*/i, ""),
+          message: line.replace(/^\[saaridge\]\s*/i, ""),
         });
       }
     });
@@ -796,7 +1010,7 @@ const ensureDocker = async () => {
         reject(
           new Error(
             (err || "").trim() ||
-              "Docker is required. Install Docker Desktop, then open OneBridge again.",
+              "Docker is required. Install Docker Desktop, then open Saaridge again.",
           ),
         );
       }
@@ -809,28 +1023,61 @@ const ensureDocker = async () => {
   });
 };
 
-const startHostIfNeeded = async () => {
+const startHostIfNeeded = async ({ forceRestart = false } = {}) => {
   sendBoot({
     phase: "host",
     progress: 3,
-    message: "Starting control plane…",
+    message: forceRestart
+      ? "Restarting control plane…"
+      : "Starting control plane…",
   });
 
   const modulesOk = async () => {
     const r = await fetchJson(`${CONTROL}/api/desktop/stream-health`, {}, 5000);
-    // 200/503 = stream-stack loaded; 500 = import/syntax crash
     return r.status === 200 || r.status === 503;
   };
 
-  if ((await fetchOk(`${CONTROL}/api/health`)) && (await modulesOk())) {
+  const hostBrandOk = async () => {
+    const r = await fetchJson(`${CONTROL}/api/health`, {}, 3000);
+    if (!r.ok || !r.body?.ok) return false;
+    return r.body?.brand?.container === "saaridge-box";
+  };
+
+  const hostReady = async () =>
+    (await fetchOk(`${CONTROL}/api/health`)) &&
+    (await modulesOk()) &&
+    (await hostBrandOk());
+
+  if (!forceRestart && (await hostReady())) {
     return { already: true };
   }
 
-  // Prefer the supervised start-host.sh so crashes are recovered automatically.
-  const logPath = "/tmp/onebridge-desktop-host.log";
+  // One clean takeover: stop every supervisor/host (including fighting copies),
+  // free ports, then start a single flock-guarded supervisor.
+  sendBoot({
+    phase: "host",
+    progress: 3,
+    message: "Resetting control plane…",
+  });
+  await new Promise((resolve) => {
+    const stop = spawn(
+      "bash",
+      [
+        "-lc",
+        `SAARIDGE_ROOT=${JSON.stringify(ROOT)} source ${JSON.stringify(
+          path.join(ROOT, "scripts/lib/host-stack.sh"),
+        )} && saaridge_stop_host_stack`,
+      ],
+      { cwd: ROOT, stdio: "ignore" },
+    );
+    stop.on("close", () => resolve());
+    stop.on("error", () => resolve());
+  });
+
+  const logPath = "/tmp/saaridge-desktop-host.log";
+  const supervisorLog = "/tmp/saaridge-host-supervisor.log";
   const out = fs.openSync(logPath, "a");
-  const env = { ...process.env };
-  delete env.ELECTRON_RUN_AS_NODE;
+  const env = hostEnv();
   const startHostSh = path.join(ROOT, "scripts", "start-host.sh");
   hostChild = spawn("bash", [startHostSh], {
     cwd: ROOT,
@@ -840,14 +1087,44 @@ const startHostIfNeeded = async () => {
   });
   hostChild.unref();
 
-  for (let i = 0; i < 60; i++) {
-    if ((await fetchOk(`${CONTROL}/api/health`)) && (await modulesOk())) {
+  sendBoot({
+    phase: "host",
+    progress: 4,
+    message: "Waiting for control plane…",
+  });
+
+  // ~45s — host may need a retry after EADDRINUSE heal.
+  for (let i = 0; i < 90; i++) {
+    if (await hostReady()) {
+      sendBoot({
+        phase: "host",
+        progress: 5,
+        message: "Control plane ready",
+      });
       return { already: false, logPath };
+    }
+    if (i === 20 || i === 40 || i === 60) {
+      sendBoot({
+        phase: "host",
+        progress: 4,
+        message: `Still starting control plane… (${Math.round(i * 0.5)}s)`,
+      });
     }
     await sleep(500);
   }
+
+  let tail = "";
+  try {
+    const hostLog = fs.readFileSync("/tmp/saaridge-host.log", "utf8");
+    tail = hostLog.trim().split("\n").slice(-25).join("\n");
+  } catch (_) {
+    try {
+      tail = fs.readFileSync(supervisorLog, "utf8").trim().split("\n").slice(-25).join("\n");
+    } catch (__) {}
+  }
   throw new Error(
-    `Timed out waiting for control plane (${CONTROL}). See ${logPath} and /tmp/onebridge-host.log`,
+    `Timed out waiting for control plane (${CONTROL}).` +
+      (tail ? `\n\nLast host log:\n${tail}` : ` See ${logPath} and /tmp/saaridge-host.log`),
   );
 };
 
@@ -921,6 +1198,32 @@ const ensureWorkspace = async () => {
       { method: "POST" },
       45 * 60_000,
     );
+  }
+
+  if (!ensure.ok) {
+    const detail =
+      ensure.body?.error ||
+      ensure.body?.boot?.error ||
+      ensure.error?.message ||
+      "Failed to start workspace";
+    const recoverable =
+      /manifest unknown|not found|port is already allocated|address already in use|already in use by container|legacy/i.test(
+        String(detail),
+      );
+    if (recoverable) {
+      sendBoot({
+        phase: "host",
+        progress: 5,
+        message: "Recovering from workspace migrate error…",
+      });
+      await startHostIfNeeded({ forceRestart: true });
+      await ensureControlPlane();
+      ensure = await fetchJson(
+        `${CONTROL}/api/container/ensure`,
+        { method: "POST" },
+        45 * 60_000,
+      );
+    }
   }
 
   if (!ensure.ok) {
@@ -1011,8 +1314,9 @@ const createWindow = () => {
     height: 900,
     minWidth: 960,
     minHeight: 640,
-    title: "OneBridge",
+    title: "Saaridge",
     backgroundColor: "#0f1412",
+    icon: APP_ICON,
     show: true,
     center: true,
     autoHideMenuBar: true,
@@ -1050,7 +1354,7 @@ const createWindow = () => {
   mainWindow.webContents.on("did-finish-load", () => {
     if (!desktopLive || !mainWindow || mainWindow.isDestroyed()) return;
     const url = mainWindow.webContents.getURL();
-    if (url.includes("novnc-onebridge")) {
+    if (url.includes("novnc-saaridge")) {
       void injectWorkspaceChrome();
     }
   });
@@ -1078,15 +1382,16 @@ const createWindow = () => {
   });
 };
 
-ipcMain.handle("onebridge:urls", () => ({
+ipcMain.handle("saaridge:urls", () => ({
   desktop: DESKTOP,
   control: CONTROL,
 }));
 
-ipcMain.handle("onebridge:ready", async () => {
+ipcMain.handle("saaridge:ready", async () => {
   try {
     await ensureDocker();
     await startHostIfNeeded();
+    await maybePromptFirstRunResources();
     await ensureWorkspace();
     await ensureStreamReady();
     sendBoot({
@@ -1101,35 +1406,36 @@ ipcMain.handle("onebridge:ready", async () => {
   }
 });
 
-ipcMain.handle("onebridge:show-desktop", async () => {
+ipcMain.handle("saaridge:complete-first-run-resources", async () => {
+  if (typeof promptFirstRunResources._finish === "function") {
+    promptFirstRunResources._finish();
+  }
+  return { ok: true };
+});
+
+ipcMain.handle("saaridge:show-desktop", async () => {
   await ensureStreamReady().catch(() => {});
   await openDesktop();
   startStreamHeal();
   return { ok: true };
 });
 
-ipcMain.handle("onebridge:hide-desktop", async () => {
+ipcMain.handle("saaridge:hide-desktop", async () => {
   return { ok: true };
 });
 
-ipcMain.handle("onebridge:focus-desktop", async () => {
+ipcMain.handle("saaridge:focus-desktop", async () => {
   focusDesktop();
   return { ok: true };
 });
 
-ipcMain.on("onebridge:mouse", (_event, payload) => {
+ipcMain.on("saaridge:mouse", (_event, payload) => {
   injectMouseToX(payload);
 });
 
 const openSettingsWindow = (pane = "policies") => {
-  const safePane =
-    pane === "apikey"
-      ? "apikey"
-      : pane === "microphone"
-        ? "microphone"
-        : "policies";
-  // Same pattern as the committed API-key dialog: child modal only —
-  // Child modal — does not affect workspace chrome in the main window.
+  const allowed = new Set(["policies", "microphone", "resources"]);
+  const safePane = allowed.has(pane) ? pane : "policies";
   const dlg = new BrowserWindow({
     width: 880,
     height: 720,
@@ -1143,6 +1449,7 @@ const openSettingsWindow = (pane = "policies") => {
     maximizable: false,
     title: "Settings",
     backgroundColor: "#151f1b",
+    icon: APP_ICON,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -1157,77 +1464,129 @@ const openSettingsWindow = (pane = "policies") => {
   return { ok: true };
 };
 
-ipcMain.handle("onebridge:open-settings", async (_event, pane) =>
+ipcMain.handle("saaridge:open-settings", async (_event, pane) =>
   openSettingsWindow(pane),
 );
 
-ipcMain.handle("onebridge:open-api-key", async () =>
-  openSettingsWindow("apikey"),
-);
-
-ipcMain.handle("onebridge:open-policies", async () =>
+ipcMain.handle("saaridge:open-policies", async () =>
   openSettingsWindow("policies"),
 );
 
-ipcMain.handle("onebridge:mic-prefs-get", async () => ({
+ipcMain.handle("saaridge:mic-prefs-get", async () => ({
   ...readMicPrefs(),
   status: micStatus,
 }));
 
-ipcMain.handle("onebridge:mic-prefs-set", async (_event, prefs) => {
+ipcMain.handle("saaridge:mic-prefs-set", async (_event, prefs) => {
   const next = writeMicPrefs(prefs);
   syncMicSharing(next.shareMic);
   return { ok: true, ...next, status: micStatus };
 });
 
-ipcMain.on("onebridge:mic-status", (_event, payload) => {
+ipcMain.on("saaridge:mic-status", (_event, payload) => {
   broadcastMicStatus(payload || {});
   if (payload?.state === "denied" || payload?.state === "error") {
     // Keep preference on so user can retry; status reflects failure.
   }
 });
 
-ipcMain.handle("onebridge:open-microphone", async () =>
+ipcMain.handle("saaridge:open-microphone", async () =>
   openSettingsWindow("microphone"),
 );
 
+const saveHostHomeWrite = async (agentId, body) => {
+  const r = await fetchJson(
+    `${CONTROL}/api/agents/${encodeURIComponent(agentId)}/host-home-write`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+    5000,
+  );
+  return r;
+};
+
 const openHostHomeConsent = async (pending) => {
   if (!pending?.agentId) return;
-  // Consume so we don't re-open every poll tick.
-  await fetchJson(`${CONTROL}/api/ui/consume-host-home-consent`, {
-    method: "POST",
-  });
+  if (consentDialog) return; // one prompt at a time
+  consentDialog = true;
+  try {
+    // Consume so we don't re-open every poll tick.
+    await fetchJson(`${CONTROL}/api/ui/consume-host-home-consent`, {
+      method: "POST",
+    });
 
-  // Native dialog (reliable; no HTML window required).
-  const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
-  const choice = await dialog.showMessageBox(win || undefined, {
-    type: "warning",
-    buttons: ["Allow home write", "Deny"],
-    defaultId: 0,
-    cancelId: 1,
-    title: "Allow write to host home?",
-    message: `${pending.agentName || pending.agentId} wants to write under your Mac home folder.`,
-    detail:
-      (pending.path ? `Path: ${pending.path}\n\n` : "") +
-      "This is a OneBridge host-user grant — not container sudo. Do not use Cursor’s “Retry as Sudo”.",
-  });
-  if (choice.response === 0) {
-    const r = await fetchJson(
-      `${CONTROL}/api/agents/${encodeURIComponent(pending.agentId)}/host-home-write`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ grant: true }),
-      },
-      5000,
-    );
-    if (!r.ok) {
+    const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+    const agentLabel = pending.agentName || pending.agentId;
+    const pathLine = pending.path ? `Path: ${pending.path}\n\n` : "";
+
+    const first = await dialog.showMessageBox(win || undefined, {
+      type: "warning",
+      buttons: ["Allow home write", "Deny"],
+      defaultId: 0,
+      cancelId: 1,
+      title: "Allow write to host home?",
+      message: `${agentLabel} wants to write under your Mac home folder.`,
+      detail:
+        pathLine +
+        "Without this permission, the agent cannot create or edit files under your home folder. " +
+        "Projects under ~/Saaridge still work.\n\n" +
+        "This is a Saaridge host-user grant — not container sudo.",
+    });
+
+    if (first.response === 0) {
+      const r = await saveHostHomeWrite(pending.agentId, { grant: true });
+      if (!r.ok) {
+        await dialog.showMessageBox(win || undefined, {
+          type: "error",
+          message: "Could not save home-write grant",
+          detail: r.body?.error || String(r.status),
+        });
+      }
+      return;
+    }
+
+    // Denied — explain impact and offer retry or skip.
+    const follow = await dialog.showMessageBox(win || undefined, {
+      type: "info",
+      buttons: ["Allow home write", "Skip anyway"],
+      defaultId: 0,
+      cancelId: 1,
+      title: "Home write denied",
+      message: "The agent will not be able to write under your Mac home folder.",
+      detail:
+        "It can still read/browse home files and use ~/Saaridge projects.\n\n" +
+        "• Allow home write — grant permission now\n" +
+        "• Skip anyway — continue without write access (you can allow later if asked again)",
+    });
+
+    if (follow.response === 0) {
+      const r = await saveHostHomeWrite(pending.agentId, { grant: true });
+      if (!r.ok) {
+        await dialog.showMessageBox(win || undefined, {
+          type: "error",
+          message: "Could not save home-write grant",
+          detail: r.body?.error || String(r.status),
+        });
+      }
+      return;
+    }
+
+    // Skip anyway — persist decline so we do not keep auto-prompting.
+    const skip = await saveHostHomeWrite(pending.agentId, {
+      grant: false,
+      skipped: true,
+    });
+    if (!skip.ok) {
       await dialog.showMessageBox(win || undefined, {
         type: "error",
-        message: "Could not save home-write grant",
-        detail: r.body?.error || String(r.status),
+        message: "Could not save your choice",
+        detail: skip.body?.error || String(skip.status),
       });
     }
+  } finally {
+    consentDialog = false;
   }
 };
 

@@ -8,7 +8,7 @@ import { logError, logStep } from "./logger.js";
 
 export const DOWNLOADS_DIR = "/home/browser/Downloads";
 
-const ARCHIVE_RE = /\.(zip|tgz|tar\.gz|onebridge\.zip)$/i;
+const ARCHIVE_RE = /\.(zip|tgz|tar\.gz|saaridge\.zip)$/i;
 
 const run = (command, args, opts = {}) =>
   new Promise((resolve) => {
@@ -74,7 +74,7 @@ const findAgentRoot = (root) => {
 };
 
 const looksInstallableName = (name) =>
-  ARCHIVE_RE.test(name) || name.toLowerCase().endsWith(".onebridge");
+  ARCHIVE_RE.test(name) || name.toLowerCase().endsWith(".saaridge");
 
 /**
  * List installable packages the user downloaded into the workspace Downloads folder.
@@ -106,7 +106,7 @@ export const listWorkspaceDownloadPackages = async () => {
         `  is_dir = os.path.isdir(p)`,
         `  has_manifest = is_dir and os.path.isfile(os.path.join(p, 'agent.json'))`,
         `  low = name.lower()`,
-        `  is_archive = low.endswith(('.zip', '.tgz', '.tar.gz', '.onebridge.zip', '.onebridge'))`,
+        `  is_archive = low.endswith(('.zip', '.tgz', '.tar.gz', '.saaridge.zip', '.saaridge'))`,
         `  if not (has_manifest or is_archive):`,
         `    continue`,
         `  agent_name = None`,
@@ -159,7 +159,7 @@ export const listWorkspaceDownloadPackages = async () => {
 const unpackArchive = async (archivePath, destDir) => {
   fs.mkdirSync(destDir, { recursive: true });
   const lower = archivePath.toLowerCase();
-  if (lower.endsWith(".zip") || lower.endsWith(".onebridge.zip") || lower.endsWith(".onebridge")) {
+  if (lower.endsWith(".zip") || lower.endsWith(".saaridge.zip") || lower.endsWith(".saaridge")) {
     const r = await run("unzip", ["-q", "-o", archivePath, "-d", destDir]);
     if (r.code !== 0) throw new Error(r.stderr || r.stdout || "unzip failed");
     return;
@@ -222,7 +222,7 @@ const stagePackageFromDownloads = async (basename) => {
   const root = findAgentRoot(unpacked);
   if (!root) {
     throw new Error(
-      "This download is not a OneBridge assistant (missing agent.json)",
+      "This download is not a Saaridge assistant (missing agent.json)",
     );
   }
   return { staging, agentDir: root, displayName: readAgentName(root) || safe };
@@ -306,9 +306,9 @@ export const installAgentFromHostArchive = async (hostFilePath) => {
       }
       displayName = readAgentName(agentDir) || base;
     } else {
-      if (!ARCHIVE_RE.test(base) && !base.toLowerCase().endsWith(".onebridge")) {
+      if (!ARCHIVE_RE.test(base) && !base.toLowerCase().endsWith(".saaridge")) {
         throw new Error(
-          "That file is not a OneBridge assistant package (.zip / .tgz)",
+          "That file is not a Saaridge assistant package (.zip / .tgz)",
         );
       }
       const unpacked = path.join(staging, "unpacked");
@@ -316,7 +316,7 @@ export const installAgentFromHostArchive = async (hostFilePath) => {
       agentDir = findAgentRoot(unpacked);
       if (!agentDir) {
         throw new Error(
-          "This download is not a OneBridge assistant (missing agent.json)",
+          "This download is not a Saaridge assistant (missing agent.json)",
         );
       }
       displayName = readAgentName(agentDir) || base;
@@ -347,7 +347,7 @@ export const installAgentFromHostArchive = async (hostFilePath) => {
  * (zenity/GTK file picker under /home/browser).
  * Supports:
  *  - .deb → dpkg install inside the workspace
- *  - .zip / .tgz / .onebridge → OneBridge assistant package
+ *  - .zip / .tgz / .saaridge → Saaridge assistant package
  */
 export const installAgentFromWorkspacePath = async (workspacePath) => {
   const raw = String(workspacePath || "").trim();
@@ -527,7 +527,7 @@ NAME="$(grep -m1 '^Name=' "$SRC" | sed 's/^Name=//' || true)"
 [[ -z "$NAME" ]] && NAME="\${DEB_BASE%.deb}"
 SAFE_NAME="$(echo "$NAME" | tr -cd 'A-Za-z0-9 ._-' | sed 's/  */ /g' | sed 's/^ *//;s/ *$//')"
 [[ -z "$SAFE_NAME" ]] && SAFE_NAME="App"
-DEST_APP="$HOME/.local/share/applications/onebridge-\${SAFE_NAME// /_}.desktop"
+DEST_APP="$HOME/.local/share/applications/saaridge-\${SAFE_NAME// /_}.desktop"
 DEST_DESKTOP="$HOME/Desktop/\${SAFE_NAME}.desktop"
 
 # Rewrite Exec for container X; resolve Icon to absolute path; tag for uninstall.
@@ -579,13 +579,13 @@ for line in text:
                 if os.path.isfile(p):
                     line = f"Icon={p}"
                     break
-    if line.startswith("X-OneBridge-Package="):
+    if line.startswith("X-Saaridge-Package="):
         saw_pkg = True
         if pkg:
-            line = f"X-OneBridge-Package={pkg}"
+            line = f"X-Saaridge-Package={pkg}"
     out.append(line)
 if pkg and not saw_pkg:
-    out.append(f"X-OneBridge-Package={pkg}")
+    out.append(f"X-Saaridge-Package={pkg}")
 open(dest, "w", encoding="utf-8").write("\\n".join(out) + "\\n")
 PY
 
@@ -652,7 +652,7 @@ const installAppImageInWorkspace = async (workspacePath, base) => {
         "Icon=application-x-executable",
         "Terminal=false",
         "Categories=Utility;",
-        `X-OneBridge-Package=appimage:${name}`,
+        `X-Saaridge-Package=appimage:${name}`,
         "EOF",
         `cp -f "/home/browser/.local/share/applications/${name}.desktop" "/home/browser/Desktop/${name}.desktop"`,
         `chmod +x "/home/browser/Desktop/${name}.desktop"`,
@@ -722,7 +722,7 @@ export const uninstallWorkspaceApp = async (packageId) => {
           `NAME=${JSON.stringify(name)}`,
           'rm -f "/home/browser/Applications/${NAME}.AppImage" "/home/browser/Applications/${NAME}.appimage" "/home/browser/Applications/$NAME" 2>/dev/null || true',
           'rm -f "/home/browser/Desktop/${NAME}.desktop" "/home/browser/.local/share/applications/${NAME}.desktop" 2>/dev/null || true',
-          'find /home/browser/Desktop /home/browser/.local/share/applications -maxdepth 1 -name "*.desktop" 2>/dev/null | while read -r f; do grep -q "X-OneBridge-Package=appimage:${NAME}" "$f" 2>/dev/null && rm -f "$f"; done',
+          'find /home/browser/Desktop /home/browser/.local/share/applications -maxdepth 1 -name "*.desktop" 2>/dev/null | while read -r f; do grep -q "X-Saaridge-Package=appimage:${NAME}" "$f" 2>/dev/null && rm -f "$f"; done',
           "chown browser:browser /home/browser/Desktop 2>/dev/null || true",
         ].join("\n"),
       ],
@@ -754,7 +754,7 @@ export const uninstallWorkspaceApp = async (packageId) => {
         "        text = open(path, encoding='utf-8', errors='replace').read()",
         "    except OSError:",
         "        continue",
-        "    if f'X-OneBridge-Package={pkg}' in text or (pkg == 'cursor' and 'Name=Cursor' in text):",
+        "    if f'X-Saaridge-Package={pkg}' in text or (pkg == 'cursor' and 'Name=Cursor' in text):",
         "        os.remove(path)",
         "        print('removed', path)",
         "PY",
@@ -783,6 +783,6 @@ export const isAssistantPackageName = (name) => {
   const base = String(name || "").toLowerCase();
   return (
     ARCHIVE_RE.test(base) ||
-    base.endsWith(".onebridge")
+    base.endsWith(".saaridge")
   );
 };

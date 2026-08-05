@@ -3,10 +3,10 @@ const { app, BrowserWindow } = require("electron");
 
 app.whenReady().then(async () => {
   const w = new BrowserWindow({ show: false, webPreferences: { backgroundThrottling: false } });
-  await w.loadURL("http://127.0.0.1:6081/novnc-onebridge.html?titlebar=44");
+  await w.loadURL("http://127.0.0.1:6081/novnc-saaridge.html?titlebar=44");
   await new Promise((r) => setTimeout(r, 3500));
   const n = await w.webContents.executeJavaScript(`(() => {
-    const r = window.__onebridgeRfb;
+    const r = window.__saaridgeRfb;
     let n = 0;
     const o = r.sendKey.bind(r);
     r.sendKey = (...a) => { n++; return o(...a); };

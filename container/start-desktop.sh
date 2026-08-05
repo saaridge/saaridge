@@ -11,13 +11,13 @@ export BRIDGE_CREDENTIALS_FILE="${BRIDGE_CREDENTIALS_FILE:-$HOME/.bridge-credent
 
 # Exactly one start-desktop may run. Entrypoint + host used to race and each
 # spawn an xfce4-session → two systrays → "notification area lost selection".
-LOCK_FILE="${ONEBRIDGE_DESKTOP_LOCK:-/tmp/onebridge-start-desktop.lock}"
+LOCK_FILE="${SAARIDGE_DESKTOP_LOCK:-/tmp/saaridge-start-desktop.lock}"
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
   echo "[start-desktop] another instance already running — exit"
   exit 0
 fi
-echo $$ >"${ONEBRIDGE_DESKTOP_PIDFILE:-/tmp/onebridge-start-desktop.pid}"
+echo $$ >"${SAARIDGE_DESKTOP_PIDFILE:-/tmp/saaridge-start-desktop.pid}"
 
 # Mediated host projects via /host FUSE
 if [[ -f /opt/bridge/agent-env.sh ]]; then
@@ -26,14 +26,14 @@ if [[ -f /opt/bridge/agent-env.sh ]]; then
 fi
 # XFCE / desktop chrome must keep sandbox home (profiles, Desktop icons).
 # Agent-facing shells still get HOME=/host/home via profile.d + Cursor terminal env.
-export ONEBRIDGE_SANDBOX_HOME="${ONEBRIDGE_SANDBOX_HOME:-/home/browser}"
-export ONEBRIDGE_HOST_HOME="${ONEBRIDGE_HOST_HOME:-/host/home}"
-export HOME="${ONEBRIDGE_SANDBOX_HOME}"
+export SAARIDGE_SANDBOX_HOME="${SAARIDGE_SANDBOX_HOME:-/home/browser}"
+export SAARIDGE_HOST_HOME="${SAARIDGE_HOST_HOME:-/host/home}"
+export HOME="${SAARIDGE_SANDBOX_HOME}"
 export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
 export BRIDGE_CREDENTIALS_FILE="${BRIDGE_CREDENTIALS_FILE:-$HOME/.bridge-credentials}"
-export ONEBRIDGE_PROJECTS="${ONEBRIDGE_PROJECTS:-/host/workspaces/workspace-desktop}"
-export CURSOR_PROJECT_DIR="${CURSOR_PROJECT_DIR:-$ONEBRIDGE_PROJECTS}"
+export SAARIDGE_PROJECTS="${SAARIDGE_PROJECTS:-/host/workspaces/workspace-desktop}"
+export CURSOR_PROJECT_DIR="${CURSOR_PROJECT_DIR:-$SAARIDGE_PROJECTS}"
 
 mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" \
   "$HOME/Desktop" "$HOME/chromium-bridge-profile" \
@@ -54,11 +54,11 @@ else
     sleep 0.5
   done
 fi
-mkdir -p "$ONEBRIDGE_PROJECTS" 2>/dev/null || true
+mkdir -p "$SAARIDGE_PROJECTS" 2>/dev/null || true
 
 # Host machine label for Places / Desktop (from credentials → agent-env)
-ONEBRIDGE_HOST_NAME="${ONEBRIDGE_HOST_NAME:-Host}"
-ONEBRIDGE_HOST_HOME="${ONEBRIDGE_HOST_HOME:-/host/home}"
+SAARIDGE_HOST_NAME="${SAARIDGE_HOST_NAME:-Host}"
+SAARIDGE_HOST_HOME="${SAARIDGE_HOST_HOME:-/host/home}"
 
 # Host-home symlink + Places; keep sandbox home free of tourist folders.
 rm -f "$HOME/Projects" "$HOME/Host Home" "$HOME/host-home" \
@@ -74,7 +74,7 @@ done
 mkdir -p "$HOME/.config" 2>/dev/null || true
 printf '%s\n' 'enabled=False' 'filename_encoding=UTF-8' >"$HOME/.config/user-dirs.conf"
 if [[ -d /host/home ]]; then
-  ln -sfn /host/home "$HOME/${ONEBRIDGE_HOST_NAME} Home" 2>/dev/null || true
+  ln -sfn /host/home "$HOME/${SAARIDGE_HOST_NAME} Home" 2>/dev/null || true
   if [[ -d /host/home/Downloads ]]; then
     if [[ -L "$HOME/Downloads" ]] || [[ ! -e "$HOME/Downloads" ]]; then
       ln -sfn /host/home/Downloads "$HOME/Downloads" 2>/dev/null || true
@@ -86,7 +86,7 @@ if [[ -d /host/home ]]; then
     mkdir -p "$HOME/Downloads" 2>/dev/null || true
   fi
   mkdir -p "$HOME/.config/gtk-3.0" 2>/dev/null || true
-  echo "file:///host/home ${ONEBRIDGE_HOST_NAME} Home" > "$HOME/.config/gtk-3.0/bookmarks"
+  echo "file:///host/home ${SAARIDGE_HOST_NAME} Home" > "$HOME/.config/gtk-3.0/bookmarks"
 fi
 
 # Point Cursor launchers through launch-cursor.sh (proxy + MITM CA env).
@@ -122,7 +122,7 @@ for _desk in \
   "$HOME/Desktop/Cursor.desktop" \
   "$HOME/.local/share/applications/cursor.desktop" \
   "$HOME/.local/share/applications/Cursor.desktop" \
-  "$HOME/.local/share/applications/onebridge-Cursor.desktop" \
+  "$HOME/.local/share/applications/saaridge-Cursor.desktop" \
   /usr/share/applications/cursor.desktop \
   /usr/share/applications/co.anysphere.cursor.desktop
 do
@@ -215,7 +215,7 @@ path.write_text(json.dumps(cur, indent=2) + "\n", encoding="utf-8")
 print("[start-desktop] Cursor lazy-folder settings for FUSE host paths")
 PY
 
-# Generic Code-OSS / Electron editor trust: prefer OS CA store (includes OneBridge
+# Generic Code-OSS / Electron editor trust: prefer OS CA store (includes Saaridge
 # MITM CA). Applies to every ~/.config/*/User/settings.json — not one product.
 python3 - <<'PY' 2>/dev/null || true
 import json
@@ -262,12 +262,12 @@ if cur.get("http.experimental.systemCertificatesV2") is not True:
 profiles = cur.get("terminal.integrated.profiles.linux")
 if not isinstance(profiles, dict):
     profiles = {}
-host_home = os.environ.get("ONEBRIDGE_HOST_HOME") or "/host/home"
-sandbox = os.environ.get("ONEBRIDGE_SANDBOX_HOME") or "/home/browser"
+host_home = os.environ.get("SAARIDGE_HOST_HOME") or "/host/home"
+sandbox = os.environ.get("SAARIDGE_SANDBOX_HOME") or "/home/browser"
 host_env = {
     "HOME": host_home,
-    "ONEBRIDGE_HOST_HOME": host_home,
-    "ONEBRIDGE_SANDBOX_HOME": sandbox,
+    "SAARIDGE_HOST_HOME": host_home,
+    "SAARIDGE_SANDBOX_HOME": sandbox,
     "BRIDGE_CREDENTIALS_FILE": f"{sandbox}/.bridge-credentials",
     "PATH": "/opt/bridge/host-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 }
@@ -276,12 +276,12 @@ host_profile = {
     "icon": "terminal",
     "env": host_env,
 }
-if profiles.get("OneBridge Host") != host_profile:
-    profiles["OneBridge Host"] = host_profile
+if profiles.get("Saaridge Host") != host_profile:
+    profiles["Saaridge Host"] = host_profile
     cur["terminal.integrated.profiles.linux"] = profiles
     changed = True
-if cur.get("terminal.integrated.defaultProfile.linux") != "OneBridge Host":
-    cur["terminal.integrated.defaultProfile.linux"] = "OneBridge Host"
+if cur.get("terminal.integrated.defaultProfile.linux") != "Saaridge Host":
+    cur["terminal.integrated.defaultProfile.linux"] = "Saaridge Host"
     changed = True
 if cur.get("terminal.integrated.automationProfile.linux") != host_profile:
     cur["terminal.integrated.automationProfile.linux"] = host_profile
@@ -339,23 +339,23 @@ EOF
 }
 
 # Apps menu launcher (Desktop icon written after clutter clear below)
-write_browser_launcher "$HOME/.local/share/applications/onebridge-browser.desktop"
+write_browser_launcher "$HOME/.local/share/applications/saaridge-browser.desktop"
 write_browser_launcher "$HOME/.local/share/applications/chromium.desktop"
 
 # Prefer the proxied browser for http(s) links
 if command -v xdg-settings >/dev/null 2>&1; then
-  xdg-settings set default-web-browser onebridge-browser.desktop 2>/dev/null || \
+  xdg-settings set default-web-browser saaridge-browser.desktop 2>/dev/null || \
     xdg-settings set default-web-browser chromium.desktop 2>/dev/null || true
 fi
 
 # Clear Desktop clutter but keep Install Assistant, Web Browser, and installed apps
-# (tagged with X-OneBridge-Package=). Never wipe user-installed app icons.
+# (tagged with X-Saaridge-Package=). Never wipe user-installed app icons.
 mkdir -p "$HOME/Desktop"
 find "$HOME/Desktop" -mindepth 1 -maxdepth 1 | while IFS= read -r entry; do
   base="$(basename "$entry")"
   [[ "$base" == "Install Assistant.desktop" ]] && continue
   [[ "$base" == "Web Browser.desktop" ]] && continue
-  if [[ -f "$entry" && "$entry" == *.desktop ]] && grep -q '^X-OneBridge-Package=' "$entry" 2>/dev/null; then
+  if [[ -f "$entry" && "$entry" == *.desktop ]] && grep -q '^X-Saaridge-Package=' "$entry" 2>/dev/null; then
     continue
   fi
   rm -rf "$entry"
@@ -367,7 +367,7 @@ if command -v gio >/dev/null 2>&1; then
   gio set "$HOME/Desktop/Web Browser.desktop" metadata::trusted true 2>/dev/null || true
 fi
 
-cat > "$HOME/.local/share/applications/onebridge-install-assistant.desktop" <<'EOF'
+cat > "$HOME/.local/share/applications/saaridge-install-assistant.desktop" <<'EOF'
 [Desktop Entry]
 Version=1.0
 Type=Application
@@ -379,7 +379,7 @@ Terminal=false
 Categories=Utility;
 StartupNotify=true
 EOF
-chmod +x "$HOME/.local/share/applications/onebridge-install-assistant.desktop"
+chmod +x "$HOME/.local/share/applications/saaridge-install-assistant.desktop"
 
 # XFCE needs Type=Application + Exec= (application:// links are unsupported).
 cat > "$HOME/Desktop/Install Assistant.desktop" <<'EOF'
@@ -403,19 +403,19 @@ fi
 rm -f "$HOME/Desktop/Host Projects" "$HOME/Desktop/Host-Projects" 2>/dev/null || true
 rm -f "$HOME/Desktop"/Unknown_*\ Home 2>/dev/null || true
 if [[ -d /host/home ]]; then
-  ln -sfn /host/home "$HOME/Desktop/${ONEBRIDGE_HOST_NAME} Home" 2>/dev/null || true
+  ln -sfn /host/home "$HOME/Desktop/${SAARIDGE_HOST_NAME} Home" 2>/dev/null || true
   mkdir -p "$HOME/.config/gtk-3.0" 2>/dev/null || true
-  echo "file:///host/home ${ONEBRIDGE_HOST_NAME} Home" > "$HOME/.config/gtk-3.0/bookmarks"
+  echo "file:///host/home ${SAARIDGE_HOST_NAME} Home" > "$HOME/.config/gtk-3.0/bookmarks"
 fi
 
 # Re-seed desktop icons for apps installed via Install Assistant
-# (copies live under ~/.local/share/applications/onebridge-*.desktop).
-for app in "$HOME"/.local/share/applications/onebridge-*.desktop; do
+# (copies live under ~/.local/share/applications/saaridge-*.desktop).
+for app in "$HOME"/.local/share/applications/saaridge-*.desktop; do
   [[ -f "$app" ]] || continue
   case "$(basename "$app")" in
-    onebridge-install-assistant.desktop|onebridge-browser.desktop) continue ;;
+    saaridge-install-assistant.desktop|saaridge-browser.desktop) continue ;;
   esac
-  grep -q '^X-OneBridge-Package=' "$app" 2>/dev/null || continue
+  grep -q '^X-Saaridge-Package=' "$app" 2>/dev/null || continue
   name="$(grep -m1 '^Name=' "$app" | sed 's/^Name=//' || true)"
   [[ -z "$name" ]] && continue
   dest="$HOME/Desktop/${name}.desktop"
@@ -522,7 +522,7 @@ fi
 
 # Do NOT auto-open browser / Install Assistant / file manager.
 # Desktop starts empty; user opens apps from icons when needed.
-rm -f "$HOME/.config/onebridge-browser-opened-this-session" 2>/dev/null || true
+rm -f "$HOME/.config/saaridge-browser-opened-this-session" 2>/dev/null || true
 
 # Keep the desktop session helper alive — do NOT relaunch apps
 while true; do

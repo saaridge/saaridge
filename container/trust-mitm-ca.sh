@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Install OneBridge MITM CA into shared trust stores for every agent/app in the
+# Install Saaridge MITM CA into shared trust stores for every agent/app in the
 # container (CONSTRAINTS: generic solutions only — no per-product trust paths).
 #
 # Covers: Debian system CAs, NSS (~/.pki/nssdb) for each /home/*, Chromium/Chrome
 # managed CACertificates policy, optional Java cacerts, canonical PEM for env.
 set -euo pipefail
 
-CA_SRC="${1:-/opt/bridge/certs/onebridge-mitm-ca.crt}"
-CA_NAME="OneBridge_MITM_CA"
-CANONICAL="/opt/bridge/certs/onebridge-mitm-ca.crt"
+CA_SRC="${1:-/opt/bridge/certs/saaridge-mitm-ca.crt}"
+CA_NAME="Saaridge_MITM_CA"
+CANONICAL="/opt/bridge/certs/saaridge-mitm-ca.crt"
 
 if [[ ! -f "$CA_SRC" ]]; then
   echo "[trust-mitm-ca] missing CA at $CA_SRC" >&2
@@ -43,14 +43,14 @@ echo "[trust-mitm-ca] OpenSSL CA bundle at $CA_BUNDLE (system+mitm)"
 
 # ── System trust (OpenSSL, curl, many CLI tools) ─────────────────────────
 mkdir -p /usr/local/share/ca-certificates
-cp -f "$CA_SRC" /usr/local/share/ca-certificates/onebridge-mitm-ca.crt
+cp -f "$CA_SRC" /usr/local/share/ca-certificates/saaridge-mitm-ca.crt
 if command -v update-ca-certificates >/dev/null 2>&1; then
   update-ca-certificates >/tmp/update-ca-certificates.log 2>&1 || true
 fi
 # Rebuild bundle after update-ca-certificates so it includes the newly trusted CA
 # once (system file already has it after update; keep MITM appended idempotently).
 if [[ -f /etc/ssl/certs/ca-certificates.crt ]]; then
-  if ! grep -q "OneBridge MITM CA" /etc/ssl/certs/ca-certificates.crt 2>/dev/null; then
+  if ! grep -q "Saaridge MITM CA" /etc/ssl/certs/ca-certificates.crt 2>/dev/null; then
     cat /etc/ssl/certs/ca-certificates.crt "$CA_SRC" >"$CA_BUNDLE"
   else
     cp -f /etc/ssl/certs/ca-certificates.crt "$CA_BUNDLE"
@@ -105,8 +105,8 @@ policy = {
     "CACertificateManagementAllowed": 1,
 }
 for path in (
-    "/etc/chromium/policies/managed/onebridge-mitm.json",
-    "/etc/opt/chrome/policies/managed/onebridge-mitm.json",
+    "/etc/chromium/policies/managed/saaridge-mitm.json",
+    "/etc/opt/chrome/policies/managed/saaridge-mitm.json",
 ):
     try:
         open(path, "w").write(json.dumps(policy, indent=2) + "\n")
@@ -131,8 +131,8 @@ search_policy = {
     "DefaultSearchProviderIconURL": "https://www.google.com/favicon.ico",
 }
 for path in (
-    "/etc/chromium/policies/managed/onebridge-search.json",
-    "/etc/opt/chrome/policies/managed/onebridge-search.json",
+    "/etc/chromium/policies/managed/saaridge-search.json",
+    "/etc/opt/chrome/policies/managed/saaridge-search.json",
 ):
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -176,21 +176,21 @@ fi
 # Shell identity: every shell gets host HOME + uname shims (no FUSE STAT).
 # Full agent-env (proxy, pulse, Places links) is interactive-only.
 if [[ -d /etc/profile.d ]]; then
-  cat >/etc/profile.d/onebridge-identity.sh <<'EOF'
-# OneBridge identity — safe for all shells (no HOME remap here).
+  cat >/etc/profile.d/saaridge-identity.sh <<'EOF'
+# Saaridge identity — safe for all shells (no HOME remap here).
 # Remapping HOME in profile.d makes bash read $HOME/.profile from FUSE
 # (/host/home) and can hang. HOME is set in sandbox ~/.profile instead.
-export ONEBRIDGE_SANDBOX_HOME="${ONEBRIDGE_SANDBOX_HOME:-/home/browser}"
-export ONEBRIDGE_HOST_HOME="${ONEBRIDGE_HOST_HOME:-/host/home}"
+export SAARIDGE_SANDBOX_HOME="${SAARIDGE_SANDBOX_HOME:-/home/browser}"
+export SAARIDGE_HOST_HOME="${SAARIDGE_HOST_HOME:-/host/home}"
 case ":${PATH}:" in
   *:/opt/bridge/host-bin:*) ;;
   *) export PATH="/opt/bridge/host-bin:${PATH}" ;;
 esac
 EOF
-  chmod 644 /etc/profile.d/onebridge-identity.sh 2>/dev/null || true
+  chmod 644 /etc/profile.d/saaridge-identity.sh 2>/dev/null || true
 
-  cat >/etc/profile.d/onebridge.sh <<'EOF'
-# OneBridge: full agent-env for interactive shells only.
+  cat >/etc/profile.d/saaridge.sh <<'EOF'
+# Saaridge: full agent-env for interactive shells only.
 # Non-interactive shells never block docker health/repair with agent-env (FUSE hang).
 case $- in
   *i*)
@@ -201,8 +201,8 @@ case $- in
     ;;
 esac
 EOF
-  chmod 644 /etc/profile.d/onebridge.sh 2>/dev/null || true
-  echo "[trust-mitm-ca] installed /etc/profile.d/onebridge-identity.sh + onebridge.sh"
+  chmod 644 /etc/profile.d/saaridge.sh 2>/dev/null || true
+  echo "[trust-mitm-ca] installed /etc/profile.d/saaridge-identity.sh + saaridge.sh"
 fi
 
 # Update existing browser profiles so omnibox search switches without a wipe.

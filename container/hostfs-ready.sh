@@ -57,7 +57,7 @@ ensure_watchdog() {
     return 1
   fi
   emit_phase "hostfs_watchdog" "Starting host drive watchdog…"
-  rm -f /tmp/onebridge-hostfs-watchdog.lock 2>/dev/null || true
+  rm -f /tmp/saaridge-hostfs-watchdog.lock 2>/dev/null || true
   nohup env \
     BRIDGE_CREDENTIALS_FILE="$CRED" \
     BRIDGE_URL="${BRIDGE_URL:-http://host.docker.internal:7331}" \
@@ -80,13 +80,13 @@ nudge_remount() {
       *"python3 /opt/bridge/hostfs-fuse.py"*|*"python3 /opt/bridge/hostfs-fuse.py "*)
         kill -TERM "$pid" 2>/dev/null || true
         ;;
-      *"/opt/bridge/onebridge-hostfs "*)
+      *"/opt/bridge/saaridge-hostfs "*)
         kill -TERM "$pid" 2>/dev/null || true
         ;;
     esac
   done
   fusermount3 -uz "$MOUNT" 2>/dev/null || umount -l "$MOUNT" 2>/dev/null || true
-  rm -f /tmp/onebridge-hostfs-fuse.pid 2>/dev/null || true
+  rm -f /tmp/saaridge-hostfs-fuse.pid 2>/dev/null || true
 }
 
 # Exit 0 = browsable within budget; 2 = timed out / too slow; 1 = not ready yet.

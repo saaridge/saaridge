@@ -9,7 +9,7 @@
  * - host-side RFB-over-websockify probe must work when :6081 is up
  * - getStreamHealth must return within a budget (no forever hang)
  *
- * Live container checks run when agent-bridge-box is up.
+ * Live container checks run when saaridge-box is up.
  * Set TEST_DESKTOP_STREAM_SKIP_DOCKER=1 to skip them.
  */
 import fs from "node:fs";
@@ -53,7 +53,7 @@ section("source: profile.d interactive-only agent-env");
 try {
   const src = read("container/trust-mitm-ca.sh");
   if (!src.includes("case $- in") || !src.includes("*i*)")) {
-    throw new Error("onebridge.sh must gate agent-env on interactive $-");
+    throw new Error("saaridge.sh must gate agent-env on interactive $-");
   }
   if (!src.includes("never block docker health")) {
     throw new Error("missing comment documenting non-interactive skip");
@@ -66,7 +66,7 @@ try {
 section("source: agent-env bounds FUSE home STAT");
 try {
   const src = read("container/agent-env.sh");
-  if (!/timeout\s+1\s+test\s+-d\s+"\$ONEBRIDGE_HOST_HOME"/.test(src)) {
+  if (!/timeout\s+1\s+test\s+-d\s+"\$SAARIDGE_HOST_HOME"/.test(src)) {
     throw new Error("HOME remap must use timeout 1 test -d on host home");
   }
   ok("agent-env FUSE home check is time-bounded");
@@ -141,7 +141,7 @@ try {
   const { probeRfbViaWebsockify } = await import(
     path.join(ROOT, "host/lib/stream-stack.js")
   );
-  const page = await fetchOk("http://127.0.0.1:6081/novnc-onebridge.html", {
+  const page = await fetchOk("http://127.0.0.1:6081/novnc-saaridge.html", {
     timeoutMs: 3000,
   });
   if (!page) {
@@ -166,7 +166,7 @@ if (!dockerEnabled) {
     "container stream checks",
     dockerBoxRunning()
       ? "TEST_DESKTOP_STREAM_SKIP_DOCKER=1"
-      : "agent-bridge-box not running",
+      : "saaridge-box not running",
   );
 } else {
   section("non-interactive bash -lc must not hang");
@@ -174,7 +174,7 @@ if (!dockerEnabled) {
     const t0 = Date.now();
     const res = spawnSync(
       "docker",
-      ["exec", "agent-bridge-box", "bash", "-lc", "echo lc_ok"],
+      ["exec", "saaridge-box", "bash", "-lc", "echo lc_ok"],
       { encoding: "utf8", timeout: 5000 },
     );
     const ms = Date.now() - t0;
@@ -197,17 +197,17 @@ if (!dockerEnabled) {
       "docker",
       [
         "exec",
-        "agent-bridge-box",
+        "saaridge-box",
         "bash",
         "-c",
-        "grep -E 'case \\$-|\\*i\\*\\)' /etc/profile.d/onebridge.sh",
+        "grep -E 'case \\$-|\\*i\\*\\)' /etc/profile.d/saaridge.sh",
       ],
       { encoding: "utf8", timeout: 5000 },
     );
     if (res.status !== 0 || !String(res.stdout).includes("case $-")) {
-      throw new Error("live /etc/profile.d/onebridge.sh missing interactive gate");
+      throw new Error("live /etc/profile.d/saaridge.sh missing interactive gate");
     }
-    ok("live onebridge.sh gates on interactive shell");
+    ok("live saaridge.sh gates on interactive shell");
   } catch (e) {
     fail("live profile.d", e);
   }
@@ -218,7 +218,7 @@ if (!dockerEnabled) {
       "docker",
       [
         "exec",
-        "agent-bridge-box",
+        "saaridge-box",
         "bash",
         "-c",
         `curl -sS -m 25 -x http://127.0.0.1:17999 -A Mozilla -o /tmp/ob-ldc.out -w '%{http_code} %{size_download}' 'https://cursor.com/loginDeepControl?challenge=test&uuid=test&mode=login'`,
@@ -274,7 +274,7 @@ if (!dockerEnabled) {
 
   section("control plane stream-health responds");
   try {
-    const ctrl = process.env.ONEBRIDGE_CONTROL_URL || "http://127.0.0.1:3847";
+    const ctrl = process.env.SAARIDGE_CONTROL_URL || "http://127.0.0.1:3847";
     const t0 = Date.now();
     const res = await fetch(`${ctrl}/api/desktop/stream-health`, {
       signal: AbortSignal.timeout(12000),

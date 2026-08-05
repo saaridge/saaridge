@@ -2,14 +2,14 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import { getAgents, saveAgents } from "./state.js";
 import { defaultDataPolicy } from "../bridge/data/policy.js";
-import { workspaceRootFor, sharedRoot, oneBridgeRoot } from "../bridge/data/paths.js";
+import { workspaceRootFor, sharedRoot, saaridgeRoot } from "../bridge/data/paths.js";
 import { writeWorkspaceOrientation } from "./host-identity.js";
 
 const NEXT_UID_START = 12000;
 
-/** Ensure ~/OneBridge/workspaces/<id> and shared exist on the host. */
-export const provisionOneBridgeRoots = (agentId) => {
-  const root = oneBridgeRoot();
+/** Ensure ~/Saaridge/workspaces/<id> and shared exist on the host. */
+export const provisionSaaridgeRoots = (agentId) => {
+  const root = saaridgeRoot();
   const ws = workspaceRootFor(agentId);
   const shared = sharedRoot();
   fs.mkdirSync(ws, { recursive: true });
@@ -31,7 +31,7 @@ export const createAgentCredential = ({ id, name }) => {
 
   const token = crypto.randomBytes(32).toString("hex");
   const username = `u${uid}`;
-  const roots = provisionOneBridgeRoots(id);
+  const roots = provisionSaaridgeRoots(id);
   const record = {
     id,
     name,
@@ -94,6 +94,7 @@ export const listAgentsPublic = () =>
       tokenFingerprint: a.token ? a.token.slice(0, 8) : null,
       hostHomeWrite: Boolean(a.policy?.hostHomeWrite),
       hostHomeWriteAt: a.policy?.hostHomeWriteAt || null,
+      hostHomeWriteDeclinedAt: a.policy?.hostHomeWriteDeclinedAt || null,
     }));
 
 /** Desktop/Cursor identity for host-home write consent UI (not listed as an “assistant”). */
@@ -109,6 +110,7 @@ export const getDesktopAgentPublic = () => {
     status: a.status || "desktop",
     hostHomeWrite: Boolean(a.policy?.hostHomeWrite),
     hostHomeWriteAt: a.policy?.hostHomeWriteAt || null,
+    hostHomeWriteDeclinedAt: a.policy?.hostHomeWriteDeclinedAt || null,
   };
 };
 

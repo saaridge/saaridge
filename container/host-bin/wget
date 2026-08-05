@@ -18,7 +18,7 @@ fi
 NEED_MEDIATE=0
 for arg in "$@"; do
   case "$arg" in
-    *vault://*|*"X-OneBridge-Mediate"*|*"x-onebridge-mediate"*)
+    *vault://*|*"X-Saaridge-Mediate"*|*"x-saaridge-mediate"*)
       NEED_MEDIATE=1
       break
       ;;
@@ -97,7 +97,7 @@ while i < len(args):
 if not url:
     print("wget shim: could not find URL for vault mediate", file=sys.stderr)
     sys.exit(2)
-headers = {k: v for k, v in headers.items() if k.lower() != "x-onebridge-mediate"}
+headers = {k: v for k, v in headers.items() if k.lower() != "x-saaridge-mediate"}
 print(json.dumps({"method": method, "url": url, "headers": headers, "body": body}))
 PY
 )"

@@ -8,9 +8,9 @@ export const hasVaultRefs = (value) => VAULT_REF_RE.test(String(value ?? ""));
 /** True if headers ask for bridge-owned mediate (explicit intent). */
 export const hasMediateHeader = (headers = {}) => {
   const raw =
-    headers["x-onebridge-mediate"] ||
-    headers["X-OneBridge-Mediate"] ||
-    headers["x-onebridge-mediate".toLowerCase()];
+    headers["x-saaridge-mediate"] ||
+    headers["X-Saaridge-Mediate"] ||
+    headers["x-saaridge-mediate".toLowerCase()];
   if (raw == null) return false;
   const v = String(raw).trim().toLowerCase();
   return v === "1" || v === "true" || v === "yes";

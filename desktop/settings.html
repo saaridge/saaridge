@@ -600,8 +600,8 @@
         <button type="button" class="nav-btn" data-pane="microphone" id="navMic">
           Microphone
         </button>
-        <button type="button" class="nav-btn" data-pane="apikey" id="navApiKey">
-          API key
+        <button type="button" class="nav-btn" data-pane="resources" id="navResources">
+          Resources
         </button>
       </nav>
       <main>
@@ -671,7 +671,7 @@
               <div class="row" style="align-items:center">
                 <div>
                   <div><strong>Share microphone with workspace</strong></div>
-                  <div class="sub">Requires macOS microphone permission for OneBridge</div>
+                  <div class="sub">Requires macOS microphone permission for Saaridge</div>
                 </div>
                 <label style="margin:0; display:flex; align-items:center; gap:0.4rem">
                   <input id="micToggle" type="checkbox" />
@@ -683,39 +683,45 @@
           </div>
         </section>
 
-        <section class="pane" id="pane-apikey" hidden>
+        <section class="pane" id="pane-resources" hidden>
           <header class="pane-header">
-            <h3>Bridge LLM</h3>
+            <h3>Resources</h3>
             <div class="pane-toolbar">
-              <button type="submit" class="btn primary" form="keyForm" id="btnSaveApiKey">Save</button>
-              <button type="button" class="btn btn-icon" id="keyCancel" title="Close" aria-label="Close">×</button>
+              <span class="status" id="resourcesStatus"></span>
+              <button type="button" class="btn primary" id="btnResourcesApply">Apply</button>
+              <button type="button" class="btn btn-icon" id="btnCloseResources" title="Close" aria-label="Close">×</button>
             </div>
           </header>
           <div class="pane-body">
-            <form id="keyForm">
-              <p class="help">
-                Optional. Pick a provider, then paste its API key. The key stays on the host.
-              </p>
+            <p class="help">
+              Cap how much of this Mac the workspace container may use.
+              <strong>Apply restarts the workspace</strong> so limits take effect.
+              Values cannot exceed Docker Desktop → Settings → Resources.
+            </p>
+            <div class="meta" id="resourcesMeta">Loading…</div>
+            <div class="section">
               <label>
-                Provider
-                <select id="providerSelect"></select>
+                Memory limit
+                <select id="resMemory"></select>
               </label>
-              <div>
-                <strong id="providerName"></strong>
-                <p class="help" id="providerDesc" style="margin-bottom:0.35rem"></p>
-                <p class="help" id="providerHint" style="margin-bottom:0.35rem"></p>
-                <a id="providerDocs" href="#" target="_blank" rel="noreferrer" hidden></a>
-              </div>
               <label>
-                Model
-                <select id="modelSelect"></select>
+                CPUs
+                <select id="resCpus"></select>
               </label>
-              <label id="apiKeyLabel">
-                API key
-                <input id="apiKeyInput" type="password" autocomplete="off" placeholder="Paste key" />
+              <label>
+                Shared memory (shm)
+                <select id="resShm"></select>
               </label>
-              <p class="status" id="keyStatus"></p>
-            </form>
+              <label>
+                /tmp size
+                <select id="resTmpfs"></select>
+              </label>
+              <label>
+                Display resolution
+                <select id="resResolution"></select>
+              </label>
+            </div>
+            <p class="help" id="resourcesNote"></p>
           </div>
         </section>
       </main>

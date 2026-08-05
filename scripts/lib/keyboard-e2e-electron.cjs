@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Electron E2E: same attachKeyBridge + __onebridgeKey path as desktop/main.cjs.
+ * Electron E2E: same attachKeyBridge + __saaridgeKey path as desktop/main.cjs.
  * Types via webContents.sendInputEvent (real OS delivery) and verifies RFB probe.
  */
 const path = require("node:path");
@@ -9,11 +9,11 @@ const { forwardKeyViaDom } = require(
   path.join(__dirname, "..", "..", "desktop", "key-forward.cjs"),
 );
 
-const TEXT = process.env.ONEBRIDGE_KB_E2E_TEXT || "xyz";
+const TEXT = process.env.SAARIDGE_KB_E2E_TEXT || "xyz";
 const URL =
-  process.env.ONEBRIDGE_KB_E2E_URL ||
-  "http://127.0.0.1:6081/novnc-onebridge.html?titlebar=44";
-const TIMEOUT = Number(process.env.ONEBRIDGE_KB_E2E_TIMEOUT || 60000);
+  process.env.SAARIDGE_KB_E2E_URL ||
+  "http://127.0.0.1:6081/novnc-saaridge.html?titlebar=44";
+const TIMEOUT = Number(process.env.SAARIDGE_KB_E2E_TIMEOUT || 60000);
 
 let keyForwardChain = Promise.resolve();
 let quitReason = null;
@@ -55,12 +55,12 @@ const attachKeyBridge = (webContents) => {
 const installProbe = (wc) =>
   wc.executeJavaScript(
     `(() => {
-      const r = window.__onebridgeRfb;
-      if (!r || window.__onebridgeKbProbe) return false;
-      window.__onebridgeKbProbe = [];
+      const r = window.__saaridgeRfb;
+      if (!r || window.__saaridgeKbProbe) return false;
+      window.__saaridgeKbProbe = [];
       const orig = r.sendKey.bind(r);
       r.sendKey = (keysym, code, down) => {
-        window.__onebridgeKbProbe.push({ keysym, code, down });
+        window.__saaridgeKbProbe.push({ keysym, code, down });
         return orig(keysym, code, down);
       };
       return true;
@@ -74,7 +74,7 @@ const waitForRfb = (wc) =>
       const deadline = Date.now() + ${TIMEOUT};
       const tick = () => {
         try {
-          const r = window.__onebridgeRfb;
+          const r = window.__saaridgeRfb;
           if (r && r._rfbConnectionState === "connected") resolve(true);
           else if (Date.now() > deadline) resolve(false);
           else setTimeout(tick, 200);
@@ -91,7 +91,7 @@ const waitForRfb = (wc) =>
 const focusRemoteXterm = (wc) =>
   wc.executeJavaScript(
     `(() => {
-      const r = window.__onebridgeRfb;
+      const r = window.__saaridgeRfb;
       const c = r?._canvas;
       if (!c || !r) return false;
       const x = 420;
@@ -105,7 +105,7 @@ const focusRemoteXterm = (wc) =>
   );
 
 const readProbe = (wc) =>
-  wc.executeJavaScript(`window.__onebridgeKbProbe || []`, true);
+  wc.executeJavaScript(`window.__saaridgeKbProbe || []`, true);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

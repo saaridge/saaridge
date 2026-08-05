@@ -1,4 +1,4 @@
-# OneBridge hard constraints (non-negotiable)
+# Saaridge hard constraints (non-negotiable)
 
 These rules apply to **all** work in this repository (humans and agents).
 If a change conflicts with this file, **this file wins** — redesign the change.

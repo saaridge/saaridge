@@ -1,5 +1,5 @@
 /**
- * Provider catalog for OneBridge bridge LLM calls.
+ * Provider catalog for Saaridge bridge LLM calls.
  */
 
 export const PROVIDERS = [
@@ -216,12 +216,12 @@ export const resolveLlmConfig = (override = {}, ctx = {}) => {
     override.provider ||
       runtimeProvider ||
       saved.provider ||
-      process.env.ONEBRIDGE_LLM_PROVIDER ||
+      process.env.SAARIDGE_LLM_PROVIDER ||
       "auto",
   ).toLowerCase();
 
   const modelOverride =
-    override.model || saved.model || process.env.ONEBRIDGE_LLM_MODEL || null;
+    override.model || saved.model || process.env.SAARIDGE_LLM_MODEL || null;
 
   const requestKey = override.apiKey
     ? String(override.apiKey)

@@ -30,7 +30,7 @@ has_socket() {
 
 has_sink() {
   export PULSE_SERVER="unix:${PULSE_RUNTIME_PATH}/native"
-  pactl --server="$PULSE_SERVER" list short sinks 2>/dev/null | grep -q onebridge
+  pactl --server="$PULSE_SERVER" list short sinks 2>/dev/null | grep -q saaridge
 }
 
 stream_listening() {
@@ -76,9 +76,9 @@ if speaker_healthy; then
   ensure_pulse_client_conf
   # Idle suspend makes the monitor look "muted" and starves the viewer stream.
   pactl --server="$PULSE_SERVER" unload-module module-suspend-on-idle 2>/dev/null || true
-  pactl --server="$PULSE_SERVER" set-default-sink onebridge 2>/dev/null || true
-  pactl --server="$PULSE_SERVER" set-sink-mute onebridge 0 2>/dev/null || true
-  pactl --server="$PULSE_SERVER" set-sink-volume onebridge 100% 2>/dev/null || true
+  pactl --server="$PULSE_SERVER" set-default-sink saaridge 2>/dev/null || true
+  pactl --server="$PULSE_SERVER" set-sink-mute saaridge 0 2>/dev/null || true
+  pactl --server="$PULSE_SERVER" set-sink-volume saaridge 100% 2>/dev/null || true
   START_MIC="${START_MIC:-/usr/local/bin/start-mic.sh}"
   if [[ -x "$START_MIC" ]]; then
     "$START_MIC" >>/tmp/start-mic.log 2>&1 || true
@@ -117,13 +117,13 @@ fi
 # --- heal null sink (only recreate if missing) ---
 if ! has_sink; then
   pactl --server="$PULSE_SERVER" unload-module module-null-sink 2>/dev/null || true
-  pactl --server="$PULSE_SERVER" load-module module-null-sink sink_name=onebridge \
-    sink_properties=device.description=OneBridge_Speaker >/tmp/pulse-sink.log 2>&1 || true
+  pactl --server="$PULSE_SERVER" load-module module-null-sink sink_name=saaridge \
+    sink_properties=device.description=Saaridge_Speaker >/tmp/pulse-sink.log 2>&1 || true
 fi
 
-pactl --server="$PULSE_SERVER" set-default-sink onebridge 2>/dev/null || true
-pactl --server="$PULSE_SERVER" set-sink-mute onebridge 0 2>/dev/null || true
-pactl --server="$PULSE_SERVER" set-sink-volume onebridge 100% 2>/dev/null || true
+pactl --server="$PULSE_SERVER" set-default-sink saaridge 2>/dev/null || true
+pactl --server="$PULSE_SERVER" set-sink-mute saaridge 0 2>/dev/null || true
+pactl --server="$PULSE_SERVER" set-sink-volume saaridge 100% 2>/dev/null || true
 # Keep capture alive for the host viewer even when nothing is playing.
 pactl --server="$PULSE_SERVER" unload-module module-suspend-on-idle 2>/dev/null || true
 # Default *source* is the virtual host mic (set by start-mic), not the speaker monitor.
@@ -133,20 +133,20 @@ ensure_pulse_client_conf
 chown -R "$(id -u):$(id -g)" "$PULSE_STATE_PATH" 2>/dev/null || true
 
 pactl --server="$PULSE_SERVER" list short sinks >/tmp/pulse-sinks.txt 2>&1 || true
-if ! grep -q onebridge /tmp/pulse-sinks.txt 2>/dev/null; then
-  echo "[start-audio] ERROR: onebridge sink not created" >&2
+if ! grep -q saaridge /tmp/pulse-sinks.txt 2>/dev/null; then
+  echo "[start-audio] ERROR: saaridge sink not created" >&2
   cat /tmp/pulse-sink.log >&2 || true
   exit 1
 fi
 
-if ! ffmpeg -y -f pulse -i onebridge.monitor -t 0.2 -f null - >/tmp/ffmpeg-probe.log 2>&1; then
-  echo "[start-audio] ERROR: ffmpeg cannot capture onebridge.monitor" >&2
+if ! ffmpeg -y -f pulse -i saaridge.monitor -t 0.2 -f null - >/tmp/ffmpeg-probe.log 2>&1; then
+  echo "[start-audio] ERROR: ffmpeg cannot capture saaridge.monitor" >&2
   cat /tmp/ffmpeg-probe.log >&2 || true
   exit 1
 fi
 
 # --- heal audio-stream (only restart if not listening) ---
-export PULSE_MONITOR=onebridge.monitor
+export PULSE_MONITOR=saaridge.monitor
 export PULSE_SERVER
 
 if ! stream_listening; then

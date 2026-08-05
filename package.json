@@ -1,8 +1,9 @@
 {
-  "name": "agent-bridge-prototype",
-  "version": "1.0.0",
+  "name": "saaridge",
+  "version": "0.0.1",
   "private": true,
-  "description": "Secure super-container agents with host-side bridge MCP",
+  "license": "Apache-2.0",
+  "description": "Saaridge — mediated agent workspace (alpha)",
   "type": "module",
   "scripts": {
     "start": "node host/index.js",
@@ -24,7 +25,9 @@
     "cleanup:test-agents": "node scripts/cleanup-test-agents.mjs",
     "pretest": "node scripts/cleanup-test-agents.mjs",
     "posttest": "node scripts/cleanup-test-agents.mjs",
-    "test": "npm run test:mediation-guarantee && npm run test:data-plane && npm run test:workspace-regression && npm run test:desktop-stream && npm run test:host-identity && npm run test:keyboard && npm run test:content-policies"
+    "test": "npm run test:mediation-guarantee && npm run test:data-plane && npm run test:workspace-regression && npm run test:desktop-stream && npm run test:host-identity && npm run test:keyboard && npm run test:content-policies",
+    "ship:prepare": "bash scripts/ship/prepare-ship-root.sh",
+    "ship": "bash scripts/ship/build-installers.sh"
   },
   "dependencies": {
     "@ai-policy-engine/algorithms": "file:../ai-policy-engine/packages/algorithms",

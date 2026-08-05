@@ -13,8 +13,18 @@ import {
   ensureContainer,
   containerRunning,
   getContainerBootStatus,
+  applyResourcesAndRecreate,
 } from "../lib/docker.js";
+import { resourcesStatus, saveResources, writeResourcesComposeOverride } from "../lib/resources.js";
+import {
+  APP_NAME,
+  APP_VERSION,
+  CONTAINER_NAME,
+  IMAGE_NAME,
+  RELEASE_CHANNEL,
+} from "../lib/brand.js";
 import { listAgentsPublic, getAgentById, getDesktopAgentPublic } from "../lib/auth.js";
+
 import {
   getLlmSettingsPublic,
   saveLlmSettings,
@@ -38,7 +48,7 @@ import {
   resizeDesktopDisplay,
   injectDesktopMouse,
 } from "../lib/ui-commands.js";
-import { setHostHomeWriteGrant } from "../lib/host-home-grant.js";
+import { setHostHomeWriteGrant, repromptHostHomeWrite } from "../lib/host-home-grant.js";
 import {
   listPolicyAlgorithms,
   listPolicyAgents,
@@ -71,7 +81,7 @@ export const startControlPlane = ({ port = 3847 } = {}) => {
       /^http:\/\/localhost:\d+$/.test(origin)
     ) {
       res.setHeader("Access-Control-Allow-Origin", origin);
-      res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+      res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS");
       res.setHeader("Access-Control-Allow-Headers", "Content-Type");
       res.setHeader("Vary", "Origin");
     }
@@ -91,6 +101,13 @@ export const startControlPlane = ({ port = 3847 } = {}) => {
       proxyPort: Number(process.env.BRIDGE_PROXY_PORT) || 7332,
       workspaceOs: getWorkspaceOs(),
       aiPolicy: policyStatus(),
+      brand: {
+        app: APP_NAME,
+        version: APP_VERSION,
+        channel: RELEASE_CHANNEL,
+        container: CONTAINER_NAME,
+        image: IMAGE_NAME,
+      },
     });
   });
 
@@ -110,6 +127,42 @@ export const startControlPlane = ({ port = 3847 } = {}) => {
       ...result,
       boot: getContainerBootStatus(),
     });
+  });
+
+  app.get("/api/resources", (_req, res) => {
+    res.json({ ok: true, ...resourcesStatus() });
+  });
+
+  /** Save prefs only (no container restart). */
+  app.post("/api/resources", (req, res) => {
+    try {
+      const resources = saveResources(req.body || {});
+      writeResourcesComposeOverride(resources);
+      res.json({ ok: true, ...resourcesStatus() });
+    } catch (err) {
+      res.status(400).json({ ok: false, error: err?.message || String(err) });
+    }
+  });
+
+  /**
+   * Save prefs and recreate the workspace so mem/cpus/shm/tmpfs/RESOLUTION
+   * take effect. Long-running — desktop should poll /api/container/boot.
+   */
+  app.post("/api/resources/apply", async (req, res) => {
+    try {
+      const result = await applyResourcesAndRecreate(req.body || {});
+      res.status(result.ok ? 200 : 500).json({
+        ...result,
+        boot: getContainerBootStatus(),
+        ...resourcesStatus(),
+      });
+    } catch (err) {
+      res.status(400).json({
+        ok: false,
+        error: err?.message || String(err),
+        boot: getContainerBootStatus(),
+      });
+    }
   });
 
   app.get("/api/desktop/stream-health", async (_req, res) => {
@@ -258,11 +311,21 @@ export const startControlPlane = ({ port = 3847 } = {}) => {
   /** Host-user grant: agent may write under host home (~). Never uses container sudo. */
   app.post("/api/agents/:id/host-home-write", (req, res) => {
     try {
-      const grant = req.body?.grant !== false && req.body?.grant !== 0;
       if (!getAgentById(req.params.id)) {
         return res.status(404).json({ ok: false, error: "unknown agent" });
       }
-      const result = setHostHomeWriteGrant(req.params.id, grant);
+      // Re-open the consent UI (clears a prior "Skip anyway").
+      if (req.body?.reprompt === true || req.body?.prompt === true) {
+        const queued = repromptHostHomeWrite(req.params.id);
+        return res.json({ ok: true, reprompt: true, ...queued });
+      }
+      const grant = req.body?.grant !== false && req.body?.grant !== 0;
+      const skipped =
+        !grant &&
+        (req.body?.skipped === true ||
+          req.body?.skip === true ||
+          req.body?.declined === true);
+      const result = setHostHomeWriteGrant(req.params.id, grant, { skipped });
       res.json(result);
     } catch (err) {
       res.status(500).json({ ok: false, error: err?.message || String(err) });
@@ -454,7 +517,7 @@ export const startControlPlane = ({ port = 3847 } = {}) => {
 
   app.get("/api/policies/agents", (_req, res) => {
     try {
-      // Merge OneBridge agents + desktop + any bindings already in the store
+      // Merge Saaridge agents + desktop + any bindings already in the store
       const known = new Map();
       for (const a of listInstalledAgents()) {
         known.set(a.id, { agentId: a.id, name: a.name || a.id, kind: "assistant" });
@@ -571,6 +634,9 @@ export const startControlPlane = ({ port = 3847 } = {}) => {
 
   app.listen(port, "127.0.0.1", () => {
     console.log(`[control-plane] http://127.0.0.1:${port}`);
+  }).on("error", (err) => {
+    console.error(`[control-plane] listen failed on :${port}:`, err?.message || err);
+    process.exit(1);
   });
 
   return app;

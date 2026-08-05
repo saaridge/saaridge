@@ -69,7 +69,7 @@ const sendFsError = (res, err) => {
           : code === "EBUSY" || code === "ETIMEDOUT"
             ? 429
             : 500;
-  res.setHeader("X-OneBridge-FS", FS_VERSION);
+  res.setHeader("X-Saaridge-FS", FS_VERSION);
   res.status(status).json({
     ok: false,
     error: err?.message || String(err),
@@ -80,7 +80,7 @@ const sendFsError = (res, err) => {
 
 const mountFsApi = (app) => {
   app.get("/v1/fs/health", (_req, res) => {
-    res.setHeader("X-OneBridge-FS", FS_VERSION);
+    res.setHeader("X-Saaridge-FS", FS_VERSION);
     res.json({ ...dataApi.health(), limits: limitsSnapshot(), audit: auditMetrics() });
   });
 
@@ -89,7 +89,7 @@ const mountFsApi = (app) => {
     try {
       const since = req.query.since != null ? Number(req.query.since) : 0;
       const result = dataApi.getFsEvents(since);
-      res.setHeader("X-OneBridge-FS", FS_VERSION);
+      res.setHeader("X-Saaridge-FS", FS_VERSION);
       res.json({ ok: true, ...result });
     } catch (err) {
       sendFsError(res, err);
@@ -99,7 +99,7 @@ const mountFsApi = (app) => {
   app.get("/v1/fs/stat", authAgent, async (req, res) => {
     try {
       const info = await dataApi.stat(req.agent, req.query.path);
-      res.setHeader("X-OneBridge-FS", FS_VERSION);
+      res.setHeader("X-Saaridge-FS", FS_VERSION);
       res.json({ ok: true, ...info });
     } catch (err) {
       sendFsError(res, err);
@@ -130,7 +130,7 @@ const mountFsApi = (app) => {
         withStats,
         includeExcluded,
       });
-      res.setHeader("X-OneBridge-FS", FS_VERSION);
+      res.setHeader("X-Saaridge-FS", FS_VERSION);
       res.json({ ok: true, ...result });
     } catch (err) {
       sendFsError(res, err);
@@ -153,7 +153,7 @@ const mountFsApi = (app) => {
         exclude,
         maxEntries,
       });
-      res.setHeader("X-OneBridge-FS", FS_VERSION);
+      res.setHeader("X-Saaridge-FS", FS_VERSION);
       res.json({ ok: true, ...result });
     } catch (err) {
       sendFsError(res, err);
@@ -172,10 +172,10 @@ const mountFsApi = (app) => {
         length,
         encoding: "buffer",
       });
-      res.setHeader("X-OneBridge-FS", FS_VERSION);
+      res.setHeader("X-Saaridge-FS", FS_VERSION);
       res.setHeader("Content-Type", "application/octet-stream");
-      res.setHeader("X-OneBridge-Bytes", String(result.bytes));
-      res.setHeader("X-OneBridge-Path", result.path);
+      res.setHeader("X-Saaridge-Bytes", String(result.bytes));
+      res.setHeader("X-Saaridge-Path", result.path);
       res.status(200).end(result.data);
     } catch (err) {
       sendFsError(res, err);
@@ -199,7 +199,7 @@ const mountFsApi = (app) => {
           truncate,
           encoding: "buffer",
         });
-        res.setHeader("X-OneBridge-FS", FS_VERSION);
+        res.setHeader("X-Saaridge-FS", FS_VERSION);
         res.json({ ok: true, ...result });
       } catch (err) {
         sendFsError(res, err);
@@ -214,7 +214,7 @@ const mountFsApi = (app) => {
         req.body?.path || req.query.path,
         req.body?.size ?? req.query.size ?? 0,
       );
-      res.setHeader("X-OneBridge-FS", FS_VERSION);
+      res.setHeader("X-Saaridge-FS", FS_VERSION);
       res.json({ ok: true, ...result });
     } catch (err) {
       sendFsError(res, err);
@@ -227,7 +227,7 @@ const mountFsApi = (app) => {
         req.agent,
         req.body?.path || req.query.path,
       );
-      res.setHeader("X-OneBridge-FS", FS_VERSION);
+      res.setHeader("X-Saaridge-FS", FS_VERSION);
       res.json({ ok: true, ...result });
     } catch (err) {
       sendFsError(res, err);
@@ -240,7 +240,7 @@ const mountFsApi = (app) => {
         req.agent,
         req.body?.path || req.query.path,
       );
-      res.setHeader("X-OneBridge-FS", FS_VERSION);
+      res.setHeader("X-Saaridge-FS", FS_VERSION);
       res.json({ ok: true, ...result });
     } catch (err) {
       sendFsError(res, err);
@@ -254,7 +254,7 @@ const mountFsApi = (app) => {
         req.body?.from || req.query.from,
         req.body?.to || req.query.to,
       );
-      res.setHeader("X-OneBridge-FS", FS_VERSION);
+      res.setHeader("X-Saaridge-FS", FS_VERSION);
       res.json({ ok: true, ...result });
     } catch (err) {
       sendFsError(res, err);
@@ -262,7 +262,7 @@ const mountFsApi = (app) => {
   });
 
   app.get("/v1/fs/roots", authAgent, (req, res) => {
-    res.setHeader("X-OneBridge-FS", FS_VERSION);
+    res.setHeader("X-Saaridge-FS", FS_VERSION);
     res.json({ ok: true, ...dataApi.getRoots(req.agent) });
   });
 
@@ -302,7 +302,7 @@ const mountFsApi = (app) => {
 export const startBridge = ({
   port = 7331,
   proxyPort = 7332,
-  fsPort = Number(process.env.BRIDGE_FS_PORT || process.env.ONEBRIDGE_FS_PORT || 7333) || 7333,
+  fsPort = Number(process.env.BRIDGE_FS_PORT || process.env.SAARIDGE_FS_PORT || 7333) || 7333,
 } = {}) => {
   const app = express();
   // JSON for most routes; /v1/fs/write uses express.raw mounted above.
@@ -334,7 +334,7 @@ export const startBridge = ({
       roots: dataApi.getRoots(req.agent),
       shell: orientation.shell,
       mcpFileTools: orientation.mcpFileTools,
-      oneBridge: orientation.oneBridge,
+      saaridge: orientation.saaridge,
     });
   });
 
@@ -467,6 +467,10 @@ export const startBridge = ({
     logBridge("bridge_listening", {
       message: `Host bridge on 127.0.0.1:${port} (per-agent bearer tokens)`,
     });
+  });
+  server.on("error", (err) => {
+    console.error(`[bridge] listen failed on :${port}:`, err?.message || err);
+    process.exit(1);
   });
 
   const proxy = startProxy({ port: proxyPort });

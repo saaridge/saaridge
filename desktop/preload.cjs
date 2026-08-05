@@ -1,24 +1,24 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
-contextBridge.exposeInMainWorld("onebridge", {
+contextBridge.exposeInMainWorld("saaridge", {
   platform: process.platform,
-  getUrls: () => ipcRenderer.invoke("onebridge:urls"),
-  waitReady: () => ipcRenderer.invoke("onebridge:ready"),
-  showDesktop: () => ipcRenderer.invoke("onebridge:show-desktop"),
-  hideDesktop: () => ipcRenderer.invoke("onebridge:hide-desktop"),
-  focusDesktop: () => ipcRenderer.invoke("onebridge:focus-desktop"),
-  /** @param {"policies"|"apikey"|"microphone"} [pane] */
+  getUrls: () => ipcRenderer.invoke("saaridge:urls"),
+  waitReady: () => ipcRenderer.invoke("saaridge:ready"),
+  showDesktop: () => ipcRenderer.invoke("saaridge:show-desktop"),
+  hideDesktop: () => ipcRenderer.invoke("saaridge:hide-desktop"),
+  focusDesktop: () => ipcRenderer.invoke("saaridge:focus-desktop"),
+  /** @param {"policies"|"microphone"|"resources"} [pane] */
   openSettings: (pane) =>
-    ipcRenderer.invoke("onebridge:open-settings", pane || "policies"),
-  // Back-compat aliases
-  openApiKey: () => ipcRenderer.invoke("onebridge:open-settings", "apikey"),
-  openPolicies: () => ipcRenderer.invoke("onebridge:open-settings", "policies"),
-  getMicPrefs: () => ipcRenderer.invoke("onebridge:mic-prefs-get"),
-  setMicPrefs: (prefs) => ipcRenderer.invoke("onebridge:mic-prefs-set", prefs),
+    ipcRenderer.invoke("saaridge:open-settings", pane || "policies"),
+  openPolicies: () => ipcRenderer.invoke("saaridge:open-settings", "policies"),
+  completeFirstRunResources: () =>
+    ipcRenderer.invoke("saaridge:complete-first-run-resources"),
+  getMicPrefs: () => ipcRenderer.invoke("saaridge:mic-prefs-get"),
+  setMicPrefs: (prefs) => ipcRenderer.invoke("saaridge:mic-prefs-set", prefs),
   /** Capture page → main status updates */
   micStatus: (payload) => {
     try {
-      ipcRenderer.send("onebridge:mic-status", payload);
+      ipcRenderer.send("saaridge:mic-status", payload);
     } catch (_) {}
   },
   onMicCommand: (cb) => {
@@ -27,8 +27,8 @@ contextBridge.exposeInMainWorld("onebridge", {
         cb(cmd);
       } catch (_) {}
     };
-    ipcRenderer.on("onebridge:mic-command", handler);
-    return () => ipcRenderer.removeListener("onebridge:mic-command", handler);
+    ipcRenderer.on("saaridge:mic-command", handler);
+    return () => ipcRenderer.removeListener("saaridge:mic-command", handler);
   },
   onMicStatus: (cb) => {
     const handler = (_event, payload) => {
@@ -36,14 +36,14 @@ contextBridge.exposeInMainWorld("onebridge", {
         cb(payload);
       } catch (_) {}
     };
-    ipcRenderer.on("onebridge:mic-status-broadcast", handler);
+    ipcRenderer.on("saaridge:mic-status-broadcast", handler);
     return () =>
-      ipcRenderer.removeListener("onebridge:mic-status-broadcast", handler);
+      ipcRenderer.removeListener("saaridge:mic-status-broadcast", handler);
   },
   /** Inject mouse into remote X (bypasses noVNC coordinate bugs). */
   injectMouse: (payload) => {
     try {
-      ipcRenderer.send("onebridge:mouse", payload);
+      ipcRenderer.send("saaridge:mouse", payload);
     } catch (_) {}
   },
   onBoot: (cb) => {
@@ -52,7 +52,7 @@ contextBridge.exposeInMainWorld("onebridge", {
         cb(payload);
       } catch (_) {}
     };
-    ipcRenderer.on("onebridge:boot", handler);
-    return () => ipcRenderer.removeListener("onebridge:boot", handler);
+    ipcRenderer.on("saaridge:boot", handler);
+    return () => ipcRenderer.removeListener("saaridge:boot", handler);
   },
 });

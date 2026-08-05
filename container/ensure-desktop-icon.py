@@ -70,7 +70,7 @@ def rewrite(src: str, dest: str, pkg: str) -> None:
                 # Cursor: open mediated host workspace by default (Open Folder sees this path)
                 project = (
                     os.environ.get("CURSOR_PROJECT_DIR")
-                    or os.environ.get("ONEBRIDGE_PROJECTS")
+                    or os.environ.get("SAARIDGE_PROJECTS")
                     or ""
                 ).strip()
                 if is_cursor and project and not any(
@@ -93,13 +93,13 @@ def rewrite(src: str, dest: str, pkg: str) -> None:
                     if os.path.isfile(p):
                         line = f"Icon={p}"
                         break
-        if line.startswith("X-OneBridge-Package="):
+        if line.startswith("X-Saaridge-Package="):
             saw_pkg = True
             if pkg:
-                line = f"X-OneBridge-Package={pkg}"
+                line = f"X-Saaridge-Package={pkg}"
         out.append(line)
     if pkg and not saw_pkg:
-        out.append(f"X-OneBridge-Package={pkg}")
+        out.append(f"X-Saaridge-Package={pkg}")
     open(dest, "w", encoding="utf-8").write("\n".join(out) + "\n")
 
 
@@ -123,7 +123,7 @@ def main() -> int:
             name = line.split("=", 1)[1].strip() or name
             break
     safe = "".join(c for c in name if c.isalnum() or c in " ._-" ).strip() or "App"
-    dest_app = os.path.join(apps_dir, f"onebridge-{safe.replace(' ', '_')}.desktop")
+    dest_app = os.path.join(apps_dir, f"saaridge-{safe.replace(' ', '_')}.desktop")
     dest_desktop = os.path.join(desktop_dir, f"{safe}.desktop")
     rewrite(src, dest_app, pkg)
     os.chmod(dest_app, 0o755)

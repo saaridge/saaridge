@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Keep /host FUSE mount alive. Prefers Rust onebridge-hostfs; falls back to Python.
+# Keep /host FUSE mount alive. Prefers Rust saaridge-hostfs; falls back to Python.
 # Intentionally avoids `set -e` so a transient failure cannot kill the loop.
 set -u
 
-LOCK_FILE="${HOSTFS_WATCHDOG_LOCK:-/tmp/onebridge-hostfs-watchdog.lock}"
+LOCK_FILE="${HOSTFS_WATCHDOG_LOCK:-/tmp/saaridge-hostfs-watchdog.lock}"
 exec 8>"$LOCK_FILE"
 if ! flock -n 8; then
   echo "[hostfs-watchdog] another instance already running — exit"
@@ -12,7 +12,7 @@ fi
 
 MOUNT="${HOSTFS_MOUNT:-/host}"
 CRED="${BRIDGE_CREDENTIALS_FILE:-/home/browser/.bridge-credentials}"
-FUSE_PID_FILE="${HOSTFS_PID_FILE:-/tmp/onebridge-hostfs-fuse.pid}"
+FUSE_PID_FILE="${HOSTFS_PID_FILE:-/tmp/saaridge-hostfs-fuse.pid}"
 export BRIDGE_CREDENTIALS_FILE="$CRED"
 export BRIDGE_URL="${BRIDGE_URL:-http://host.docker.internal:7331}"
 export HOSTFS_MOUNT="$MOUNT"
@@ -21,7 +21,7 @@ export HOSTFS_IPC_PORT="${HOSTFS_IPC_PORT:-7333}"
 # FS IPC listens on host loopback only; container uses HTTP Data API (:7331).
 export HOSTFS_IPC="${HOSTFS_IPC:-0}"
 
-RUST_BIN="${HOSTFS_RUST_BIN:-/opt/bridge/onebridge-hostfs}"
+RUST_BIN="${HOSTFS_RUST_BIN:-/opt/bridge/saaridge-hostfs}"
 PY_BIN="${HOSTFS_PY_BIN:-/opt/bridge/hostfs-fuse.py}"
 
 # Present files as the desktop user so Electron/GTK dialogs treat them as owned
@@ -53,7 +53,7 @@ is_mounted() {
 
 fuse_pids() {
   {
-    pgrep -f '/opt/bridge/onebridge-hostfs( |$)' 2>/dev/null || true
+    pgrep -f '/opt/bridge/saaridge-hostfs( |$)' 2>/dev/null || true
     pgrep -f 'python3.*hostfs-fuse\.py' 2>/dev/null || true
   } | sort -u
 }
@@ -212,7 +212,7 @@ MOUNT_PENDING=0
 BROWSE_TICK=0
 BROWSE_INTERVAL="${HOSTFS_BROWSE_CHECK_EVERY:-15}" # ~30s at sleep 2
 BROWSE_BUDGET="${HOSTFS_BROWSE_BUDGET:-3}"
-INVALIDATE_FILE="${HOSTFS_INVALIDATE_FILE:-/tmp/onebridge-fs-invalidate}"
+INVALIDATE_FILE="${HOSTFS_INVALIDATE_FILE:-/tmp/saaridge-fs-invalidate}"
 : >"$INVALIDATE_FILE" 2>/dev/null || true
 
 # Mounted-but-wedged detection: listdir+access must finish within budget.
@@ -257,7 +257,7 @@ poll_fs_events() {
     BODY="$body" INV="$INVALIDATE_FILE" python3 - <<'PY'
 import json, os
 body = os.environ.get("BODY") or ""
-inv = os.environ.get("INV") or "/tmp/onebridge-fs-invalidate"
+inv = os.environ.get("INV") or "/tmp/saaridge-fs-invalidate"
 try:
     d = json.loads(body)
 except Exception:

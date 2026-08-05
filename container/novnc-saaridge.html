@@ -18,7 +18,7 @@
       position: absolute;
       /* Electron titlebar BrowserView overlays the top; keep the VNC pane
          below it so remote FB size matches the visible clickable area. */
-      top: var(--onebridge-titlebar, 44px);
+      top: var(--saaridge-titlebar, 44px);
       left: 0;
       right: 0;
       bottom: 0;
@@ -46,16 +46,16 @@
     (() => {
       const q = Number(new URLSearchParams(location.search).get("titlebar"));
       const px = Number.isFinite(q) && q >= 0 ? q : 44;
-      document.documentElement.style.setProperty("--onebridge-titlebar", `${px}px`);
+      document.documentElement.style.setProperty("--saaridge-titlebar", `${px}px`);
     })();
 
     /**
      * Electron main process forwards keys here (before-input-event → RFB.sendKey).
      * Direct sendKey — more reliable than DOM KeyboardEvent (often untrusted/empty).
      */
-    window.__onebridgeKey = (payload) => {
+    window.__saaridgeKey = (payload) => {
       try {
-        const r = window.__onebridgeRfb;
+        const r = window.__saaridgeRfb;
         if (!r || r._rfbConnectionState !== "connected" || r._viewOnly) {
           return false;
         }
@@ -361,7 +361,7 @@
       const url = `${protocol}://${window.location.host}/${path}`;
 
       rfb = new RFB(screen, url);
-      window.__onebridgeRfb = rfb;
+      window.__saaridgeRfb = rfb;
 
       // Native noVNC mouse — required (x11vnc owns the X pointer).
       rfb.scaleViewport = false;

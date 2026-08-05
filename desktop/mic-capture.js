@@ -12,7 +12,7 @@
 
   const post = (payload) => {
     try {
-      window.onebridge?.micStatus?.(payload);
+      window.saaridge?.micStatus?.(payload);
     } catch (_) {}
   };
 
@@ -148,7 +148,7 @@
     post({ state: "sharing", message: "Sharing microphone with workspace" });
   };
 
-  window.onebridge?.onMicCommand?.((cmd) => {
+  window.saaridge?.onMicCommand?.((cmd) => {
     if (cmd === "start") void startCapture();
     else if (cmd === "stop") {
       stopCapture();

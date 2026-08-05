@@ -23,7 +23,7 @@ export const installAgentDesktopIcon = async (agent) => {
   if (!(await containerRunning())) return { ok: false };
 
   const title = safeDesktopName(agent.name || "Assistant");
-  const htmlDir = `/home/browser/.local/share/onebridge/agents`;
+  const htmlDir = `/home/browser/.local/share/saaridge/agents`;
   const htmlFile = `${htmlDir}/${agent.id}.html`;
 
   const html = `<!DOCTYPE html>
@@ -45,7 +45,7 @@ export const installAgentDesktopIcon = async (agent) => {
   <main>
     <div class="pill">Assistant</div>
     <h1>${escapeHtml(title)}</h1>
-    <p>This assistant is installed in your secure OneBridge workspace. It can only reach your computer through the bridge.</p>
+    <p>This assistant is installed in your secure Saaridge workspace. It can only reach your computer through the bridge.</p>
     <p>ID: <code>${escapeHtml(agent.id)}</code></p>
     <p>Status: <strong>${escapeHtml(agent.status || "running")}</strong></p>
   </main>
@@ -54,17 +54,17 @@ export const installAgentDesktopIcon = async (agent) => {
 
   const script = `
 mkdir -p ${JSON.stringify(htmlDir)}
-# Keep Desktop clean — leave Install Assistant + OneBridge-installed apps
+# Keep Desktop clean — leave Install Assistant + Saaridge-installed apps
 find /home/browser/Desktop -mindepth 1 -maxdepth 1 | while IFS= read -r entry; do
   base="$(basename "$entry")"
   [[ "$base" == 'Install Assistant.desktop' ]] && continue
-  if [[ -f "$entry" && "$entry" == *.desktop ]] && grep -q '^X-OneBridge-Package=' "$entry" 2>/dev/null; then continue; fi
+  if [[ -f "$entry" && "$entry" == *.desktop ]] && grep -q '^X-Saaridge-Package=' "$entry" 2>/dev/null; then continue; fi
   rm -rf "$entry"
 done 2>/dev/null || true
 cat > ${JSON.stringify(htmlFile)} <<'HTML_EOF'
 ${html}
 HTML_EOF
-chown -R browser:browser /home/browser/.local/share/onebridge
+chown -R browser:browser /home/browser/.local/share/saaridge
 `;
 
   const res = await dockerExec(["bash", "-lc", script]);
@@ -90,7 +90,7 @@ export const removeAgentDesktopIcon = async (agent) => {
   await dockerExec([
     "bash",
     "-lc",
-    `rm -f ${JSON.stringify(`/home/browser/Desktop/${title}.desktop`)} ${JSON.stringify(`/home/browser/.local/share/onebridge/agents/${agent.id}.html`)}; chown -R browser:browser /home/browser/Desktop 2>/dev/null || true`,
+    `rm -f ${JSON.stringify(`/home/browser/Desktop/${title}.desktop`)} ${JSON.stringify(`/home/browser/.local/share/saaridge/agents/${agent.id}.html`)}; chown -R browser:browser /home/browser/Desktop 2>/dev/null || true`,
   ]);
   return { ok: true };
 };

@@ -11,7 +11,7 @@ TMP=/opt/bridge/proxy-gzip-test.bin
 curl -fsS --max-time 15 \
   --proxy "http://127.0.0.1:${PROXY_PORT}" \
   --proxy-user "u:${TOKEN}" \
-  --cacert /opt/bridge/certs/onebridge-mitm-ca.crt \
+  --cacert /opt/bridge/certs/saaridge-mitm-ca.crt \
   "https://localhost:${HOST_PORT}/" \
   --resolve "localhost:${HOST_PORT}:127.0.0.1" > "${TMP}"
 

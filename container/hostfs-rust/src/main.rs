@@ -1,4 +1,4 @@
-//! OneBridge mediated /host FUSE (Rust) — IPC to bridge :7333.
+//! Saaridge mediated /host FUSE (Rust) — IPC to bridge :7333.
 mod ipc;
 
 use std::collections::{HashMap, VecDeque};
@@ -247,7 +247,7 @@ struct HostFs {
     notifier: Arc<Mutex<Option<Notifier>>>,
     invalidate_file: String,
     host_home: Mutex<String>,
-    onebridge_root: Mutex<String>,
+    saaridge_root: Mutex<String>,
 }
 
 impl HostFs {
@@ -259,7 +259,7 @@ impl HostFs {
         notifier: Arc<Mutex<Option<Notifier>>>,
     ) -> Self {
         let invalidate_file = std::env::var("HOSTFS_INVALIDATE_FILE")
-            .unwrap_or_else(|_| "/tmp/onebridge-fs-invalidate".into());
+            .unwrap_or_else(|_| "/tmp/saaridge-fs-invalidate".into());
         let fs = Self {
             ipc,
             agent_id,
@@ -274,7 +274,7 @@ impl HostFs {
             notifier,
             invalidate_file,
             host_home: Mutex::new(String::new()),
-            onebridge_root: Mutex::new(String::new()),
+            saaridge_root: Mutex::new(String::new()),
         };
         for p in ["/", "/workspaces", "/shared", "/home"] {
             fs.remember_ino(p);
@@ -307,9 +307,9 @@ impl HostFs {
                 format!("~/{rest}")
             }
         } else if rel.is_empty() || rel == "." {
-            "~/OneBridge".into()
+            "~/Saaridge".into()
         } else {
-            format!("~/OneBridge/{rel}")
+            format!("~/Saaridge/{rel}")
         }
     }
 
@@ -354,7 +354,7 @@ impl HostFs {
         }
         let p = host_abs.trim_end_matches('/');
         let home = self.host_home.lock().clone();
-        let ob = self.onebridge_root.lock().clone();
+        let ob = self.saaridge_root.lock().clone();
         let home = home.trim_end_matches('/');
         let ob = ob.trim_end_matches('/');
         if !ob.is_empty() && (p == ob || p.starts_with(&(ob.to_string() + "/"))) {
@@ -546,7 +546,7 @@ impl HostFs {
             if let Some(arr) = resp.get("entries").and_then(|v| v.as_array()) {
                 for e in arr {
                     let name = e.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                    if name.is_empty() || is_excluded(name) || name.starts_with(".onebridge-") {
+                    if name.is_empty() || is_excluded(name) || name.starts_with(".saaridge-") {
                         continue;
                     }
                     let m = EntryMeta {
@@ -1042,7 +1042,7 @@ fn main() {
         .unwrap_or_else(|| "/host".into());
     let (bridge, token, agent_id) = load_credentials();
     if token.is_empty() {
-        eprintln!("onebridge-hostfs: missing BRIDGE_TOKEN");
+        eprintln!("saaridge-hostfs: missing BRIDGE_TOKEN");
         std::process::exit(2);
     }
     let ipc_host = std::env::var("HOSTFS_IPC_HOST").unwrap_or_else(|_| {
@@ -1084,7 +1084,7 @@ fn main() {
     let fs = HostFs::new(ipc, agent_id.clone(), uid, gid, notifier_slot.clone());
     info!("Mounting {mount} agent={agent_id} ipc={ipc_host}:{ipc_port}");
     let options = [
-        MountOption::FSName("onebridge-hostfs".into()),
+        MountOption::FSName("saaridge-hostfs".into()),
         MountOption::AllowOther,
         MountOption::AutoUnmount,
     ];

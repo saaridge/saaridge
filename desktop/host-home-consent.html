@@ -40,6 +40,7 @@
         gap: 0.5rem;
         justify-content: flex-end;
         margin-top: 0.35rem;
+        flex-wrap: wrap;
       }
       button {
         appearance: none;
@@ -70,25 +71,38 @@
         color: #e6d3a0;
         font-size: 0.78rem;
       }
+      #stepDenied { display: none; }
     </style>
   </head>
   <body>
-    <div class="dlg">
+    <div class="dlg" id="stepAsk">
       <h3>Allow write to host home?</h3>
       <p>
         Assistant <strong id="agentName">—</strong> tried to save a file under your
-        Mac home folder. Host home is read-only until you approve.
+        Mac home folder. Without this permission, it cannot write there.
       </p>
       <p>Path: <code id="deniedPath">—</code></p>
       <div class="warn">
-        This is a OneBridge host-user grant — not container sudo. Do not approve
-        Cursor’s “Retry as Sudo”. You can revoke anytime in the control plane.
+        Projects under ~/Saaridge still work. This is a Saaridge host-user grant —
+        not container sudo.
       </div>
       <div class="row">
         <button type="button" id="denyBtn" class="danger">Deny</button>
         <button type="button" id="allowBtn" class="primary">Allow home write</button>
       </div>
       <div class="status" id="status"></div>
+    </div>
+    <div class="dlg" id="stepDenied">
+      <h3>Home write denied</h3>
+      <p>
+        The agent will <strong>not</strong> be able to write under your Mac home
+        folder. It can still read/browse home and use ~/Saaridge projects.
+      </p>
+      <div class="row">
+        <button type="button" id="skipBtn">Skip anyway</button>
+        <button type="button" id="retryBtn" class="primary">Allow home write</button>
+      </div>
+      <div class="status" id="status2"></div>
     </div>
     <script src="./host-home-consent.js"></script>
   </body>

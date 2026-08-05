@@ -26,14 +26,14 @@ A fix is incomplete unless it includes **all** that apply:
 ## Docker / container command hygiene
 
 - Prefer `docker exec … bash -c` for health, repair, and tests. **Avoid `bash -lc`** unless you intentionally need a login profile.
-- Login shells source `/etc/profile.d/onebridge.sh` → `agent-env.sh`, which may STAT `/host` (FUSE). A wedged FUSE turns stream-health into a **black desktop boot screen**.
+- Login shells source `/etc/profile.d/saaridge.sh` → `agent-env.sh`, which may STAT `/host` (FUSE). A wedged FUSE turns stream-health into a **black desktop boot screen**.
 - Every `dockerExec` used on a health path must have a **finite `timeoutMs`** and must not block forever on FUSE or RFB `recv`.
 
 ## After the fix
 
 1. Add or extend the regression test for this bug.
 2. **Run the full suite before you call the work done:** `npm test` from the repo root. Do not mark the task complete, hand off, or stop after only the new focused `test:*` script — the whole `package.json` `test` chain must pass.
-3. If a suite needs Docker/`agent-bridge-box` and the box is down, start it (or say clearly what could not run). Do not skip failing tests.
+3. If a suite needs Docker/`saaridge-box` and the box is down, start it (or say clearly what could not run). Do not skip failing tests.
 4. If the change touches desktop stream, also confirm `/api/desktop/stream-health` returns quickly (`200`/`503`, not hang).
 5. Update this file or the matching rule only when the process itself changes — put product constraints in `CONSTRAINTS.md`.
 

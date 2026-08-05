@@ -6,8 +6,6 @@
   const bootPhase = document.getElementById("bootPhase");
   const bootCheck = document.getElementById("bootCheck");
   const bootCheckPhase = document.getElementById("bootCheckPhase");
-  const uiActions = document.getElementById("uiActions");
-  const btnApiKey = document.getElementById("btnApiKey");
   const osBadge = document.getElementById("osBadge");
   const osLabel = document.getElementById("osLabel");
 
@@ -18,6 +16,7 @@
     boot: "Starting",
     docker: "Docker",
     host: "Control plane",
+    resources: "Resources",
     checking: "Workspace",
     building: "Building image",
     image_ready: "Image ready",
@@ -72,8 +71,8 @@
     if (bootCheck) bootCheck.hidden = true;
   };
 
-  if (window.onebridge?.onBoot) {
-    window.onebridge.onBoot((payload) => {
+  if (window.saaridge?.onBoot) {
+    window.saaridge.onBoot((payload) => {
       if (!payload || boot.classList.contains("err")) return;
       setProgress(payload.progress, payload.message, payload.phase);
       if (payload.error && payload.phase === "error") {
@@ -82,29 +81,27 @@
     });
   }
 
-  // Hide titlebar controls during boot — real chrome is a BrowserView later.
-  if (uiActions) uiActions.style.display = "none";
-  if (btnApiKey) btnApiKey.style.display = "none";
+  // Boot chrome only — workspace chrome is injected after the stream is live.
 
   (async () => {
     try {
-      if (!window.onebridge?.waitReady || !window.onebridge?.showDesktop) {
+      if (!window.saaridge?.waitReady || !window.saaridge?.showDesktop) {
         throw new Error("Desktop bridge unavailable");
       }
-      if (window.onebridge.platform && window.onebridge.platform !== "darwin") {
+      if (window.saaridge.platform && window.saaridge.platform !== "darwin") {
         document.querySelector(".titlebar")?.style.setProperty("padding-left", "12px");
       }
       setProgress(2, "Starting…", "boot");
       try {
-        const urls = await window.onebridge.getUrls?.();
+        const urls = await window.saaridge.getUrls?.();
         const control = urls?.control || "http://127.0.0.1:3847";
         const r = await fetch(`${control}/api/workspace/os`);
         const j = await r.json();
         if (j?.os) showWorkspaceOs(j.os);
       } catch (_) {}
-      await window.onebridge.waitReady();
+      await window.saaridge.waitReady();
       setProgress(100, "Workspace ready", "ready");
-      await window.onebridge.showDesktop();
+      await window.saaridge.showDesktop();
     } catch (err) {
       fail(err);
     }

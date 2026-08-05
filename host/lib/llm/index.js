@@ -1,5 +1,5 @@
 /**
- * OneBridge LLM library — select a provider + model + API key for bridge use.
+ * Saaridge LLM library — select a provider + model + API key for bridge use.
  *
  * Keys are never written to disk (env or in-memory runtime only).
  *

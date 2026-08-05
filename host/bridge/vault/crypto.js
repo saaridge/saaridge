@@ -26,11 +26,11 @@ const ensurePrivateDir = () => {
 };
 
 const loadOrCreateKey = () => {
-  if (process.env.ONEBRIDGE_VAULT_KEY) {
-    const key = Buffer.from(process.env.ONEBRIDGE_VAULT_KEY, "base64");
+  if (process.env.SAARIDGE_VAULT_KEY) {
+    const key = Buffer.from(process.env.SAARIDGE_VAULT_KEY, "base64");
     if (key.length !== 32) {
       throw new Error(
-        "ONEBRIDGE_VAULT_KEY must be base64 of exactly 32 bytes",
+        "SAARIDGE_VAULT_KEY must be base64 of exactly 32 bytes",
       );
     }
     return key;

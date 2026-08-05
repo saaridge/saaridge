@@ -18,19 +18,19 @@ if [[ -n "${SESSION_PID:-}" && -r "/proc/${SESSION_PID}/environ" ]]; then
 fi
 
 LOG=/tmp/open-install-assistant.log
-DONE_FLAG=/tmp/onebridge-install-done
+DONE_FLAG=/tmp/saaridge-install-done
 mkdir -p "$HOME/Downloads"
 
 # Host install APIs go through the bridge (:7331), not control plane (:3847).
 # Control plane is host-only; network-lock blocks container → :3847.
-BRIDGE_URL="${BRIDGE_URL:-${ONEBRIDGE_BRIDGE_URL:-http://host.docker.internal:7331}}"
+BRIDGE_URL="${BRIDGE_URL:-${SAARIDGE_BRIDGE_URL:-http://host.docker.internal:7331}}"
 BRIDGE_URL="${BRIDGE_URL%/}"
 CRED_FILE="${BRIDGE_CREDENTIALS_FILE:-$HOME/.bridge-credentials}"
 if [[ -z "${BRIDGE_TOKEN:-}" && -f "$CRED_FILE" ]]; then
   BRIDGE_TOKEN="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("token",""))' "$CRED_FILE" 2>/dev/null || true)"
 fi
-PICKER_PY="${ONEBRIDGE_FILE_PICKER:-/opt/bridge/gtk-file-picker.py}"
-LIST_APPS_PY="${ONEBRIDGE_LIST_APPS:-/opt/bridge/list-workspace-apps.py}"
+PICKER_PY="${SAARIDGE_FILE_PICKER:-/opt/bridge/gtk-file-picker.py}"
+LIST_APPS_PY="${SAARIDGE_LIST_APPS:-/opt/bridge/list-workspace-apps.py}"
 PROGRESS_PID=""
 
 bridge_curl() {
@@ -88,15 +88,15 @@ start_progress() {
 
 choose_action() {
   local out ec
-  rm -f /tmp/onebridge-menu-action 2>/dev/null || true
+  rm -f /tmp/saaridge-menu-action 2>/dev/null || true
   set +e
   out="$(python3 "$PICKER_PY" --menu 2>>"$LOG")"
   ec=$?
   set -e
-  if [[ -z "$out" && -f /tmp/onebridge-menu-action ]]; then
-    out="$(cat /tmp/onebridge-menu-action 2>/dev/null || true)"
+  if [[ -z "$out" && -f /tmp/saaridge-menu-action ]]; then
+    out="$(cat /tmp/saaridge-menu-action 2>/dev/null || true)"
   fi
-  rm -f /tmp/onebridge-menu-action 2>/dev/null || true
+  rm -f /tmp/saaridge-menu-action 2>/dev/null || true
   echo "[install] menu out='$out' ec=$ec" >>"$LOG"
   case "$out" in
     install|uninstall)
@@ -113,9 +113,9 @@ do_install() {
   out="$(python3 "$PICKER_PY" --pick "Install" "$HOME/Downloads/" 2>>"$LOG")"
   ec=$?
   set -e
-  if [[ -z "$out" && -f /tmp/onebridge-picked-path ]]; then
-    out="$(cat /tmp/onebridge-picked-path 2>/dev/null || true)"
-    rm -f /tmp/onebridge-picked-path 2>/dev/null || true
+  if [[ -z "$out" && -f /tmp/saaridge-picked-path ]]; then
+    out="$(cat /tmp/saaridge-picked-path 2>/dev/null || true)"
+    rm -f /tmp/saaridge-picked-path 2>/dev/null || true
   fi
   if [[ -z "$out" ]]; then
     echo "[install] cancelled" >>"$LOG"
@@ -132,7 +132,7 @@ do_install() {
   echo "[install] selected $FILE" >>"$LOG"
   start_progress "Installing ${BASE}…"
 
-  LOCAL_CLIENT="${ONEBRIDGE_OPS_CLIENT:-/opt/bridge/workspace-ops-client.py}"
+  LOCAL_CLIENT="${SAARIDGE_OPS_CLIENT:-/opt/bridge/workspace-ops-client.py}"
   set +e
   # Prefer OS-local install (.deb / .AppImage) — no host bridge required.
   RESP="$(python3 "$LOCAL_CLIENT" install "$FILE" 2>>"$LOG")"
@@ -150,7 +150,7 @@ do_install() {
     if [[ $host_ec -eq 0 && -n "${HOST_RESP:-}" ]]; then
       RESP="$HOST_RESP"
     elif [[ $NEED_HOST -eq 1 && -z "${HOST_RESP:-}" ]]; then
-      RESP='{"ok":false,"error":"This package needs the OneBridge host (assistant zip)."}'
+      RESP='{"ok":false,"error":"This package needs the Saaridge host (assistant zip)."}'
     fi
   fi
   set -e
@@ -211,16 +211,16 @@ except Exception:
     exit 0
   fi
 
-  echo "$APPS_JSON" >/tmp/onebridge-uninstall-apps.json
-  rm -f /tmp/onebridge-uninstall-pkg 2>/dev/null || true
+  echo "$APPS_JSON" >/tmp/saaridge-uninstall-apps.json
+  rm -f /tmp/saaridge-uninstall-pkg 2>/dev/null || true
   set +e
-  PKG="$(python3 "$PICKER_PY" --choose-app "@/tmp/onebridge-uninstall-apps.json" 2>>"$LOG")"
+  PKG="$(python3 "$PICKER_PY" --choose-app "@/tmp/saaridge-uninstall-apps.json" 2>>"$LOG")"
   pick_ec=$?
   set -e
-  if [[ -z "$PKG" && -f /tmp/onebridge-uninstall-pkg ]]; then
-    PKG="$(cat /tmp/onebridge-uninstall-pkg 2>/dev/null || true)"
+  if [[ -z "$PKG" && -f /tmp/saaridge-uninstall-pkg ]]; then
+    PKG="$(cat /tmp/saaridge-uninstall-pkg 2>/dev/null || true)"
   fi
-  rm -f /tmp/onebridge-uninstall-apps.json /tmp/onebridge-uninstall-pkg
+  rm -f /tmp/saaridge-uninstall-apps.json /tmp/saaridge-uninstall-pkg
   if [[ $pick_ec -ne 0 || -z "$PKG" ]]; then
     echo "[uninstall] cancelled" >>"$LOG"
     exit 0
@@ -237,8 +237,8 @@ except Exception:
   # Do NOT use sudo here — agents must not elevate; host ops go via bridge / ops daemon.
   if [[ $curl_ec -ne 0 || -z "${RESP:-}" ]]; then
     echo "[uninstall] host bridge unreachable (curl_ec=$curl_ec); trying local ops client" >>"$LOG"
-    LOCAL_CLIENT="${ONEBRIDGE_OPS_CLIENT:-/opt/bridge/workspace-ops-client.py}"
-    LOCAL_UNINSTALL="${ONEBRIDGE_UNINSTALL:-/opt/bridge/uninstall-workspace-app.sh}"
+    LOCAL_CLIENT="${SAARIDGE_OPS_CLIENT:-/opt/bridge/workspace-ops-client.py}"
+    LOCAL_UNINSTALL="${SAARIDGE_UNINSTALL:-/opt/bridge/uninstall-workspace-app.sh}"
     if [[ -x "$LOCAL_CLIENT" || -f "$LOCAL_CLIENT" ]]; then
       RESP="$(python3 "$LOCAL_CLIENT" uninstall "$PKG" 2>>"$LOG")"
       curl_ec=$?
@@ -247,7 +247,7 @@ except Exception:
       curl_ec=$?
     else
       echo "[uninstall] no non-sudo uninstall path available" >>"$LOG"
-      RESP='{"ok":false,"error":"Host bridge unreachable; sudo uninstall is disabled. Retry from OneBridge host."}'
+      RESP='{"ok":false,"error":"Host bridge unreachable; sudo uninstall is disabled. Retry from Saaridge host."}'
       curl_ec=1
     fi
   fi
@@ -256,7 +256,7 @@ except Exception:
   cleanup_progress
 
   if [[ -z "${RESP:-}" ]]; then
-    notify error "Could not reach the uninstall service. Is OneBridge running?"
+    notify error "Could not reach the uninstall service. Is Saaridge running?"
     exit 1
   fi
 

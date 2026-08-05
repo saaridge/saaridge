@@ -49,7 +49,7 @@ export const BUILTIN_TOOLS = [
   {
     name: "host_exec",
     description:
-      "Run a shell command on the HOST as the normal user (no sudo/admin). Bridge owns the process; stdout/stderr are mediated before you see them. cwd must be under allowed OneBridge/host roots (default: workspace). Prefer this for all host commands.",
+      "Run a shell command on the HOST as the normal user (no sudo/admin). Bridge owns the process; stdout/stderr are mediated before you see them. cwd must be under allowed Saaridge/host roots (default: workspace). Prefer this for all host commands.",
     inputSchema: {
       type: "object",
       properties: {
@@ -85,7 +85,7 @@ export const BUILTIN_TOOLS = [
   {
     name: "read_file",
     description:
-      "Read a file via the OneBridge data plane (virtualized host view). Paths under /host map to ~/OneBridge or host home.",
+      "Read a file via the Saaridge data plane (virtualized host view). Paths under /host map to ~/Saaridge or host home.",
     inputSchema: {
       type: "object",
       properties: {
@@ -98,7 +98,7 @@ export const BUILTIN_TOOLS = [
   },
   {
     name: "write_file",
-    description: "Write a file via the OneBridge data plane (policy + write processors).",
+    description: "Write a file via the Saaridge data plane (policy + write processors).",
     inputSchema: {
       type: "object",
       properties: {
@@ -112,7 +112,7 @@ export const BUILTIN_TOOLS = [
   },
   {
     name: "list_dir",
-    description: "List a directory via the OneBridge data plane.",
+    description: "List a directory via the Saaridge data plane.",
     inputSchema: {
       type: "object",
       properties: {
@@ -124,7 +124,7 @@ export const BUILTIN_TOOLS = [
   },
   {
     name: "stat_file",
-    description: "Stat a file or directory via the OneBridge data plane.",
+    description: "Stat a file or directory via the Saaridge data plane.",
     inputSchema: {
       type: "object",
       properties: {
@@ -136,7 +136,7 @@ export const BUILTIN_TOOLS = [
   },
   {
     name: "delete_path",
-    description: "Delete a file or empty directory via the OneBridge data plane.",
+    description: "Delete a file or empty directory via the Saaridge data plane.",
     inputSchema: {
       type: "object",
       properties: {

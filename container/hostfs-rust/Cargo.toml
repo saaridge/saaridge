@@ -1,8 +1,8 @@
 [package]
-name = "onebridge-hostfs"
+name = "saaridge-hostfs"
 version = "0.1.0"
 edition = "2021"
-description = "OneBridge mediated /host FUSE client (framed FS IPC)"
+description = "Saaridge mediated /host FUSE client (framed FS IPC)"
 publish = false
 
 [dependencies]
@@ -16,5 +16,5 @@ env_logger = "0.11"
 parking_lot = "0.12"
 
 [[bin]]
-name = "onebridge-hostfs"
+name = "saaridge-hostfs"
 path = "src/main.rs"

@@ -88,7 +88,7 @@ try {
   });
   assert.equal(result.code, 0);
   assert.match(result.stdout, /Darwin|Linux|Windows_NT/);
-  assert.ok(result.cwd.includes("OneBridge") || result.cwd.startsWith(os.homedir()));
+  assert.ok(result.cwd.includes("Saaridge") || result.cwd.startsWith(os.homedir()));
   assert.equal(result.stdoutDenied, false);
   if (process.platform === "darwin") {
     assert.equal(result.sandboxed, true);

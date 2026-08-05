@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Host mic uplink → Pulse null-sink (virtual mic = sink.monitor).
- * PCM is written only to onebridge-mic-sink — never the speaker sink (onebridge).
+ * PCM is written only to saaridge-mic-sink — never the speaker sink (saaridge).
  */
 import http from "node:http";
 import { spawn, spawnSync } from "node:child_process";
@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 const PORT = Number(process.env.MIC_WS_PORT || 6083);
 const RATE = 48000;
 const CHANNELS = 1;
-const SINK = process.env.MIC_PULSE_SINK || "onebridge-mic-sink";
+const SINK = process.env.MIC_PULSE_SINK || "saaridge-mic-sink";
 const BYTES_PER_MS = (RATE * CHANNELS * 2) / 1000;
 const SILENCE_MS = 20;
 const SILENCE_CHUNK = Buffer.alloc(Math.floor(BYTES_PER_MS * SILENCE_MS));
@@ -175,7 +175,7 @@ const server = http.createServer((req, res) => {
     return;
   }
   res.writeHead(200, { "Content-Type": "text/plain" });
-  res.end("OneBridge mic ingress — connect via ws://host:6083/\n");
+  res.end("Saaridge mic ingress — connect via ws://host:6083/\n");
 });
 
 server.on("upgrade", (req, socket) => {

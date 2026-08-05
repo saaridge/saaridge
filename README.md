@@ -1,6 +1,18 @@
-# Agent Bridge Prototype
+# Saaridge
+
+**Alpha `0.0.1`** — mediated agent workspace (Apache 2.0).
 
 Host control plane + locked super-container + **host-side bridge** (MCP tools + Data API + HTTP MITM proxy).
+
+| | |
+|---|---|
+| App | Saaridge |
+| Bundle ID | `com.saariv.saaridge` |
+| Workspace image | `saaridge/saaridge-workspace:0.0.1` |
+| Host data root | `~/Saaridge/` |
+| Default resources | 4g RAM / 2 CPUs / 1g shm / 512m tmp / 1920×1080 (Settings → Resources) |
+
+See [`SHIPPING.md`](./SHIPPING.md) for the productionization checklist.
 
 ## Guarantees in this build
 
@@ -9,7 +21,7 @@ Host control plane + locked super-container + **host-side bridge** (MCP tools + 
 | Agent cannot use another agent’s identity | Per-agent secret token; bridge ignores body `agentId` |
 | Agent cannot steal sibling token | Dedicated Linux UID; credentials file `0600` in agent dir `0700` |
 | Container net blocked except bridge | iptables allow only host `:7331` (MCP/Data API) and `:7332` (proxy) |
-| Host project files only via bridge | No bind-mount of project dirs; `/host` is FUSE → Data API → `~/OneBridge/` |
+| Host project files only via bridge | No bind-mount of project dirs; `/host` is FUSE → Data API → `~/Saaridge/` |
 | Browse normally inside container via bridge | Chromium → per-agent local auth-proxy → host MITM proxy |
 | Visibility / transform | Async audit JSONL; optional read redact / write block globs; net body hooks |
 
@@ -21,13 +33,13 @@ Container
   ├─ MCP stdio proxy ──Bearer──► host :7331 tools (same data core)
   └─ Chromium → 127.0.0.1:18xxx auth-proxy ──► host :7332 ──► internet
 Host
-  ~/OneBridge/workspaces/<agentId>/   (read-write)
-  ~/OneBridge/shared/                 (read-only by default)
+  ~/Saaridge/workspaces/<agentId>/   (read-write)
+  ~/Saaridge/shared/                 (read-only by default)
 ```
 
 ## Cursor / project location
 
-Open projects under **`/host/workspaces/<agentId>/`** inside the workspace desktop (also linked as `~/Projects` and Desktop “Host Projects”). That tree is the host’s `~/OneBridge/workspaces/<agentId>/`, mediated by the bridge (policy, audit, transforms). Do not store durable project data only under container-local paths.
+Open projects under **`/host/workspaces/<agentId>/`** inside the workspace desktop (also linked as `~/Projects` and Desktop “Host Projects”). That tree is the host’s `~/Saaridge/workspaces/<agentId>/`, mediated by the bridge (policy, audit, transforms). Do not store durable project data only under container-local paths.
 
 ## Docker / FUSE requirements
 
@@ -41,7 +53,7 @@ Open projects under **`/host/workspaces/<agentId>/`** inside the workspace deskt
 ```bash
 npm install
 npm run app:install   # once
-npm run app           # starts host if needed, opens OneBridge window
+npm run app           # starts host if needed, opens Saaridge window
 ```
 
 Title bar **Settings** → side panel: **Policies** (global + per-agent overrides) or **API key**.
@@ -61,7 +73,7 @@ curl -s -X POST http://127.0.0.1:3847/api/agents/install \
 AI policy config is host-private (`state/private/ai-policies.json`). Effective policy = global ∪ agent enables, with per-agent overrides winning when set.
 ## Data API (port 7331)
 
-Auth: `Authorization: Bearer <agent-token>`. Header `X-OneBridge-FS: 1`.
+Auth: `Authorization: Bearer <agent-token>`. Header `X-Saaridge-FS: 1`.
 
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -78,16 +90,5 @@ Auth: `Authorization: Bearer <agent-token>`. Header `X-OneBridge-FS: 1`.
 ## Notes
 
 - Host Mac browser is unchanged (not forced through bridge).
-- Paths outside `~/OneBridge/` are denied by default.
-- `terminal_exec` cwd is restricted to allowlisted OneBridge roots.
-
-## Privacy Codex proof of concept
-
-`privacy-codex/` is a self-contained Python 3.11 proof of concept for detecting and
-tokenizing sensitive English text before it is sent to a Codex CLI agent. It uses
-local deterministic detectors and an optional lightweight, local statistical
-detector; no LLM is used in the redaction path. The component includes its own
-documentation, synthetic evaluation dataset, test suite, and packaging metadata.
-
-See [`privacy-codex/README.md`](privacy-codex/README.md) for installation, the
-redaction flow, and evaluation commands.
+- Paths outside `~/Saaridge/` are denied by default.
+- `terminal_exec` cwd is restricted to allowlisted Saaridge roots.

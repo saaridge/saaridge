@@ -5,7 +5,7 @@
  * using this process's BRIDGE_TOKEN and forward to the host bridge proxy.
  *
  * Classification (no hostname allowlists):
- *   - Cleartext HTTP with vault:// or X-OneBridge-Mediate → bridge MEDIATE
+ *   - Cleartext HTTP with vault:// or X-Saaridge-Mediate → bridge MEDIATE
  *     (/v1/vault/fetch). Upstream TCP is opened by the host bridge only.
  *   - Otherwise → forward to host :7332 (MITM or adaptive TUNNEL).
  */
@@ -36,7 +36,7 @@ const hasVaultRefs = (value) => VAULT_REF_RE.test(String(value ?? ""));
 
 const hasMediateHeader = (headers = {}) => {
   const raw =
-    headers["x-onebridge-mediate"] || headers["X-OneBridge-Mediate"] || "";
+    headers["x-saaridge-mediate"] || headers["X-Saaridge-Mediate"] || "";
   const v = String(raw).trim().toLowerCase();
   return v === "1" || v === "true" || v === "yes";
 };
@@ -59,7 +59,7 @@ const stripHopHeaders = (headers) => {
   delete out["keep-alive"];
   delete out["transfer-encoding"];
   delete out["upgrade"];
-  delete out["x-onebridge-mediate"];
+  delete out["x-saaridge-mediate"];
   return out;
 };
 
@@ -118,7 +118,7 @@ const mediateViaBridge = async (req, res, bodyBuf) => {
     res.end(body);
   } catch (err) {
     if (!res.headersSent) res.writeHead(502);
-    res.end(`OneBridge mediate error: ${err?.message || err}`);
+    res.end(`Saaridge mediate error: ${err?.message || err}`);
   }
 };
 
@@ -178,7 +178,7 @@ server.on("connect", (req, clientSocket, head) => {
     try {
       clientSocket.write(
         "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n" +
-          "OneBridge: vault:// on CONNECT is denied — use vault_http / cleartext mediate path\n",
+          "Saaridge: vault:// on CONNECT is denied — use vault_http / cleartext mediate path\n",
       );
     } catch (_) {}
     try {
@@ -199,7 +199,7 @@ server.on("connect", (req, clientSocket, head) => {
       if (!clientSocket.destroyed && !clientSocket.writableEnded) {
         clientSocket.write(
           "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n" +
-            `OneBridge host proxy error (${upstreamHost}:${upstreamPort}): ${msg}\n`,
+            `Saaridge host proxy error (${upstreamHost}:${upstreamPort}): ${msg}\n`,
         );
       }
     } catch (_) {}

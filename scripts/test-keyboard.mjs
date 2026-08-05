@@ -19,8 +19,8 @@ const ROOT = path.resolve(__dirname, "..");
 const require = createRequire(import.meta.url);
 const E2E_TEXT = "xyz";
 const E2E_SHIFT = "a@b!c";
-const TITLE = "OneBridge-KB-E2E";
-const OUT = "/tmp/onebridge-kb-e2e.out";
+const TITLE = "Saaridge-KB-E2E";
+const OUT = "/tmp/saaridge-kb-e2e.out";
 
 const { ok, fail, skip, section, done } = createRunner("keyboard");
 
@@ -38,8 +38,8 @@ const dockerExecBrowser = (script, { timeoutMs = 30000 } = {}) => {
       "-e",
       "HOME=/home/browser",
       "-e",
-      "ONEBRIDGE_SANDBOX_HOME=/home/browser",
-      "agent-bridge-box",
+      "SAARIDGE_SANDBOX_HOME=/home/browser",
+      "saaridge-box",
       "bash",
       "--noprofile",
       "--norc",
@@ -67,7 +67,7 @@ const startKeyPump = () =>
       "browser",
       "-e",
       "DISPLAY=:1",
-      "agent-bridge-box",
+      "saaridge-box",
       "/opt/bridge/key-pump.sh",
     ],
     { stdio: ["pipe", "ignore", "ignore"] },
@@ -157,7 +157,7 @@ try {
 }
 
 if (!dockerBoxRunning()) {
-  skip("keyboard E2E", "agent-bridge-box not running");
+  skip("keyboard E2E", "saaridge-box not running");
 } else if (process.env.TEST_KEYBOARD_SKIP_DOCKER === "1") {
   skip("keyboard E2E", "TEST_KEYBOARD_SKIP_DOCKER=1");
 } else {

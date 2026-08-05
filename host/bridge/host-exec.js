@@ -131,7 +131,7 @@ const buildHostEnv = () => {
     }
   }
   env.HOME = os.homedir();
-  env.ONEBRIDGE_HOST_VIA = "host_exec";
+  env.SAARIDGE_HOST_VIA = "host_exec";
   if (!env.PATH && process.env.PATH) env.PATH = process.env.PATH;
   // Never pass host SSH agent into agent-driven commands.
   delete env.SSH_AUTH_SOCK;
@@ -176,7 +176,7 @@ const resolveExecCwd = (agent, cwdArg) => {
   ].filter(Boolean);
   const raw =
     cwdArg == null || cwdArg === ""
-      ? roots.workspace || path.join(os.homedir(), "OneBridge")
+      ? roots.workspace || path.join(os.homedir(), "Saaridge")
       : String(cwdArg);
   const { real } = resolveUnderRoots(raw, allowed);
   // Never start a shell with cwd inside bridge state.
@@ -239,7 +239,7 @@ export const runHostExec = async (agent, args = {}) => {
     const profile = buildStateDirSandboxProfile(STATE_DIR);
     profilePath = path.join(
       os.tmpdir(),
-      `onebridge-host-exec-${process.pid}-${Date.now()}.sb`,
+      `saaridge-host-exec-${process.pid}-${Date.now()}.sb`,
     );
     fs.writeFileSync(profilePath, profile, { mode: 0o600 });
     spawnFile = "/usr/bin/sandbox-exec";
@@ -338,7 +338,7 @@ export const runHostExec = async (agent, args = {}) => {
       stdoutDenied: outM.denied || false,
       stderrDenied: errM.denied || false,
       denyReason: outM.reason || errM.reason || null,
-      note: "Ran on host as the normal user; output mediated by OneBridge.",
+      note: "Ran on host as the normal user; output mediated by Saaridge.",
       sandboxed: useDarwinSandbox,
     };
   } finally {

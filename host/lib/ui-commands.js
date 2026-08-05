@@ -170,7 +170,7 @@ const ensureDesktopMousePump = () => {
       "browser",
       "-e",
       "DISPLAY=:1",
-      CONTAINER_NAME || "agent-bridge-box",
+      CONTAINER_NAME || "saaridge-box",
       "/opt/bridge/mouse-pump.sh",
     ],
     { stdio: ["pipe", "ignore", "ignore"] },

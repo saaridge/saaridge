@@ -11,7 +11,7 @@ import { transformRead, transformWrite, transformList } from "./transform.js";
 import { audit } from "./audit.js";
 import { acquire, release } from "./limits.js";
 import * as store from "./store.js";
-import { workspaceRootFor, sharedRoot, oneBridgeRoot } from "./paths.js";
+import { workspaceRootFor, sharedRoot, saaridgeRoot } from "./paths.js";
 import {
   AGENT_FS_EXCLUDES,
   filterExcludedEntries,
@@ -106,14 +106,14 @@ export const ensureAgentWorkspace = async (agentId) => {
   const shared = sharedRoot();
   await store.ensureDir(ws);
   await store.ensureDir(shared);
-  await store.ensureDir(oneBridgeRoot());
+  await store.ensureDir(saaridgeRoot());
   return { workspace: ws, shared };
 };
 
 export const health = () => ({
   ok: true,
   version: 1,
-  root: oneBridgeRoot(),
+  root: saaridgeRoot(),
   excludes: [...AGENT_FS_EXCLUDES],
   memo: fsMemo.memoStats(),
   ts: new Date().toISOString(),

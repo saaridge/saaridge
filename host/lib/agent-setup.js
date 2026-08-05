@@ -199,6 +199,6 @@ export const manualInstallHint = () =>
     "Automatic setup couldn’t finish after several tries.",
     "Please install this agent yourself:",
     "1. Open the Desktop tab",
-    "2. Use the browser and terminal there (internet already goes through OneBridge)",
+    "2. Use the browser and terminal there (internet already goes through Saaridge)",
     "3. Finish whatever setup the agent needs, then come back to Chat if you want help opening it",
   ].join("\n");

@@ -4,9 +4,9 @@
 # are pinned to bookworm in sources already.
 set -euo pipefail
 
-ID_FILE="${ONEBRIDGE_HOST_IDENTITY:-/opt/bridge/host-identity.json}"
-OUT_LIB="${ONEBRIDGE_OS_RELEASE_OUT:-/usr/lib/os-release}"
-BACKUP="${ONEBRIDGE_OS_RELEASE_DEBIAN:-/usr/lib/os-release.debian}"
+ID_FILE="${SAARIDGE_HOST_IDENTITY:-/opt/bridge/host-identity.json}"
+OUT_LIB="${SAARIDGE_OS_RELEASE_OUT:-/usr/lib/os-release}"
+BACKUP="${SAARIDGE_OS_RELEASE_DEBIAN:-/usr/lib/os-release.debian}"
 
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "[sync-host-os-release] need root" >&2
@@ -29,7 +29,7 @@ id_path, out_path = sys.argv[1], sys.argv[2]
 d = {}
 for p in (
     id_path,
-    "/home/browser/.onebridge-host-identity.json",
+    "/home/browser/.saaridge-host-identity.json",
     "/opt/bridge/host-identity.json",
 ):
     try:
@@ -65,10 +65,10 @@ ID=macos
 ID_LIKE=darwin
 HOME_URL="https://www.apple.com/macos/"
 SUPPORT_URL="https://support.apple.com/"
-ONEBRIDGE_HOST="{host}"
-ONEBRIDGE_ARCH="{arch}"
-ONEBRIDGE_KERNEL_RELEASE="{release}"
-ONEBRIDGE_NOTE="Host OS identity for agents"
+SAARIDGE_HOST="{host}"
+SAARIDGE_ARCH="{arch}"
+SAARIDGE_KERNEL_RELEASE="{release}"
+SAARIDGE_NOTE="Host OS identity for agents"
 
 """
 elif plat == "win32":
@@ -76,8 +76,8 @@ elif plat == "win32":
 NAME="Windows"
 ID=windows
 VERSION_ID="{release}"
-ONEBRIDGE_HOST="{host}"
-ONEBRIDGE_NOTE="Host OS identity for agents"
+SAARIDGE_HOST="{host}"
+SAARIDGE_NOTE="Host OS identity for agents"
 
 """
 else:
@@ -85,8 +85,8 @@ else:
 NAME="{ostype}"
 ID=linux
 VERSION_ID="{release}"
-ONEBRIDGE_HOST="{host}"
-ONEBRIDGE_NOTE="Host OS identity for agents."
+SAARIDGE_HOST="{host}"
+SAARIDGE_NOTE="Host OS identity for agents."
 """
 
 os.makedirs(os.path.dirname(out_path), exist_ok=True)
@@ -98,7 +98,7 @@ PY
 
 # Keep apt on bookworm even when os-release says macos.
 mkdir -p /etc/apt/apt.conf.d
-cat >/etc/apt/apt.conf.d/99onebridge-bookworm <<'EOF'
+cat >/etc/apt/apt.conf.d/99saaridge-bookworm <<'EOF'
 APT::Default-Release "bookworm";
 EOF
 

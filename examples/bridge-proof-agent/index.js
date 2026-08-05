@@ -22,12 +22,12 @@ const HOST_HELLO =
 const HOST_RESULT =
   "/Users/mohitrohatgi/Documents/workspace/test/bridge-proof-result.json";
 const GOOGLE_URL =
-  "https://www.google.com/search?q=OneBridge+agent+gateway&hl=en";
+  "https://www.google.com/search?q=Saaridge+agent+gateway&hl=en";
 
 const loadMcp = () => {
   const mcpPath = path.join(__dirname, "mcp.json");
   if (!fs.existsSync(mcpPath)) {
-    throw new Error("mcp.json missing — OneBridge injects this on install");
+    throw new Error("mcp.json missing — Saaridge injects this on install");
   }
   return JSON.parse(fs.readFileSync(mcpPath, "utf8"));
 };
@@ -74,7 +74,7 @@ const main = async () => {
       method: "GET",
       headers: {
         "User-Agent":
-          "Mozilla/5.0 (compatible; OneBridgeProof/1.0; +https://localhost)",
+          "Mozilla/5.0 (compatible; SaaridgeProof/1.0; +https://localhost)",
         Accept: "text/html",
       },
     },

@@ -1,14 +1,105 @@
 {
-  "name": "onebridge-desktop",
-  "version": "1.0.0",
+  "name": "saaridge",
+  "productName": "Saaridge",
+  "version": "0.0.1",
   "private": true,
-  "description": "OneBridge native desktop shell (embeds workspace view)",
+  "license": "Apache-2.0",
+  "description": "Saaridge mediated agent workspace (alpha)",
+  "author": "Saariv",
+  "homepage": "https://github.com/saaridge/saaridge",
   "main": "main.cjs",
   "scripts": {
     "start": "bash ./launch-mac.sh",
-    "start:direct": "env -u ELECTRON_RUN_AS_NODE electron ."
+    "start:direct": "env -u ELECTRON_RUN_AS_NODE electron .",
+    "dist": "electron-builder --publish never",
+    "dist:mac": "electron-builder --mac --arm64 --x64 --publish never",
+    "dist:win": "electron-builder --win --x64 --publish never",
+    "dist:linux": "electron-builder --linux --x64 --arm64 --publish never",
+    "dist:all": "electron-builder -mwl --x64 --arm64 --publish never"
+  },
+  "build": {
+    "appId": "com.saariv.saaridge",
+    "productName": "Saaridge",
+    "copyright": "Copyright © 2026 Saariv",
+    "artifactName": "Saaridge-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "../bin",
+      "buildResources": "build-resources"
+    },
+    "files": [
+      "**/*",
+      "!**/*.map",
+      "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}",
+      "!launch-mac.sh"
+    ],
+    "extraResources": [
+      {
+        "from": "../build/ship-root",
+        "to": "saaridge-root",
+        "filter": [
+          "**/*",
+          "!node_modules",
+          "!node_modules/**"
+        ]
+      },
+      {
+        "from": "../build/ship-root/node_modules",
+        "to": "saaridge-root/node_modules"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "icon.icns",
+      "target": [
+        { "target": "dmg", "arch": ["arm64", "x64"] },
+        { "target": "zip", "arch": ["arm64", "x64"] }
+      ],
+      "identity": null,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "title": "Install Saaridge",
+      "icon": "icon.icns",
+      "iconSize": 100,
+      "window": {
+        "width": 540,
+        "height": 380
+      },
+      "contents": [
+        { "x": 140, "y": 180, "type": "file" },
+        { "x": 400, "y": 180, "type": "link", "path": "/Applications" }
+      ]
+    },
+    "win": {
+      "icon": "icon.ico",
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Saaridge",
+      "installerIcon": "icon.ico",
+      "uninstallerIcon": "icon.ico"
+    },
+    "linux": {
+      "icon": "icon.png",
+      "target": [
+        { "target": "AppImage", "arch": ["x64", "arm64"] },
+        { "target": "deb", "arch": ["x64", "arm64"] }
+      ],
+      "category": "Development",
+      "maintainer": "Saariv <noreply@saariv.com>",
+      "synopsis": "Mediated agent workspace"
+    }
   },
   "devDependencies": {
-    "electron": "^37.2.0"
+    "electron": "^37.2.0",
+    "electron-builder": "^26.0.12"
   }
 }

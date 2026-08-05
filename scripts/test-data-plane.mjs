@@ -4,7 +4,7 @@
  *
  * Covers:
  *  - chunked read/write via data API facade
- *  - deny paths outside ~/OneBridge
+ *  - deny paths outside ~/Saaridge
  *  - write block globs
  *  - HTTP /v1/fs/* against a live bridge (optional; set BRIDGE_TOKEN)
  *  - FUSE remount hint when container is up
@@ -20,7 +20,7 @@ const ROOT = path.resolve(__dirname, "..");
 
 const { ensureAgentWorkspace, read, write, list, unlink, health, getRoots } =
   await import("../host/bridge/data/api.js");
-const { oneBridgeRoot, workspaceRootFor, removeAgentWorkspace } = await import(
+const { saaridgeRoot, workspaceRootFor, removeAgentWorkspace } = await import(
   "../host/bridge/data/paths.js"
 );
 const { defaultDataPolicy } = await import("../host/bridge/data/policy.js");
@@ -90,8 +90,8 @@ try {
 }
 
 try {
-  // Under ~ but outside OneBridge: browse-only until hostHomeWrite consent.
-  const underHome = path.join(os.homedir(), "NOT-OneBridge-should-deny.txt");
+  // Under ~ but outside Saaridge: browse-only until hostHomeWrite consent.
+  const underHome = path.join(os.homedir(), "NOT-Saaridge-should-deny.txt");
   let homeRo = false;
   try {
     await write(agent, underHome, "x");
@@ -115,7 +115,7 @@ try {
   } catch (err) {
     denied = err.code === "EACCES" || /denied/i.test(err.message);
   }
-  if (!denied) throw new Error("expected deny outside host home / OneBridge");
+  if (!denied) throw new Error("expected deny outside host home / Saaridge");
   ok("deny outside host home");
 } catch (e) {
   fail("path write policy", e);
@@ -158,9 +158,9 @@ if (!token) {
   try {
     const healthRes = await fetch(`${bridgeUrl}/v1/fs/health`);
     if (!healthRes.ok) throw new Error(`health ${healthRes.status}`);
-    const ver = healthRes.headers.get("x-onebridge-fs");
+    const ver = healthRes.headers.get("x-saaridge-fs");
     if (ver && ver !== "1") throw new Error(`version ${ver}`);
-    const ws = `~/OneBridge/workspaces/${agentId}`;
+    const ws = `~/Saaridge/workspaces/${agentId}`;
     const put = await fetch(
       `${bridgeUrl}/v1/fs/write?path=${encodeURIComponent(ws + "/http-chunk.txt")}&offset=0&truncate=1`,
       {
@@ -224,13 +224,13 @@ if (process.env.TEST_BRIDGE_KILL !== "1") {
 
 console.log("== FUSE remount (optional docker) ==");
 if (process.env.TEST_FUSE !== "1") {
-  console.log("  SKIP (set TEST_FUSE=1 with running agent-bridge-box)");
+  console.log("  SKIP (set TEST_FUSE=1 with running saaridge-box)");
 } else {
   try {
     const { run } = await import("../host/lib/docker.js");
     const check = await run("docker", [
       "exec",
-      "agent-bridge-box",
+      "saaridge-box",
       "bash",
       "-lc",
       "findmnt -T /host | head -1; ls /host/workspaces >/dev/null && echo MOUNTED",
@@ -240,7 +240,7 @@ if (process.env.TEST_FUSE !== "1") {
     }
     await run("docker", [
       "exec",
-      "agent-bridge-box",
+      "saaridge-box",
       "bash",
       "-lc",
       "pkill -f hostfs-fuse.py || true",
@@ -250,7 +250,7 @@ if (process.env.TEST_FUSE !== "1") {
       await new Promise((r) => setTimeout(r, 1000));
       const again = await run("docker", [
         "exec",
-        "agent-bridge-box",
+        "saaridge-box",
         "bash",
         "-lc",
         "ls /host/workspaces >/dev/null 2>&1 && echo OK || echo NO",
@@ -270,5 +270,5 @@ if (process.env.TEST_FUSE !== "1") {
   cleanupTestAgent();
 }
 
-console.log(`\nDone. root=${oneBridgeRoot()} failures=${failed}`);
+console.log(`\nDone. root=${saaridgeRoot()} failures=${failed}`);
 process.exit(failed ? 1 : 0);

@@ -9,12 +9,12 @@
 # IMPORTANT: shebang must be /bin/bash (not env bash) — host-bin/bash is a shim.
 set -euo pipefail
 
-CRED="${BRIDGE_CREDENTIALS_FILE:-${ONEBRIDGE_SANDBOX_HOME:-/home/browser}/.bridge-credentials}"
+CRED="${BRIDGE_CREDENTIALS_FILE:-${SAARIDGE_SANDBOX_HOME:-/home/browser}/.bridge-credentials}"
 BRIDGE_URL="${BRIDGE_URL:-http://host.docker.internal:7331}"
-CWD_HINT="${ONEBRIDGE_HOST_EXEC_CWD:-${ONEBRIDGE_PROJECTS:-}}"
+CWD_HINT="${SAARIDGE_HOST_EXEC_CWD:-${SAARIDGE_PROJECTS:-}}"
 # When agents ask for home inside host-shell, match mediated host home.
-export HOME="${ONEBRIDGE_HOST_HOME:-${HOME:-/host/home}}"
-export ONEBRIDGE_HOST_HOME="${ONEBRIDGE_HOST_HOME:-/host/home}"
+export HOME="${SAARIDGE_HOST_HOME:-${HOME:-/host/home}}"
+export SAARIDGE_HOST_HOME="${SAARIDGE_HOST_HOME:-/host/home}"
 
 if [[ ! -f "$CRED" ]]; then
   echo "host-shell: missing credentials ($CRED)" >&2
@@ -109,7 +109,7 @@ if [[ "${1:-}" == "-l" && "${2:-}" == "-c" ]]; then
 fi
 
 # Interactive REPL
-echo "OneBridge host shell — commands run on the host (user-level, mediated)."
+echo "Saaridge host shell — commands run on the host (user-level, mediated)."
 echo "cwd default: ${CWD_HINT:-workspace}  |  exit with Ctrl-D or 'exit'"
 while true; do
   # Use a simple PS1; host prompt would require another round-trip.
@@ -130,7 +130,7 @@ while true; do
       target="${base%/}/$target"
     fi
     CWD_HINT="$target"
-    export ONEBRIDGE_HOST_EXEC_CWD="$CWD_HINT"
+    export SAARIDGE_HOST_EXEC_CWD="$CWD_HINT"
     echo "$CWD_HINT"
     continue
   fi

@@ -17,7 +17,7 @@ const prep = spawnSync(
     "exec",
     "-u",
     "browser",
-    "agent-bridge-box",
+    "saaridge-box",
     "bash",
     "-lc",
     [
@@ -54,7 +54,7 @@ const out = spawnSync(
     "exec",
     "-u",
     "browser",
-    "agent-bridge-box",
+    "saaridge-box",
     "cat",
     "/home/browser/kb-validate.txt",
   ],

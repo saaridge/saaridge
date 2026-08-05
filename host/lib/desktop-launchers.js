@@ -14,7 +14,7 @@ export const ensureInstallAssistantLauncher = async () => {
 export HOME=/home/browser
 mkdir -p "$HOME/Desktop" "$HOME/Downloads" "$HOME/.local/share/applications"
 
-cat > "$HOME/.local/share/applications/onebridge-install-assistant.desktop" <<'EOF'
+cat > "$HOME/.local/share/applications/saaridge-install-assistant.desktop" <<'EOF'
 [Desktop Entry]
 Version=1.0
 Type=Application
@@ -26,7 +26,7 @@ Terminal=false
 Categories=Utility;
 StartupNotify=true
 EOF
-chmod +x "$HOME/.local/share/applications/onebridge-install-assistant.desktop"
+chmod +x "$HOME/.local/share/applications/saaridge-install-assistant.desktop"
 
 # XFCE desktop icons must be Type=Application with Exec= — Type=Link
 # application://… URIs fail with "Operation not supported".
@@ -69,12 +69,12 @@ mkdir -p "$HOME/Desktop" "$HOME/.local/share/applications"
 # Scripts must be executable (dockerCp from macOS often drops +x).
 chmod 755 /opt/bridge/launch-browser.sh /opt/bridge/bridge-browser.sh 2>/dev/null || true
 
-cat > "$HOME/.local/share/applications/onebridge-browser.desktop" <<'EOF'
+cat > "$HOME/.local/share/applications/saaridge-browser.desktop" <<'EOF'
 [Desktop Entry]
 Version=1.0
 Type=Application
 Name=Web Browser
-Comment=Browse the internet via OneBridge proxy
+Comment=Browse the internet via Saaridge proxy
 Exec=/opt/bridge/launch-browser.sh %u
 Icon=web-browser
 Terminal=false
@@ -82,14 +82,14 @@ Categories=Network;WebBrowser;
 StartupNotify=true
 MimeType=text/html;x-scheme-handler/http;x-scheme-handler/https;
 EOF
-chmod +x "$HOME/.local/share/applications/onebridge-browser.desktop"
+chmod +x "$HOME/.local/share/applications/saaridge-browser.desktop"
 
 cat > "$HOME/Desktop/${BROWSER_DESKTOP_NAME}" <<'EOF'
 [Desktop Entry]
 Version=1.0
 Type=Application
 Name=Web Browser
-Comment=Browse the internet via OneBridge proxy
+Comment=Browse the internet via Saaridge proxy
 Exec=/opt/bridge/launch-browser.sh %u
 Icon=web-browser
 Terminal=false
@@ -102,7 +102,7 @@ if command -v gio >/dev/null 2>&1; then
   gio set "$HOME/Desktop/${BROWSER_DESKTOP_NAME}" metadata::trusted true 2>/dev/null || true
 fi
 if command -v xdg-settings >/dev/null 2>&1; then
-  xdg-settings set default-web-browser onebridge-browser.desktop 2>/dev/null || true
+  xdg-settings set default-web-browser saaridge-browser.desktop 2>/dev/null || true
 fi
 chown -R browser:browser "$HOME/Desktop" "$HOME/.local/share/applications"
 `;
@@ -117,7 +117,7 @@ chown -R browser:browser "$HOME/Desktop" "$HOME/.local/share/applications"
 
 export const clearDesktopKeepInstall = async () => {
   if (!(await containerRunning())) return { ok: false };
-  // Keep Install Assistant, Web Browser, and OneBridge-installed app icons.
+  // Keep Install Assistant, Web Browser, and Saaridge-installed app icons.
   const script = `
 export HOME=/home/browser
 mkdir -p "$HOME/Desktop"
@@ -126,7 +126,7 @@ find "$HOME/Desktop" -mindepth 1 -maxdepth 1 | while IFS= read -r entry; do
   [[ "$base" == ${JSON.stringify(INSTALL_DESKTOP_NAME)} ]] && continue
   [[ "$base" == ${JSON.stringify(BROWSER_DESKTOP_NAME)} ]] && continue
   [[ "$base" == "Install-Assistant.sh" ]] && continue
-  if [[ -f "$entry" && "$entry" == *.desktop ]] && grep -q '^X-OneBridge-Package=' "$entry" 2>/dev/null; then
+  if [[ -f "$entry" && "$entry" == *.desktop ]] && grep -q '^X-Saaridge-Package=' "$entry" 2>/dev/null; then
     continue
   fi
   rm -rf "$entry"
@@ -137,18 +137,18 @@ done
   return ensureBrowserLauncher();
 };
 
-/** Copy OneBridge-installed app launchers back onto the Desktop. */
+/** Copy Saaridge-installed app launchers back onto the Desktop. */
 export const restoreInstalledAppIcons = async () => {
   if (!(await containerRunning())) return { ok: false };
   const script = `
 export HOME=/home/browser
 mkdir -p "$HOME/Desktop"
-for app in "$HOME"/.local/share/applications/onebridge-*.desktop; do
+for app in "$HOME"/.local/share/applications/saaridge-*.desktop; do
   [[ -f "$app" ]] || continue
   case "$(basename "$app")" in
-    onebridge-install-assistant.desktop|onebridge-browser.desktop) continue ;;
+    saaridge-install-assistant.desktop|saaridge-browser.desktop) continue ;;
   esac
-  grep -q '^X-OneBridge-Package=' "$app" 2>/dev/null || continue
+  grep -q '^X-Saaridge-Package=' "$app" 2>/dev/null || continue
   name="$(grep -m1 '^Name=' "$app" | sed 's/^Name=//' || true)"
   [[ -z "$name" ]] && continue
   dest="$HOME/Desktop/\${name}.desktop"

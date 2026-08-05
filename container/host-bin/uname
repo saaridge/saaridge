@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Report HOST OS identity (OneBridge virtualization). Real kernel: /bin/uname
+# Report HOST OS identity (Saaridge virtualization). Real kernel: /bin/uname
 set -euo pipefail
-ID_FILE="${ONEBRIDGE_HOST_IDENTITY:-/opt/bridge/host-identity.json}"
-CRED="${BRIDGE_CREDENTIALS_FILE:-${ONEBRIDGE_SANDBOX_HOME:-/home/browser}/.bridge-credentials}"
+ID_FILE="${SAARIDGE_HOST_IDENTITY:-/opt/bridge/host-identity.json}"
+CRED="${BRIDGE_CREDENTIALS_FILE:-${SAARIDGE_SANDBOX_HOME:-/home/browser}/.bridge-credentials}"
 
 python3 - "$ID_FILE" "$CRED" "$@" <<'PY'
 import json, os, sys
@@ -12,7 +12,7 @@ cred_path = sys.argv[2]
 flags = sys.argv[3:]
 
 def load():
-    for p in (id_path, os.path.expanduser("~/.onebridge-host-identity.json")):
+    for p in (id_path, os.path.expanduser("~/.saaridge-host-identity.json")):
         try:
             if os.path.isfile(p):
                 return json.load(open(p))

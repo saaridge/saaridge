@@ -6,7 +6,7 @@ const { forwardKeyViaDom, sendPrintableSequence } = require(
 );
 
 const MODE = process.argv[2] || "sendInputEvent";
-const URL = "http://127.0.0.1:6081/novnc-onebridge.html?titlebar=44";
+const URL = "http://127.0.0.1:6081/novnc-saaridge.html?titlebar=44";
 
 let quitReason = null;
 app.on("before-quit", () => {
@@ -21,7 +21,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const focusCanvas = async (wc) => {
   await wc.executeJavaScript(
     `(() => {
-      const r = window.__onebridgeRfb;
+      const r = window.__saaridgeRfb;
       const c = r?._canvas;
       if (c) {
         c.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, clientX: 420, clientY: 420 }));
@@ -47,7 +47,7 @@ const dispatchDomKey = async (wc, ch) => {
       const upper = ${JSON.stringify(ch.toUpperCase())};
       const ch = ${JSON.stringify(ch)};
       const code = "Key" + upper;
-      const t = window.__onebridgeRfb?._keyboard?._target || window;
+      const t = window.__saaridgeRfb?._keyboard?._target || window;
       const down = new KeyboardEvent("keydown", { key: ch, code, bubbles: true, cancelable: true });
       const up = new KeyboardEvent("keyup", { key: ch, code, bubbles: true, cancelable: true });
       t.dispatchEvent(down);

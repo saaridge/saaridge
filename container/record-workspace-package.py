@@ -6,7 +6,7 @@ import json
 import os
 import sys
 
-MANIFEST = "/home/browser/.local/share/onebridge/workspace-packages.json"
+MANIFEST = "/home/browser/.local/share/saaridge/workspace-packages.json"
 
 
 def load() -> list[dict]:

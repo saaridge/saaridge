@@ -8,15 +8,15 @@
  */
 import path from "node:path";
 
-const TREE_MAX = Number(process.env.ONEBRIDGE_TREE_MEMO_MAX || 64);
+const TREE_MAX = Number(process.env.SAARIDGE_TREE_MEMO_MAX || 64);
 const TREE_MAX_BYTES = Number(
-  process.env.ONEBRIDGE_TREE_MEMO_BYTES || 64 * 1024 * 1024,
+  process.env.SAARIDGE_TREE_MEMO_BYTES || 64 * 1024 * 1024,
 );
 const BODY_MAX_FILE = Number(
-  process.env.ONEBRIDGE_BODY_MEMO_MAX_FILE || 2 * 1024 * 1024,
+  process.env.SAARIDGE_BODY_MEMO_MAX_FILE || 2 * 1024 * 1024,
 );
 const BODY_MAX_TOTAL = Number(
-  process.env.ONEBRIDGE_BODY_MEMO_TOTAL || 64 * 1024 * 1024,
+  process.env.SAARIDGE_BODY_MEMO_TOTAL || 64 * 1024 * 1024,
 );
 const EVENTS_MAX = 512;
 

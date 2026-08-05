@@ -1836,6 +1836,10 @@ export const startProxy = ({ port = 7332 } = {}) => {
       message: `Host inspecting proxy on 127.0.0.1:${port} (HTTPS MITM + traffic log)`,
     });
   });
+  server.on("error", (err) => {
+    console.error(`[proxy] listen failed on :${port}:`, err?.message || err);
+    process.exit(1);
+  });
 
   return { server, port };
 };

@@ -9,7 +9,7 @@ const { forwardKeyViaDom } = require(
   path.join(__dirname, "..", "..", "desktop", "key-forward.cjs"),
 );
 
-const URL = "http://127.0.0.1:6081/novnc-onebridge.html?titlebar=44";
+const URL = "http://127.0.0.1:6081/novnc-saaridge.html?titlebar=44";
 
 let keyForwardChain = Promise.resolve();
 let quitReason = null;

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # curl shim — always go through the local auth-proxy → host bridge MITM proxy.
-# If args contain vault:// (or X-OneBridge-Mediate), force bridge-owned
+# If args contain vault:// (or X-Saaridge-Mediate), force bridge-owned
 # vault_http so secrets never ride a blind TUNNEL.
 set -euo pipefail
 
@@ -21,7 +21,7 @@ fi
 NEED_MEDIATE=0
 for arg in "$@"; do
   case "$arg" in
-    *vault://*|*"X-OneBridge-Mediate"*|*"x-onebridge-mediate"*)
+    *vault://*|*"X-Saaridge-Mediate"*|*"x-saaridge-mediate"*)
       NEED_MEDIATE=1
       break
       ;;
@@ -94,7 +94,7 @@ if not url:
     print("curl shim: could not find URL for vault mediate", file=sys.stderr)
     sys.exit(2)
 # Drop mediate header — bridge path is already mediate
-headers = {k: v for k, v in headers.items() if k.lower() != "x-onebridge-mediate"}
+headers = {k: v for k, v in headers.items() if k.lower() != "x-saaridge-mediate"}
 print(json.dumps({"method": method, "url": url, "headers": headers, "body": body}))
 PY
 )"

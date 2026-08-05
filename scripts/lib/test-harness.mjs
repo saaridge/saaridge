@@ -19,7 +19,7 @@ export function createRunner(title) {
   return { title, failed, ok, fail, skip, section, done };
 }
 
-export function dockerBoxRunning(name = "agent-bridge-box") {
+export function dockerBoxRunning(name = "saaridge-box") {
   const res = spawnSync(
     "docker",
     ["inspect", "-f", "{{.State.Running}}", name],
@@ -31,7 +31,7 @@ export function dockerBoxRunning(name = "agent-bridge-box") {
 export function dockerExec(
   script,
   {
-    container = "agent-bridge-box",
+    container = "saaridge-box",
     timeoutMs = 30000,
     // Prefer -c: login shells source agent-env and can hang on wedged FUSE.
     login = false,
@@ -51,7 +51,7 @@ export function dockerExec(
   return (res.stdout || "").trim();
 }
 
-export function dockerCp(localPath, containerPath, container = "agent-bridge-box") {
+export function dockerCp(localPath, containerPath, container = "saaridge-box") {
   const res = spawnSync(
     "docker",
     ["cp", localPath, `${container}:${containerPath}`],

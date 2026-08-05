@@ -5,7 +5,7 @@ const { forwardKeyViaDom } = require(
   path.join(__dirname, "..", "..", "desktop", "key-forward.cjs"),
 );
 
-const URL = "http://127.0.0.1:6081/novnc-onebridge.html?titlebar=44";
+const URL = "http://127.0.0.1:6081/novnc-saaridge.html?titlebar=44";
 let forwardingKeys = false;
 
 const attachKeyBridge = (webContents) => {
@@ -29,7 +29,7 @@ app.whenReady().then(async () => {
   await win.loadURL(URL);
   await new Promise((r) => setTimeout(r, 3500));
   await win.webContents.executeJavaScript(`(() => {
-    const r=window.__onebridgeRfb; const c=r?._canvas;
+    const r=window.__saaridgeRfb; const c=r?._canvas;
     if(c){c.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,clientX:420,clientY:420}));
     c.dispatchEvent(new MouseEvent('mouseup',{bubbles:true,clientX:420,clientY:420}));c.focus();}
     if(r?.focus)r.focus(); return true;})()`, true);

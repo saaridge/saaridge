@@ -3,9 +3,9 @@
 # Setting HOME=/host/home too early makes bash source /host/home/.bashrc (FUSE hang).
 set -euo pipefail
 
-SANDBOX="${ONEBRIDGE_SANDBOX_HOME:-/home/browser}"
+SANDBOX="${SAARIDGE_SANDBOX_HOME:-/home/browser}"
 PROFILE="${SANDBOX}/.profile"
-MARKER="# OneBridge host HOME (must stay last)"
+MARKER="# Saaridge host HOME (must stay last)"
 
 mkdir -p "$SANDBOX"
 
@@ -14,7 +14,7 @@ if [[ -f "$PROFILE" ]] && grep -qF "$MARKER" "$PROFILE" 2>/dev/null; then
   tmp="$(mktemp)"
   awk -v marker="$MARKER" '
     $0 ~ marker { skip=1; next }
-    skip && /^# OneBridge end/ { skip=0; next }
+    skip && /^# Saaridge end/ { skip=0; next }
     !skip { print }
   ' "$PROFILE" >"$tmp"
   mv "$tmp" "$PROFILE"
@@ -28,17 +28,17 @@ fi
 
 cat >>"$PROFILE" <<'EOF'
 
-# OneBridge host HOME (must stay last)
+# Saaridge host HOME (must stay last)
 # Remap only after this sandbox profile finished loading.
-export ONEBRIDGE_SANDBOX_HOME="${ONEBRIDGE_SANDBOX_HOME:-/home/browser}"
-export ONEBRIDGE_HOST_HOME="${ONEBRIDGE_HOST_HOME:-/host/home}"
+export SAARIDGE_SANDBOX_HOME="${SAARIDGE_SANDBOX_HOME:-/home/browser}"
+export SAARIDGE_HOST_HOME="${SAARIDGE_HOST_HOME:-/host/home}"
 export BRIDGE_CREDENTIALS_FILE="${BRIDGE_CREDENTIALS_FILE:-/home/browser/.bridge-credentials}"
-export HOME="${ONEBRIDGE_HOST_HOME}"
+export HOME="${SAARIDGE_HOST_HOME}"
 case ":${PATH}:" in
   *:/opt/bridge/host-bin:*) ;;
   *) export PATH="/opt/bridge/host-bin:${PATH}" ;;
 esac
-# OneBridge end
+# Saaridge end
 EOF
 
 chown browser:browser "$PROFILE" 2>/dev/null || true

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-OneBridge hostfs — FUSE client over the host Data API (:7331 /v1/fs/*).
+Saaridge hostfs — FUSE client over the host Data API (:7331 /v1/fs/*).
 
 Mount point: /host
 Virtual layout:
@@ -9,7 +9,7 @@ Virtual layout:
   /host/home/...                   (ro → host os.homedir() via policy)
 
 Parents (/, /workspaces, /home) are synthesized so Cursor can browse without
-API access to ~/OneBridge itself (policy denies those ancestors).
+API access to ~/Saaridge itself (policy denies those ancestors).
 
 Uses Debian python3-fuse (fuse-python), not fusepy.
 """
@@ -101,7 +101,7 @@ class DataApi:
         return {
             "Authorization": f"Bearer {self.token}",
             "Accept": "*/*",
-            "X-OneBridge-FS-Client": FS_VERSION,
+            "X-Saaridge-FS-Client": FS_VERSION,
         }
 
     def request(
@@ -178,15 +178,15 @@ class DataApi:
         """Map FUSE path under /host to a host Data API path.
 
         /home → ~ (host homedir, RO via policy)
-        everything else → ~/OneBridge/...
+        everything else → ~/Saaridge/...
         """
         rel = rel.lstrip("/")
         if rel == "home" or rel.startswith("home/"):
             rest = rel[len("home") :].lstrip("/")
             return "~" if not rest else f"~/{rest}"
         if not rel or rel == ".":
-            return "~/OneBridge"
-        return f"~/OneBridge/{rel}"
+            return "~/Saaridge"
+        return f"~/Saaridge/{rel}"
 
 
 # --- Framed FS IPC (preferred) — falls back to HTTP DataApi ---
@@ -482,7 +482,7 @@ class BridgeClient:
         )
 
 
-CACHE_ROOT = os.environ.get("HOSTFS_CACHE", "/var/cache/onebridge-vfs")
+CACHE_ROOT = os.environ.get("HOSTFS_CACHE", "/var/cache/saaridge-vfs")
 
 # Exact basenames omitted from normal listings / tree hydrate (mirrors host
 # agent-fs-excludes.js). Explicit open of such a path uses a single list.
@@ -546,10 +546,10 @@ AGENT_FS_EXCLUDES = set(
 TREE_MAX_DEPTH = int(os.environ.get("HOSTFS_TREE_DEPTH", "4") or "4")
 TREE_MAX_ENTRIES = int(os.environ.get("HOSTFS_TREE_MAX", "8000") or "8000")
 BODY_MEMO_MAX_FILE = int(
-    os.environ.get("ONEBRIDGE_BODY_MEMO_MAX_FILE", str(2 * 1024 * 1024))
+    os.environ.get("SAARIDGE_BODY_MEMO_MAX_FILE", str(2 * 1024 * 1024))
 )
 BODY_MEMO_MAX_TOTAL = int(
-    os.environ.get("ONEBRIDGE_BODY_MEMO_TOTAL", str(64 * 1024 * 1024))
+    os.environ.get("SAARIDGE_BODY_MEMO_TOTAL", str(64 * 1024 * 1024))
 )
 META_TTL_SEC = float(os.environ.get("HOSTFS_META_TTL", "15") or "15")
 
@@ -676,9 +676,9 @@ class HostFS(Fuse):
         self._path_meta: Dict[str, dict] = {}  # fuse path → {isDir, size, mtimeMs}
         self._events_since = 0
         self._host_home = ""
-        self._onebridge_root = ""
+        self._saaridge_root = ""
         self._invalidate_file = os.environ.get(
-            "HOSTFS_INVALIDATE_FILE", "/tmp/onebridge-fs-invalidate"
+            "HOSTFS_INVALIDATE_FILE", "/tmp/saaridge-fs-invalidate"
         )
         self._dir_ts: Dict[str, float] = {}  # fuse dir → monotonic time listed
         self._body_memo = _BodyMemo()
@@ -702,8 +702,8 @@ class HostFS(Fuse):
             return None
         p = host_abs.rstrip("/")
         home = (self._host_home or "").rstrip("/")
-        ob = (self._onebridge_root or "").rstrip("/")
-        # OneBridge is under home — check it first.
+        ob = (self._saaridge_root or "").rstrip("/")
+        # Saaridge is under home — check it first.
         if ob and (p == ob or p.startswith(ob + "/")):
             rest = p[len(ob) :].lstrip("/")
             if not rest:
@@ -735,7 +735,7 @@ class HostFS(Fuse):
             return
         if not lines:
             return
-        msg = f"[hostfs-fuse] invalidate drain lines={len(lines)} home={self._host_home!r} ob={self._onebridge_root!r}\n"
+        msg = f"[hostfs-fuse] invalidate drain lines={len(lines)} home={self._host_home!r} ob={self._saaridge_root!r}\n"
         sys.stderr.write(msg)
         sys.stderr.flush()
         for line in lines:
@@ -749,7 +749,7 @@ class HostFS(Fuse):
                 sys.stderr.flush()
             else:
                 sys.stderr.write(
-                    f"[hostfs-fuse] events-unmap {host_p} home={self._host_home!r} ob={self._onebridge_root!r}\n"
+                    f"[hostfs-fuse] events-unmap {host_p} home={self._host_home!r} ob={self._saaridge_root!r}\n"
                 )
                 sys.stderr.flush()
 
@@ -831,7 +831,7 @@ class HostFS(Fuse):
         with self._map_lock:
             for e in entries:
                 name = e.get("name")
-                if not name or name.startswith(".onebridge-") or name == ".DS_Store":
+                if not name or name.startswith(".saaridge-") or name == ".DS_Store":
                     continue
                 if name in AGENT_FS_EXCLUDES:
                     continue
@@ -863,7 +863,7 @@ class HostFS(Fuse):
         by_parent: Dict[str, Dict[str, dict]] = {}
 
         def add_child(parent: str, name: str, is_dir: bool, size: int, mtime_ms: float):
-            if not name or name in AGENT_FS_EXCLUDES or name.startswith(".onebridge-"):
+            if not name or name in AGENT_FS_EXCLUDES or name.startswith(".saaridge-"):
                 return
             parent = self._norm(parent)
             bucket = by_parent.setdefault(parent, {})
@@ -986,7 +986,7 @@ class HostFS(Fuse):
                     e
                     for e in raw
                     if e["name"] not in AGENT_FS_EXCLUDES
-                    and not e["name"].startswith(".onebridge-")
+                    and not e["name"].startswith(".saaridge-")
                     and e["name"] != ".DS_Store"
                 ]
                 with self._map_lock:
@@ -1031,7 +1031,7 @@ class HostFS(Fuse):
                 if (time.time() - ts) < META_TTL_SEC:
                     return list(self._dirs[p])
                 self._dirs.pop(p, None)
-        # Host home is huge (Documents, OneBridge, tool caches…). Tree-hydrating
+        # Host home is huge (Documents, Saaridge, tool caches…). Tree-hydrating
         # /home blocks the single-threaded FUSE loop for minutes → Cursor hangs
         # on loading / agent tools. Always shallow-list under /home.
         if p == "/home" or p.startswith("/home/") or _under_excluded(p):
@@ -1371,7 +1371,7 @@ def main():
     except OSError:
         pass
     LOG.info(
-        "Mounting %s → ~/OneBridge (agent=%s) via %s ipc=%s",
+        "Mounting %s → ~/Saaridge (agent=%s) via %s ipc=%s",
         mount,
         agent_id,
         bridge,
@@ -1388,17 +1388,17 @@ def main():
     server = HostFS(
         api,
         agent_id,
-        version="%prog OneBridge hostfs",
+        version="%prog Saaridge hostfs",
         usage="hostfs-fuse MOUNTPOINT",
         # Default is multithreaded; don't use setsingle (serializes Cursor).
         dash_s_do="undef",
     )
-    # Derive host home from OneBridge root (.../OneBridge → parent).
-    if root.endswith("/OneBridge") or root.endswith("OneBridge"):
-        server._onebridge_root = root.rstrip("/")
-        server._host_home = os.path.dirname(server._onebridge_root)
+    # Derive host home from Saaridge root (.../Saaridge → parent).
+    if root.endswith("/Saaridge") or root.endswith("Saaridge"):
+        server._saaridge_root = root.rstrip("/")
+        server._host_home = os.path.dirname(server._saaridge_root)
     elif root:
-        server._onebridge_root = root.rstrip("/")
+        server._saaridge_root = root.rstrip("/")
     server._start_events_poller()
     server.multithreaded = True
     server.parser.add_option(

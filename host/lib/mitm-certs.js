@@ -20,7 +20,7 @@ const openssl = (...args) => {
   return res;
 };
 
-/** Ensure OneBridge MITM CA exists (generated once, reused). */
+/** Ensure Saaridge MITM CA exists (generated once, reused). */
 export const ensureMitmCa = () => {
   fs.mkdirSync(CERT_DIR, { recursive: true });
   fs.mkdirSync(HOST_DIR, { recursive: true });
@@ -45,7 +45,7 @@ export const ensureMitmCa = () => {
     "-out",
     CA_CRT,
     "-subj",
-    "/CN=OneBridge MITM CA/O=OneBridge Controlled Env",
+    "/CN=Saaridge MITM CA/O=Saaridge Controlled Env",
   );
   logBridge("mitm_ca_created", { certPath: CA_CRT });
   return { keyPath: CA_KEY, certPath: CA_CRT, certDir: CERT_DIR };
@@ -58,7 +58,7 @@ export const getCaPem = () => {
 
 /**
  * Return TLS key/cert PEM for a hostname (cached on disk).
- * Uses the OneBridge CA so Chromium can trust all forged host certs.
+ * Uses the Saaridge CA so Chromium can trust all forged host certs.
  */
 export const getHostCertificate = (hostname) => {
   ensureMitmCa();

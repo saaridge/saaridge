@@ -96,7 +96,7 @@ export const walkTree = async (
     }
     for (const d of dirents) {
       if (excludeSet.has(d.name)) continue;
-      if (d.name === ".DS_Store" || d.name.startsWith(".onebridge-")) continue;
+      if (d.name === ".DS_Store" || d.name.startsWith(".saaridge-")) continue;
       const full = path.join(dir, d.name);
       // Never emit or descend into bridge STATE_DIR (path-based).
       if (shouldSkip(full)) continue;

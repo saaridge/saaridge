@@ -5,11 +5,11 @@ import crypto from "node:crypto";
 import { getAgents, saveAgents } from "./state.js";
 import { dockerCp, dockerExec, containerRunning, updateContainerBootStatus } from "./docker.js";
 import { logStep, logError } from "./logger.js";
-import { ROOT, CONTAINER_NAME } from "./paths.js";
+import { ROOT, STATE_DIR, CONTAINER_NAME } from "./paths.js";
 import { writeWorkspaceOrientation, hostIdentityJson, hostDisplayName } from "./host-identity.js";
 import { clearDesktopKeepInstall, restoreInstalledAppIcons } from "./desktop-launchers.js";
 import { defaultDataPolicy } from "../bridge/data/policy.js";
-import { provisionOneBridgeRoots } from "./auth.js";
+import { provisionSaaridgeRoots } from "./auth.js";
 
 export const DESKTOP_AGENT_ID = "workspace-desktop";
 export const DESKTOP_PROXY_PORT = 17999;
@@ -133,7 +133,7 @@ export const ensureDesktopCredential = () => {
   const state = getAgents();
   state.agents = state.agents || [];
   let agent = state.agents.find((a) => a.id === DESKTOP_AGENT_ID);
-  const roots = provisionOneBridgeRoots(DESKTOP_AGENT_ID);
+  const roots = provisionSaaridgeRoots(DESKTOP_AGENT_ID);
   if (!agent) {
     agent = {
       id: DESKTOP_AGENT_ID,
@@ -249,7 +249,8 @@ export const provisionDesktopSession = async () => {
           : "Linux",
   };
 
-  const hostCred = path.join(ROOT, "state", ".desktop-cred.json");
+  const hostCred = path.join(STATE_DIR, ".desktop-cred.json");
+  fs.mkdirSync(STATE_DIR, { recursive: true });
   fs.writeFileSync(hostCred, JSON.stringify(cred, null, 2), { mode: 0o600 });
 
   await dockerExec([
@@ -360,7 +361,7 @@ export const provisionDesktopSession = async () => {
         "cp -a /usr/bin/chromium /usr/bin/chromium.real; fi; " +
         "printf '%s\\n' '#!/bin/sh' 'exec /usr/local/bin/chromium-force-proxy.sh \"$@\"' > /usr/bin/chromium; " +
         "chmod 755 /usr/bin/chromium; fi",
-      // Host data plane FUSE mount (/host → OneBridge + /host/home → host homedir).
+      // Host data plane FUSE mount (/host → Saaridge + /host/home → host homedir).
       // Always remount so updated hostfs-fuse.py (statfs/uid) takes effect.
       "pkill -f hostfs-watchdog.sh 2>/dev/null || true; " +
         "pkill -f '/opt/bridge/hostfs-fuse.py' 2>/dev/null || true; " +
@@ -373,8 +374,8 @@ export const provisionDesktopSession = async () => {
   ]);
 
   await dockerCp(
-    path.join(ROOT, "container", "novnc-onebridge.html"),
-    `${CONTAINER_NAME}:/usr/share/novnc/novnc-onebridge.html`,
+    path.join(ROOT, "container", "novnc-saaridge.html"),
+    `${CONTAINER_NAME}:/usr/share/novnc/novnc-saaridge.html`,
   );
 
   // Trust MITM CA inside the container so HTTPS shows as secure
@@ -386,7 +387,7 @@ export const provisionDesktopSession = async () => {
       "-lc",
       "mkdir -p /opt/bridge/certs && chmod 755 /opt/bridge/certs",
     ]);
-    await dockerCp(certPath, `${CONTAINER_NAME}:/opt/bridge/certs/onebridge-mitm-ca.crt`);
+    await dockerCp(certPath, `${CONTAINER_NAME}:/opt/bridge/certs/saaridge-mitm-ca.crt`);
     await dockerCp(
       path.join(ROOT, "container", "trust-mitm-ca.sh"),
       `${CONTAINER_NAME}:/usr/local/bin/trust-mitm-ca.sh`,
@@ -394,7 +395,7 @@ export const provisionDesktopSession = async () => {
     await dockerExec([
       "bash",
       "-lc",
-      "chmod 755 /usr/local/bin/trust-mitm-ca.sh && /usr/local/bin/trust-mitm-ca.sh /opt/bridge/certs/onebridge-mitm-ca.crt",
+      "chmod 755 /usr/local/bin/trust-mitm-ca.sh && /usr/local/bin/trust-mitm-ca.sh /opt/bridge/certs/saaridge-mitm-ca.crt",
     ]);
   } catch (err) {
     logError("Could not install MITM CA in container", {
@@ -409,12 +410,13 @@ export const provisionDesktopSession = async () => {
       "./host-identity.js"
     );
     const orient = writeWorkspaceOrientation(agent.id);
-    const idPath = path.join(ROOT, "state", ".host-identity.json");
+    const idPath = path.join(STATE_DIR, ".host-identity.json");
+    fs.mkdirSync(STATE_DIR, { recursive: true });
     fs.writeFileSync(idPath, hostIdentityJson(agent.id), { mode: 0o644 });
     await dockerCp(idPath, `${CONTAINER_NAME}:/opt/bridge/host-identity.json`);
     await dockerCp(
       idPath,
-      `${CONTAINER_NAME}:/home/browser/.onebridge-host-identity.json`,
+      `${CONTAINER_NAME}:/home/browser/.saaridge-host-identity.json`,
     );
     // Mirror orientation into sandbox home so agents still see host-only
     // identity if Cursor restores /home/browser as the open folder.
@@ -426,7 +428,7 @@ export const provisionDesktopSession = async () => {
     await dockerCp(orient.agentsMd, `${CONTAINER_NAME}:/home/browser/AGENTS.md`);
     await dockerCp(
       orient.rulePath,
-      `${CONTAINER_NAME}:/home/browser/.cursor/rules/onebridge-host-os.mdc`,
+      `${CONTAINER_NAME}:/home/browser/.cursor/rules/saaridge-host-os.mdc`,
     );
     await dockerCp(
       path.join(ROOT, "container", "sync-host-os-release.sh"),
@@ -559,8 +561,8 @@ export const provisionDesktopSession = async () => {
         "pkill -u browser -x xfce4-session || true",
         "pkill -u browser -x xfce4-panel || true",
         "pkill -u browser -f '/xfce4/panel/wrapper' || true",
-        "rm -f /home/browser/.config/onebridge-browser-opened-this-session",
-        "rm -f /tmp/onebridge-start-desktop.lock /tmp/onebridge-start-desktop.pid",
+        "rm -f /home/browser/.config/saaridge-browser-opened-this-session",
+        "rm -f /tmp/saaridge-start-desktop.lock /tmp/saaridge-start-desktop.pid",
         "sleep 0.5",
       ].join("; "),
     ]);
@@ -608,27 +610,27 @@ export const provisionDesktopSession = async () => {
           "pkill -u browser -f 'xterm' || true",
           "mkdir -p \"$HOME/Desktop\" \"$HOME/.local/share/applications\"",
           "chmod 755 /opt/bridge/launch-browser.sh /opt/bridge/bridge-browser.sh 2>/dev/null || true",
-          "cat > \"$HOME/.local/share/applications/onebridge-browser.desktop\" <<'EOF'",
+          "cat > \"$HOME/.local/share/applications/saaridge-browser.desktop\" <<'EOF'",
           "[Desktop Entry]",
           "Version=1.0",
           "Type=Application",
           "Name=Web Browser",
-          "Comment=Browse the internet via OneBridge proxy",
+          "Comment=Browse the internet via Saaridge proxy",
           "Exec=/opt/bridge/launch-browser.sh %u",
           "Icon=web-browser",
           "Terminal=false",
           "Categories=Network;WebBrowser;",
           "StartupNotify=true",
           "EOF",
-          "chmod +x \"$HOME/.local/share/applications/onebridge-browser.desktop\"",
-          "cp -f \"$HOME/.local/share/applications/onebridge-browser.desktop\" \"$HOME/Desktop/Web Browser.desktop\"",
+          "chmod +x \"$HOME/.local/share/applications/saaridge-browser.desktop\"",
+          "cp -f \"$HOME/.local/share/applications/saaridge-browser.desktop\" \"$HOME/Desktop/Web Browser.desktop\"",
           "chmod +x \"$HOME/Desktop/Web Browser.desktop\"",
           "gio set \"$HOME/Desktop/Web Browser.desktop\" metadata::trusted true 2>/dev/null || true",
           "find \"$HOME/Desktop\" -mindepth 1 -maxdepth 1 | while IFS= read -r entry; do",
           "  base=\"$(basename \"$entry\")\"",
           "  [[ \"$base\" == 'Install Assistant.desktop' ]] && continue",
           "  [[ \"$base\" == 'Web Browser.desktop' ]] && continue",
-          "  if [[ -f \"$entry\" && \"$entry\" == *.desktop ]] && grep -q '^X-OneBridge-Package=' \"$entry\" 2>/dev/null; then continue; fi",
+          "  if [[ -f \"$entry\" && \"$entry\" == *.desktop ]] && grep -q '^X-Saaridge-Package=' \"$entry\" 2>/dev/null; then continue; fi",
           "  rm -rf \"$entry\"",
           "done",
           "xfconf-query -c xfce4-desktop -p /desktop-icons/file-icons/show-home -n -t bool -s false 2>/dev/null || xfconf-query -c xfce4-desktop -p /desktop-icons/file-icons/show-home -s false 2>/dev/null || true",
@@ -721,7 +723,7 @@ const closeDesktopAppWindows = async () => {
         "pkill -u browser -f 'thunar' 2>/dev/null || true",
         "rm -f /home/browser/chromium-bridge-profile/SingletonLock /home/browser/chromium-bridge-profile/SingletonCookie /home/browser/chromium-bridge-profile/SingletonSocket 2>/dev/null || true",
         "rm -f /home/browser/chromium-install-profile/SingletonLock /home/browser/chromium-install-profile/SingletonCookie /home/browser/chromium-install-profile/SingletonSocket 2>/dev/null || true",
-        "rm -f /home/browser/.config/onebridge-browser-opened-this-session 2>/dev/null || true",
+        "rm -f /home/browser/.config/saaridge-browser-opened-this-session 2>/dev/null || true",
         "sleep 0.3",
         "echo CLOSED",
       ].join("\n"),

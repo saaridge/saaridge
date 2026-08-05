@@ -5,7 +5,7 @@
  * Tests observable behavior (mounts, ports, proxy bodies, VNC, keyboard, mic)
  * instead of grepping implementation details in source files.
  *
- * Docker checks run automatically when agent-bridge-box is running.
+ * Docker checks run automatically when saaridge-box is running.
  * Set TEST_WORKSPACE_SKIP_DOCKER=1 to skip container checks.
  */
 import { spawnSync } from "node:child_process";
@@ -43,8 +43,8 @@ try {
 
 section("desktop stream HTTP");
 try {
-  const res = await fetchOk("http://127.0.0.1:6081/novnc-onebridge.html");
-  if (!res) throw new Error("novnc-onebridge.html not reachable on :6081");
+  const res = await fetchOk("http://127.0.0.1:6081/novnc-saaridge.html");
+  if (!res) throw new Error("novnc-saaridge.html not reachable on :6081");
   const html = await res.text();
   if (!html.includes("new RFB(")) throw new Error("page is not a noVNC client");
   ok("noVNC desktop page is served");
@@ -57,7 +57,7 @@ if (!dockerEnabled) {
     "container workspace",
     dockerBoxRunning()
       ? "TEST_WORKSPACE_SKIP_DOCKER=1"
-      : "agent-bridge-box not running",
+      : "saaridge-box not running",
   );
 } else {
   section("container /host FUSE mount");
@@ -150,7 +150,7 @@ PY`,
       path.join(ROOT, "container", "launch-cursor.sh"),
       "utf8",
     );
-    if (!/export HOME="\$\{ONEBRIDGE_SANDBOX_HOME\}"/.test(src)) {
+    if (!/export HOME="\$\{SAARIDGE_SANDBOX_HOME\}"/.test(src)) {
       throw new Error(
         "launch-cursor must pin Cursor process HOME to sandbox (not /host/home FUSE)",
       );
@@ -215,9 +215,9 @@ PY`,
   section("container Cursor launcher");
   try {
     dockerExec("test -x /opt/bridge/launch-cursor.sh");
-    dockerExec("test -f /opt/bridge/certs/onebridge-mitm-ca.crt");
+    dockerExec("test -f /opt/bridge/certs/saaridge-mitm-ca.crt");
     dockerExec(
-      'bash -c \'test -n "${NODE_EXTRA_CA_CERTS:-/opt/bridge/certs/onebridge-mitm-ca.crt}"\'',
+      'bash -c \'test -n "${NODE_EXTRA_CA_CERTS:-/opt/bridge/certs/saaridge-mitm-ca.crt}"\'',
     );
     ok("Cursor launcher installed with MITM CA available");
   } catch (e) {

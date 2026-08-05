@@ -8,12 +8,12 @@ import os
 import subprocess
 
 
-MANIFEST = "/home/browser/.local/share/onebridge/workspace-packages.json"
+MANIFEST = "/home/browser/.local/share/saaridge/workspace-packages.json"
 SKIP_DESKTOP = frozenset(
     {
         "Install Assistant.desktop",
-        "onebridge-install-assistant.desktop",
-        "onebridge-browser.desktop",
+        "saaridge-install-assistant.desktop",
+        "saaridge-browser.desktop",
     }
 )
 
@@ -52,7 +52,7 @@ def parse_desktop(path: str) -> tuple[str, str]:
                     continue
                 if line.startswith("Name=") and not line.startswith("Name["):
                     label = line.split("=", 1)[1].strip() or label
-                if line.startswith("X-OneBridge-Package="):
+                if line.startswith("X-Saaridge-Package="):
                     pkg = line.split("=", 1)[1].strip()
     except OSError:
         return label, ""
@@ -81,7 +81,7 @@ def collect_from_desktops() -> dict[str, dict]:
     by_pkg: dict[str, dict] = {}
     patterns = [
         "/home/browser/Desktop/*.desktop",
-        "/home/browser/.local/share/applications/onebridge-*.desktop",
+        "/home/browser/.local/share/applications/saaridge-*.desktop",
         "/home/browser/.local/share/applications/*.desktop",
     ]
     seen_paths: set[str] = set()
@@ -122,8 +122,8 @@ def main() -> int:
                     continue
         by_pkg[pkg] = {"name": name, "package": pkg, "desktop": item.get("desktop") or ""}
 
-    # Installed .debs with a OneBridge launcher but no Desktop icon yet
-    for path in glob.glob("/home/browser/.local/share/applications/onebridge-*.desktop"):
+    # Installed .debs with a Saaridge launcher but no Desktop icon yet
+    for path in glob.glob("/home/browser/.local/share/applications/saaridge-*.desktop"):
         base = os.path.basename(path)
         if base in SKIP_DESKTOP:
             continue
