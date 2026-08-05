@@ -1,8 +1,0 @@
-__pycache__/
-*.py[cod]
-*.egg-info/
-
-# Local evaluation and packaging artifacts may contain sensitive test output.
-work/
-outputs/
-runs/
