@@ -18,6 +18,9 @@ const NOVNC_WS_PORT = Number(process.env.SAARIDGE_NOVNC_WS_PORT || 6081);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+const hostStreamUsable = (h) =>
+  Boolean(h?.novncHttp && h?.hostWsPort && h?.hostRfb);
+
 const probeTcp = (host, port, timeoutMs = 1500) =>
   new Promise((resolve) => {
     const socket = net.connect({ host, port });
@@ -116,8 +119,8 @@ export const inspectStreamInsideContainer = async () => {
       `
 XVFB=0; RFB=0; WS=0
 for pid in $(pgrep -x Xvfb || true); do
-  st=$(ps -o state= -p "$pid" 2>/dev/null | tr -d ' ')
-  if [ -n "$st" ] && [ "$st" != "Z" ]; then XVFB=1; break; fi
+  st=$(ps -o state= -p "\$pid" 2>/dev/null | tr -d ' ')
+  if [ -n "\$st" ] && [ "\$st" != "Z" ]; then XVFB=1; break; fi
 done
 ss -lnt 2>/dev/null | grep -q ':6080 ' && WS=1 || true
 if python3 - <<'PY'
@@ -132,15 +135,18 @@ except Exception:
     sys.exit(1)
 PY
 then RFB=1; else RFB=0; fi
-FUSE=$(pgrep -fc 'python3.*hostfs-fuse\\.py' 2>/dev/null || echo 0)
-# Escape \${ so bash default-expansion survives inside this JS template literal.
-FUSE=\${FUSE:-0}
-echo "XVFB=$XVFB RFB=$RFB WS=$WS FUSE=$FUSE"
+# pgrep -fc prints 0 AND exits 1, so '|| echo 0' used to emit a second line ("0"),
+# which the parser read as the status line. wc -l keeps this to exactly one value.
+# [s] keeps pgrep from matching this inspect shell's own command line.
+FUSE=$(pgrep -f '(/opt/bridge/[s]aaridge-hostfs|python3.*hostfs-fuse[.]py)' 2>/dev/null | wc -l | tr -d ' ')
+echo "XVFB=\$XVFB RFB=\$RFB WS=\$WS FUSE=\$FUSE"
 `.trim(),
     ],
     { timeoutMs: 10000 },
   );
-  const line = (res.stdout || "").trim().split("\n").pop() || "";
+  const lines = (res.stdout || "").trim().split("\n").filter(Boolean);
+  const line =
+    lines.find((l) => /^XVFB=/.test(l)) || lines.at(-1) || "";
   const xvfb = /XVFB=1/.test(line);
   const rfb = /RFB=1/.test(line);
   const websockify = /WS=1/.test(line);
@@ -186,14 +192,32 @@ export const getStreamHealth = async () => {
   }
 
   // Usable stream = noVNC page + WS port + (host RFB banner OR full inside stack).
-  const ok = Boolean(novncHttp && hostWsPort && (hostRfb || inside.ok));
+  const streamOk = Boolean(novncHttp && hostWsPort && (hostRfb || inside.ok));
+  // Do not `...inside` before `ok` — inside.ok is stricter and would clobber streamOk
+  // when host RFB-over-websockify is live but in-container inspect is flaky (XVFB=0).
+  const { ok: _insideOk, ...insideDetail } = inside;
   return {
-    ok,
     novncHttp,
     hostWsPort,
     hostRfb,
-    ...inside,
+    ...insideDetail,
+    ok: streamOk,
   };
+};
+
+// Repair can run before (or long after) the startup copy, so push the current
+// script instead of trusting whatever the image or a previous boot left behind.
+const syncHostfsRestart = async () => {
+  for (const file of ["hostfs-restart.sh", "hostfs-watchdog.sh"]) {
+    await dockerCp(
+      path.join(ROOT, "container", file),
+      `${CONTAINER_NAME}:/opt/bridge/${file}`,
+    );
+  }
+  await dockerExec(
+    ["bash", "-c", "chmod 755 /opt/bridge/hostfs-restart.sh /opt/bridge/hostfs-watchdog.sh"],
+    { timeoutMs: 5000 },
+  );
 };
 
 const syncFixScript = async () => {
@@ -219,8 +243,22 @@ export const ensureStreamStack = async (opts = {}) => {
     return { ok: true, repaired: false, health: before };
   }
 
-  // Successful inside inspect showing Xvfb down → cannot repair in-place.
-  if (/XVFB=0/.test(before.detail || "") && before.xvfb === false) {
+  // Killing x11vnc/websockify drops the viewer's live WebSocket and blanks the
+  // desktop. An end-to-end RFB banner through :6081 proves the stack works, so a
+  // flaky in-container inspect must never trigger a restart on its own.
+  if (!force && hostStreamUsable(before)) {
+    logStep("Desktop stream usable (host RFB live) — skipping restart", {
+      detail: before.detail,
+    });
+    return { ok: true, repaired: false, health: { ...before, ok: true } };
+  }
+
+  // In-container inspect can disagree while host RFB-over-websockify is live.
+  if (
+    !hostStreamUsable(before) &&
+    /XVFB=0/.test(before.detail || "") &&
+    before.xvfb === false
+  ) {
     const detail =
       "Display server (Xvfb) is not running — workspace container needs a restart";
     logError(detail, { health: before });
@@ -235,19 +273,13 @@ export const ensureStreamStack = async (opts = {}) => {
   // Orphaned FUSE children exhaust RAM and stall the desktop; restart watchdog.
   if (before.fuseCount > 1) {
     logStep("Pruning orphaned FUSE processes", { fuseCount: before.fuseCount });
+    // Must run as its own script: an inline `pkill -f hostfs-watchdog.sh` also
+    // matches this exec's command line and SIGTERMs the shell (exit 143), so the
+    // prune would appear to succeed while the remount never ran.
+    await syncHostfsRestart();
     await dockerExec(
-      [
-        "bash",
-        "-c",
-        [
-          "pkill -f 'hostfs-watchdog.sh' 2>/dev/null || true",
-          "rm -f /tmp/saaridge-hostfs-watchdog.lock /tmp/saaridge-hostfs-fuse.pid",
-          "for p in $(pgrep -f 'python3.*hostfs-fuse\\.py' || true); do kill -9 \"$p\" 2>/dev/null || true; done",
-          "fusermount3 -uz /host 2>/dev/null || umount -l /host 2>/dev/null || true",
-          "nohup /opt/bridge/hostfs-watchdog.sh >>/tmp/hostfs-watchdog.log 2>&1 &",
-        ].join("; "),
-      ],
-      { timeoutMs: 15000 },
+      ["bash", "-c", "/opt/bridge/hostfs-restart.sh 2>&1 | tail -5"],
+      { timeoutMs: 40000 },
     );
     await sleep(1500);
   }
@@ -261,6 +293,19 @@ export const ensureStreamStack = async (opts = {}) => {
     ],
     { timeoutMs: 20000 },
   );
+  const fixOut = `${fix.stdout || ""}\n${fix.stderr || ""}`.trim();
+  if (fix.code === 0 && /ok (already-healthy|repaired)/.test(fixOut)) {
+    const immediate = await getStreamHealth();
+    if (immediate.ok || hostStreamUsable(immediate)) {
+      logStep("Desktop stream ready");
+      return {
+        ok: true,
+        repaired: /ok repaired/.test(fixOut),
+        health: { ...immediate, ok: true },
+        fix: fixOut,
+      };
+    }
+  }
 
   for (let i = 0; i < 24; i++) {
     const health = await getStreamHealth();
@@ -277,6 +322,19 @@ export const ensureStreamStack = async (opts = {}) => {
   }
 
   const health = await getStreamHealth();
+  if (
+    fix.code === 0 &&
+    /ok already-healthy/.test(fixOut) &&
+    hostStreamUsable(health)
+  ) {
+    logStep("Desktop stream ready (container stack healthy; host probes live)");
+    return {
+      ok: true,
+      repaired: false,
+      health: { ...health, ok: true },
+      fix: fixOut,
+    };
+  }
   const detail =
     (fix.stderr || "").trim() ||
     (fix.stdout || "").trim() ||

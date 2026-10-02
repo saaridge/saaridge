@@ -160,6 +160,17 @@ export const setBodyMemo = (realPath, buf, mtimeMs, size) => {
 
 export const bodyMemoMaxFile = () => BODY_MAX_FILE;
 
+/** Drop all mediated read memos (policy / transform version changed). */
+export const POLICY_BUST_MARKER = "__saaridge_policy__";
+
+export const bustAll = (reason = "policy") => {
+  bodyMemo.clear();
+  treeMemo.clear();
+  bodyBytes = 0;
+  treeBytes = 0;
+  pushEvent(POLICY_BUST_MARKER, reason);
+};
+
 /** Bust body + tree memos for path and ancestors; publish invalidate event. */
 export const bust = (realPath, op = "mutate") => {
   if (!realPath) return;
@@ -214,12 +225,21 @@ export const pushEvent = (realPath, op = "invalidate") => {
   while (events.length > EVENTS_MAX) events.shift();
 };
 
+/**
+ * Identifies this bridge process. A restart can mediate the same bytes
+ * differently (policy or detector change) and its event ids restart from 1, so a
+ * client that only follows `since` would never learn its cached bodies are
+ * stale. Seeing a new epoch means "drop everything".
+ */
+export const MEMO_EPOCH = `${Date.now().toString(36)}-${process.pid}`;
+
 /** Events with id > since (exclusive). */
 export const getEventsSince = (since = 0) => {
   const s = Number(since) || 0;
   return {
     since: s,
     next: eventSeq,
+    epoch: MEMO_EPOCH,
     events: events.filter((e) => e.id > s),
   };
 };

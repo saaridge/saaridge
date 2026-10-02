@@ -268,14 +268,25 @@ const parseConnectTarget = (url) => {
   return { host: raw, portNum: 443 };
 };
 
+export const CONNECT_TIMEOUT_MS = 12_000;
+
 /**
  * TCP connect with IPv4-first and IPv6 fallback (avoids stuck tunnels).
+ *
+ * `timeoutMs` bounds the *connect* only. `socket.setTimeout` is an idle timer
+ * that keeps firing for the life of the socket, so leaving it armed after a
+ * successful connect tore down live TUNNELs: an agent stream that goes quiet
+ * for longer than the window (a model thinking between chunks) looks "idle",
+ * and the client then reconnects every window and appears hung.
  */
-const connectTcp = (port, host) =>
+export const connectTcp = (port, host, { timeoutMs = CONNECT_TIMEOUT_MS } = {}) =>
   new Promise((resolve, reject) => {
     let settled = false;
     const tryFamily = (family, next) => {
+      let connected = false;
       const socket = net.connect({ port, host, family }, () => {
+        connected = true;
+        socket.setTimeout(0);
         if (settled) {
           socket.destroy();
           return;
@@ -283,7 +294,8 @@ const connectTcp = (port, host) =>
         settled = true;
         resolve(socket);
       });
-      socket.setTimeout(12_000, () => {
+      socket.setTimeout(timeoutMs, () => {
+        if (connected) return;
         socket.destroy();
         if (!settled) {
           if (next) next();

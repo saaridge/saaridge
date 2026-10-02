@@ -2,11 +2,15 @@ import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
 import { LOG_DIR } from "./paths.js";
+import { appendRotating, readTail } from "./log-rotate.js";
 
 fs.mkdirSync(LOG_DIR, { recursive: true });
 const TRAFFIC_FILE = path.join(LOG_DIR, "traffic.jsonl");
 
 const MAX_BODY = 64_000;
+const MAX_TRAFFIC_BYTES = 32 * 1024 * 1024;
+/** Tail window for readTraffic() — rows are small in practice, bodies capped. */
+const READ_TAIL_BYTES = 8 * 1024 * 1024;
 
 const truncate = (value) => {
   if (value == null) return "";
@@ -24,7 +28,9 @@ export const logTraffic = (entry) => {
     ...entry,
     body: truncate(entry.body),
   };
-  fs.appendFileSync(TRAFFIC_FILE, JSON.stringify(row) + "\n");
+  appendRotating(TRAFFIC_FILE, JSON.stringify(row) + "\n", {
+    maxBytes: MAX_TRAFFIC_BYTES,
+  });
   const preview = (entry.body || "").slice(0, 120).replace(/\s+/g, " ");
   // Never print resolved secrets to host console.
   const safePreview =
@@ -38,8 +44,7 @@ export const logTraffic = (entry) => {
 
 export const readTraffic = (limit = 200, agentId = null) => {
   if (!fs.existsSync(TRAFFIC_FILE)) return [];
-  const lines = fs
-    .readFileSync(TRAFFIC_FILE, "utf8")
+  const lines = readTail(TRAFFIC_FILE, READ_TAIL_BYTES)
     .trim()
     .split("\n")
     .filter(Boolean)

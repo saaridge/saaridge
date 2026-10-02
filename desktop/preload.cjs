@@ -55,4 +55,14 @@ contextBridge.exposeInMainWorld("saaridge", {
     ipcRenderer.on("saaridge:boot", handler);
     return () => ipcRenderer.removeListener("saaridge:boot", handler);
   },
+  onSettingsPane: (cb) => {
+    const handler = (_event, pane) => {
+      try {
+        cb(pane);
+      } catch (_) {}
+    };
+    ipcRenderer.on("saaridge:settings-pane", handler);
+    return () =>
+      ipcRenderer.removeListener("saaridge:settings-pane", handler);
+  },
 });

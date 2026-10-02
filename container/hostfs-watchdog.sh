@@ -24,6 +24,41 @@ export HOSTFS_IPC="${HOSTFS_IPC:-0}"
 RUST_BIN="${HOSTFS_RUST_BIN:-/opt/bridge/saaridge-hostfs}"
 PY_BIN="${HOSTFS_PY_BIN:-/opt/bridge/hostfs-fuse.py}"
 
+# Invalidation polling must not ride the agent egress proxy. /opt/bridge/host-bin
+# can precede /usr/bin on PATH, and that curl shim forces --proxy, which the host
+# cannot resolve (host.docker.internal) — invalidation then fails forever.
+BRIDGE_CURL="${BRIDGE_CURL:-/usr/bin/curl}"
+if [[ ! -x "$BRIDGE_CURL" ]]; then
+  BRIDGE_CURL="$(PATH=/usr/bin:/bin type -P curl 2>/dev/null || echo curl)"
+fi
+
+# The Rust mount is built into the image, so an image older than the current
+# invalidation protocol silently serves stale bytes after a policy change (the
+# classic "still shows [EMAIL]" bug). Ask the binary what it supports and prefer
+# the Python mount when it predates the feature, instead of failing quietly.
+# Grepping the binary for "__saaridge_policy__" is not a valid probe: the Rust
+# optimiser folds short literal comparisons into immediates and drops them from
+# .rodata, so the string is absent even when the handling is present.
+POLICY_INVALIDATE_CAP="policy-invalidate"
+# Path the bridge publishes to mean "drop every cached body" (fs-memo.bustAll).
+POLICY_INVALIDATE_MARKER="__saaridge_policy__"
+rust_supports_policy_invalidate() {
+  [[ -x "$RUST_BIN" ]] || return 1
+  local caps
+  caps="$(timeout 5 "$RUST_BIN" --capabilities 2>/dev/null)" || return 1
+  grep -qx "$POLICY_INVALIDATE_CAP" <<<"$caps"
+}
+
+USE_RUST=1
+if [[ "${HOSTFS_FORCE_PYTHON:-0}" == "1" ]]; then
+  USE_RUST=0
+elif ! [[ -x "$RUST_BIN" ]]; then
+  USE_RUST=0
+elif ! rust_supports_policy_invalidate; then
+  USE_RUST=0
+  echo "[hostfs-watchdog] Rust hostfs does not report ${POLICY_INVALIDATE_CAP} — using Python mount; rebuild the image to restore it"
+fi
+
 # Present files as the desktop user so Electron/GTK dialogs treat them as owned
 if [[ -z "${HOSTFS_UID:-}" ]] || [[ -z "${HOSTFS_GID:-}" ]]; then
   if id -u browser >/dev/null 2>&1; then
@@ -156,7 +191,7 @@ start_fuse() {
   fi
 
   local child_pid
-  if [[ -x "$RUST_BIN" ]] && [[ "${HOSTFS_FORCE_PYTHON:-0}" != "1" ]]; then
+  if [[ "$USE_RUST" == "1" ]]; then
     echo "[hostfs-watchdog] starting Rust hostfs on $MOUNT (uid=$HOSTFS_UID gid=$HOSTFS_GID ipc=${HOSTFS_IPC_PORT})"
     nohup "$RUST_BIN" "$MOUNT" >>/tmp/hostfs-fuse.log 2>&1 &
     child_pid=$!
@@ -180,7 +215,7 @@ start_fuse() {
   done
 
   # Rust → Python fallback once
-  if [[ -x "$RUST_BIN" ]] && [[ "${HOSTFS_FORCE_PYTHON:-0}" != "1" ]]; then
+  if [[ "$USE_RUST" == "1" ]]; then
     echo "[hostfs-watchdog] Rust mount failed — falling back to Python"
     kill_fuse_pid "$child_pid"
     clear_pidfile
@@ -208,6 +243,8 @@ start_fuse() {
 
 echo "[hostfs-watchdog] watching $MOUNT (credentials=$CRED rust=$RUST_BIN)"
 EVENTS_SINCE=0
+EVENTS_FAILS=0
+EVENTS_EPOCH=""
 MOUNT_PENDING=0
 BROWSE_TICK=0
 BROWSE_INTERVAL="${HOSTFS_BROWSE_CHECK_EVERY:-15}" # ~30s at sleep 2
@@ -244,35 +281,76 @@ poll_fs_events() {
   if [[ -z "${BRIDGE_TOKEN:-}" ]]; then
     return 0
   fi
-  local body nxt
+  local body nxt rc
   body="$(
-    curl -sf -m 3 \
+    "$BRIDGE_CURL" -sf -m 3 --noproxy '*' \
       -H "Authorization: Bearer ${BRIDGE_TOKEN}" \
-      "${BRIDGE_URL%/}/v1/fs/events?since=${EVENTS_SINCE}" 2>/dev/null || true
+      "${BRIDGE_URL%/}/v1/fs/events?since=${EVENTS_SINCE}" 2>/dev/null
   )"
+  rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    # A dead invalidation channel means stale file content after policy changes.
+    # It used to fail silently; surface it (rate-limited) so it is diagnosable.
+    EVENTS_FAILS=$((EVENTS_FAILS + 1))
+    if [[ "$EVENTS_FAILS" -eq 1 ]] || [[ $((EVENTS_FAILS % 30)) -eq 0 ]]; then
+      echo "[hostfs-watchdog] fs/events poll failed (curl rc=$rc, count=$EVENTS_FAILS) — invalidation is stale"
+    fi
+    return 0
+  fi
+  if [[ "$EVENTS_FAILS" -gt 0 ]]; then
+    echo "[hostfs-watchdog] fs/events poll recovered after $EVENTS_FAILS failure(s)"
+    EVENTS_FAILS=0
+  fi
   if [[ -z "$body" ]]; then
     return 0
   fi
-  nxt="$(
-    BODY="$body" INV="$INVALIDATE_FILE" python3 - <<'PY'
+  local line nxt epoch
+  line="$(
+    BODY="$body" INV="$INVALIDATE_FILE" PREV_EPOCH="${EVENTS_EPOCH:-}" \
+      MARKER="$POLICY_INVALIDATE_MARKER" python3 - <<'PY'
 import json, os
 body = os.environ.get("BODY") or ""
 inv = os.environ.get("INV") or "/tmp/saaridge-fs-invalidate"
+prev = os.environ.get("PREV_EPOCH") or ""
+marker = os.environ.get("MARKER") or "__saaridge_policy__"
 try:
     d = json.loads(body)
 except Exception:
-    print("0")
+    print("0 ")
     raise SystemExit
+epoch = str(d.get("epoch") or "")
 paths = [e.get("path") for e in (d.get("events") or []) if e.get("path")]
+# A restarted bridge may mediate the same bytes differently and its event ids
+# start over, so following `since` alone would keep serving pre-restart content.
+if prev and epoch and epoch != prev:
+    paths.append(marker)
 if paths:
     with open(inv, "a", encoding="utf-8") as f:
         for p in paths:
             f.write(p + "\n")
-print(int(d.get("next") or 0))
+print("%d %s" % (int(d.get("next") or 0), epoch))
 PY
   )"
-  if [[ -n "${nxt:-}" ]] && [[ "$nxt" =~ ^[0-9]+$ ]] && [[ "$nxt" -gt 0 ]]; then
+  nxt="${line%% *}"
+  epoch="${line#* }"
+  if [[ -n "${epoch:-}" ]]; then
+    if [[ -n "${EVENTS_EPOCH:-}" ]] && [[ "$epoch" != "$EVENTS_EPOCH" ]]; then
+      echo "[hostfs-watchdog] bridge restarted (epoch ${EVENTS_EPOCH} -> ${epoch}) — dropping cached file bodies"
+    fi
+    EVENTS_EPOCH="$epoch"
+  fi
+  # Adopt the server's watermark even when it moves backwards. A restarted bridge
+  # numbers events from 1 again, so keeping a stale high watermark made every new
+  # event look already-seen and invalidation silently stopped arriving.
+  if [[ -n "${nxt:-}" ]] && [[ "$nxt" =~ ^[0-9]+$ ]]; then
     EVENTS_SINCE="$nxt"
+  fi
+  # The mount only drains this file while serving a request, so without a nudge the
+  # client's own read is what discovers the invalidation — too late, because the
+  # kernel already sized that read from the stale attribute. A readdir of the mount
+  # root is three virtual entries and forces the drain now.
+  if [[ -s "$INVALIDATE_FILE" ]]; then
+    timeout 3 ls "$MOUNT" >/dev/null 2>&1 || true
   fi
 }
 

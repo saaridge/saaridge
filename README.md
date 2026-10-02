@@ -9,8 +9,8 @@ AI agents are useful, but they should not get a free pass to everything on your 
 **In plain terms:**
 
 1. **You set the rules** — policies for secrets, personal data, payment info, and more (redact, block, or allow).
-2. **The agent works on mediated data** — when it reads files or browses, sensitive values can be replaced with safe placeholders (and secrets become `vault://…` markers instead of the real values).
-3. **When the agent writes or sends data, we put the real values back** where policy allows — so tools and websites still get what they need, without leaving permanent secret copies inside the agent’s world.
+2. **The agent works on mediated data** — sensitive values are stored in the host vault and replaced with **`vault://…` markers** (ids include the entity type, e.g. `vault://email-…`). Generic placeholders like `[EMAIL]` are not used for redacted content.
+3. **When the agent writes or sends data, we put the real values back** where policy allows — **`vault://` markers are resolved on file write and on outbound network** after policy runs, so tools and disk get the originals without keeping plaintext in the agent workspace.
 4. **Compute and data stay separated** — the agent runs in a locked workspace; your real files and network stay on the host and only move through Saaridge’s bridge.
 
 You keep control. The agent keeps the ability to work.
@@ -19,12 +19,12 @@ You keep control. The agent keeps the ability to work.
 
 Saaridge is built so the agent’s workspace is **not** your Mac (or PC) with the doors open. It is a **secure compute space** next to your data.
 
-| What we separate | What that means for you |
-|---|---|
-| **Compute** | Agents run inside an isolated container desktop. They cannot freely roam your whole computer. |
-| **Data** | Your projects live under `~/Saaridge/` on the host. The agent sees them only through a mediated bridge — not as a raw folder mount. |
-| **Network** | Outbound internet from the workspace is locked down. Traffic goes through Saaridge’s proxy so policies can apply. If the bridge is down, the workspace does **not** get open internet. |
-| **Secrets** | Real secret values are stored encrypted on the host. Agents see markers and metadata — not the vault key or ciphertext. |
+| What we separate | What that means for you                                                                                                                                                                |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Compute**      | Agents run inside an isolated container desktop. They cannot freely roam your whole computer.                                                                                          |
+| **Data**         | Your projects live under `~/Saaridge/` on the host. The agent sees them only through a mediated bridge — not as a raw folder mount.                                                    |
+| **Network**      | Outbound internet from the workspace is locked down. Traffic goes through Saaridge’s proxy so policies can apply. If the bridge is down, the workspace does **not** get open internet. |
+| **Secrets**      | Real secret values are stored encrypted on the host. Agents see markers and metadata — not the vault key or ciphertext.                                                                |
 
 **Measures we take:**
 
@@ -42,26 +42,26 @@ Saaridge is built so the agent’s workspace is **not** your Mac (or PC) with th
 
 Host control plane + locked workspace container + **host-side bridge** (tools, file Data API, HTTP MITM proxy).
 
-| | |
-|---|---|
-| App | Saaridge |
-| Bundle ID | `com.saariv.saaridge` |
-| Workspace image | `saaridge/saaridge-workspace:0.0.1` |
-| Host data root | `~/Saaridge/` |
+|                   |                                                                        |
+| ----------------- | ---------------------------------------------------------------------- |
+| App               | Saaridge                                                               |
+| Bundle ID         | `com.saariv.saaridge`                                                  |
+| Workspace image   | `saaridge/saaridge-workspace:0.0.1`                                    |
+| Host data root    | `~/Saaridge/`                                                          |
 | Default resources | 4g RAM / 2 CPUs / 1g shm / 512m tmp / 1920×1080 (Settings → Resources) |
 
 See [`SHIPPING.md`](./SHIPPING.md) for packaging and installer notes. See [`CONSTRAINTS.md`](./CONSTRAINTS.md) for the non-negotiable mediation rules.
 
 ## Guarantees in this build
 
-| Requirement | How it’s enforced |
-|---|---|
-| Agent cannot use another agent’s identity | Per-agent secret token; bridge ignores body `agentId` |
-| Agent cannot steal sibling token | Dedicated Linux UID; credentials file `0600` in agent dir `0700` |
-| Container net blocked except bridge | iptables allow only host `:7331` (MCP/Data API) and `:7332` (proxy) |
-| Host project files only via bridge | No bind-mount of project dirs; `/host` is FUSE → Data API → `~/Saaridge/` |
-| Browse normally inside container via bridge | Chromium → per-agent local auth-proxy → host MITM proxy |
-| Visibility / transform | Async audit JSONL; optional read redact / write block; vault markers; net body hooks |
+| Requirement                                 | How it’s enforced                                                                    |
+| ------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Agent cannot use another agent’s identity   | Per-agent secret token; bridge ignores body `agentId`                                |
+| Agent cannot steal sibling token            | Dedicated Linux UID; credentials file `0600` in agent dir `0700`                     |
+| Container net blocked except bridge         | iptables allow only host `:7331` (MCP/Data API) and `:7332` (proxy)                  |
+| Host project files only via bridge          | No bind-mount of project dirs; `/host` is FUSE → Data API → `~/Saaridge/`            |
+| Browse normally inside container via bridge | Chromium → per-agent local auth-proxy → host MITM proxy                              |
+| Visibility / transform                      | Async audit JSONL; optional read redact / write block; vault markers; net body hooks |
 
 ## Architecture
 
@@ -75,10 +75,6 @@ Host (your machine — data + policies)
   ~/Saaridge/shared/                 (read-only by default)
   state/private/                     (vault + policies — bridge only)
 ```
-
-## Cursor / project location
-
-Open projects under **`/host/workspaces/<agentId>/`** inside the workspace desktop (also linked as `~/Projects` and Desktop “Host Projects”). That tree is the host’s `~/Saaridge/workspaces/<agentId>/`, mediated by the bridge (policy, audit, transforms). Do not store durable project data only under container-local paths.
 
 ## Docker / FUSE requirements
 
@@ -115,17 +111,17 @@ AI policy config is host-private (`state/private/ai-policies.json`). Effective p
 
 Auth: `Authorization: Bearer <agent-token>`. Header `X-Saaridge-FS: 1`.
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/v1/fs/health` | data plane ready |
-| GET | `/v1/fs/stat?path=` | stat |
-| GET | `/v1/fs/list?path=` | list |
-| GET | `/v1/fs/read?path=&offset=&length=` | chunked read |
-| PUT | `/v1/fs/write?path=&offset=` | chunked write |
-| POST | `/v1/fs/mkdir` | mkdir |
-| DELETE | `/v1/fs/path?path=` | unlink/rmdir |
-| POST | `/v1/fs/rename` | rename |
-| GET | `/v1/audit` | recent file + net audit |
+| Method | Path                                | Purpose                 |
+| ------ | ----------------------------------- | ----------------------- |
+| GET    | `/v1/fs/health`                     | data plane ready        |
+| GET    | `/v1/fs/stat?path=`                 | stat                    |
+| GET    | `/v1/fs/list?path=`                 | list                    |
+| GET    | `/v1/fs/read?path=&offset=&length=` | chunked read            |
+| PUT    | `/v1/fs/write?path=&offset=`        | chunked write           |
+| POST   | `/v1/fs/mkdir`                      | mkdir                   |
+| DELETE | `/v1/fs/path?path=`                 | unlink/rmdir            |
+| POST   | `/v1/fs/rename`                     | rename                  |
+| GET    | `/v1/audit`                         | recent file + net audit |
 
 ## Notes
 

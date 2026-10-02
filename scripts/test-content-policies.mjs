@@ -215,7 +215,7 @@ try {
     data: "call +1 (415) 555-0100 please",
   });
   assert.equal(phoneHit.action, "rewrite");
-  assert.match(String(phoneHit.data), /\[PHONE\]/);
+  assert.match(String(phoneHit.data), /vault:\/\/phone-/);
   ok("disabling email category skips emails; phones still redact");
 } catch (e) {
   fail("category exclude", e);
@@ -240,7 +240,7 @@ try {
     data: "Invoice for Acme Corp due Friday",
   });
   assert.equal(result.action, "rewrite");
-  assert.match(String(result.data), /\[PROTECTED\]/);
+  assert.match(String(result.data), /vault:\/\//);
 
   setPolicyMode("words-i-protect", "block");
   const blocked = await mediateContent({
@@ -274,7 +274,7 @@ try {
     data: "email bob [at] example.org for details",
   });
   assert.equal(result.action, "rewrite");
-  assert.match(String(result.data), /\[EMAIL\]/);
+  assert.match(String(result.data), /vault:\/\//);
 
   // Inbound HTML must not be wiped (Google/Cursor login SPA regression).
   setPolicyMode("stop-data-smuggling", "block");
@@ -382,6 +382,333 @@ try {
   ok("raw secret on egress is denied");
 } catch (e) {
   fail("vault releak", e);
+}
+
+section("personal data vault id + fs write-back");
+try {
+  resetPolicyEngine();
+  setGlobalPolicy("protect-personal-data", true);
+  setPolicyMode("protect-personal-data", "redact");
+  setGlobalPolicy("protect-secrets", false);
+  setGlobalPolicy("block-payment-data", false);
+  setGlobalPolicy("stop-data-smuggling", false);
+  setGlobalPolicy("words-i-protect", false);
+  setGlobalPolicy("hide-sensitive-files", false);
+  setPolicyCategories("protect-personal-data", {
+    emails: true,
+    phones: true,
+    ip_addresses: true,
+    names_addresses: true,
+    birth_dates: true,
+    id_docs: true,
+    loyalty: true,
+  });
+
+  const { onFsRead, onFsWrite } = await import(
+    "../host/bridge/control/pipeline.js"
+  );
+  const agent = { id: "pii-roundtrip-agent" };
+  const original = "owner: alice@example.com\n";
+  const read = await onFsRead({
+    agent,
+    path: "/tmp/contact.txt",
+    data: original,
+  });
+  assert.equal(read.action, "rewrite");
+  const mediated = String(read.data);
+  assert.match(mediated, /vault:\/\/email-[a-z0-9_-]+/);
+  assert.ok(!mediated.includes("alice@example.com"));
+
+  const write = await onFsWrite({
+    agent,
+    path: "/tmp/contact.txt",
+    data: mediated,
+  });
+  assert.equal(write.action, "rewrite");
+  assert.equal(String(write.data), original);
+  ok("ingress vault://email-*; egress fs write restores plaintext");
+} catch (e) {
+  fail("personal data vault id + fs write-back", e);
+}
+
+section("policy change busts stale [EMAIL] memo");
+try {
+  resetPolicyEngine();
+  setGlobalPolicy("protect-personal-data", true);
+  setPolicyMode("protect-personal-data", "redact");
+  setGlobalPolicy("protect-secrets", false);
+  setGlobalPolicy("block-payment-data", false);
+  setGlobalPolicy("stop-data-smuggling", false);
+  setGlobalPolicy("words-i-protect", false);
+  setGlobalPolicy("hide-sensitive-files", false);
+  setPolicyCategories("protect-personal-data", {
+    emails: true,
+    phones: true,
+    ip_addresses: true,
+    names_addresses: true,
+    birth_dates: true,
+    id_docs: true,
+    loyalty: true,
+  });
+
+  const fsMemo = await import("../host/bridge/data/fs-memo.js");
+  const { read: dataRead } = await import("../host/bridge/data/api.js");
+  const { workspaceRootFor } = await import("../host/bridge/data/paths.js");
+  const agentId = "memo-agent";
+  const ws = workspaceRootFor(agentId);
+  fs.mkdirSync(ws, { recursive: true });
+  const tmpFile = path.join(ws, "memo-email.txt");
+  fs.writeFileSync(tmpFile, "contact alice@example.com\n", "utf8");
+
+  fsMemo.setBodyMemo(
+    tmpFile,
+    Buffer.from("contact [EMAIL]\n", "utf8"),
+    fs.statSync(tmpFile).mtimeMs,
+    fs.statSync(tmpFile).size,
+  );
+
+  const agent = {
+    id: agentId,
+    policy: {
+      paths: [`~/Saaridge/workspaces/${agentId}`],
+      maxReadBytes: 1024 * 1024,
+    },
+  };
+  const first = await dataRead(agent, tmpFile, { encoding: "utf8" });
+  assert.match(String(first.content), /vault:\/\/email-/);
+
+  const { invalidateMediationCaches } = await import("../host/lib/ai-policy.js");
+  invalidateMediationCaches();
+  const second = await dataRead(agent, tmpFile, { encoding: "utf8" });
+  assert.match(String(second.content), /vault:\/\/email-/);
+  assert.ok(!String(second.content).includes("[EMAIL]"));
+  ok("legacy placeholder memo is ignored; reads re-vault");
+} catch (e) {
+  fail("policy change busts stale memo", e);
+}
+
+section("chunked read still vaults email");
+try {
+  resetPolicyEngine();
+  setGlobalPolicy("protect-personal-data", true);
+  setPolicyMode("protect-personal-data", "redact");
+  setGlobalPolicy("protect-secrets", false);
+  setGlobalPolicy("block-payment-data", false);
+  setGlobalPolicy("stop-data-smuggling", false);
+  setGlobalPolicy("words-i-protect", false);
+  setGlobalPolicy("hide-sensitive-files", false);
+  setPolicyCategories("protect-personal-data", {
+    emails: true,
+    phones: true,
+    ip_addresses: true,
+    names_addresses: true,
+    birth_dates: true,
+    id_docs: true,
+    loyalty: true,
+  });
+
+  const { read: dataRead } = await import("../host/bridge/data/api.js");
+  const { workspaceRootFor } = await import("../host/bridge/data/paths.js");
+  const agentId = "chunk-read-agent";
+  const ws = workspaceRootFor(agentId);
+  fs.mkdirSync(ws, { recursive: true });
+  const tmpFile = path.join(ws, "chunk-email.txt");
+  fs.writeFileSync(tmpFile, "header\nemail: alice@example.com\nfooter\n", "utf8");
+  const agent = {
+    id: agentId,
+    policy: {
+      paths: [`~/Saaridge/workspaces/${agentId}`],
+      maxReadBytes: 1024 * 1024,
+    },
+  };
+  await dataRead(agent, tmpFile, { offset: 0, length: 8, encoding: "utf8" });
+  const full = await dataRead(agent, tmpFile, { encoding: "utf8" });
+  assert.match(String(full.content), /vault:\/\/email-/);
+  assert.ok(!String(full.content).includes("alice@example.com"));
+  ok("partial read first; full read still gets vault://email-*");
+} catch (e) {
+  fail("chunked read vault email", e);
+}
+
+// A vault:// marker is longer than the email it replaces, and the read length
+// defaulted to the raw host size — so a whole-file read came back cut off mid
+// marker ("vault://email-dac6cfd"), which nothing can resolve back. stat must
+// also report the mediated length, or FUSE's attr.size clamps the read again.
+section("mediated text longer than the file is not truncated");
+try {
+  resetPolicyEngine();
+  setGlobalPolicy("protect-personal-data", true);
+  setPolicyMode("protect-personal-data", "redact");
+  setGlobalPolicy("protect-secrets", false);
+  setGlobalPolicy("block-payment-data", false);
+  setGlobalPolicy("stop-data-smuggling", false);
+  setGlobalPolicy("words-i-protect", false);
+  setGlobalPolicy("hide-sensitive-files", false);
+
+  const { read: dataRead, stat: dataStat } = await import(
+    "../host/bridge/data/api.js"
+  );
+  const { workspaceRootFor } = await import("../host/bridge/data/paths.js");
+  const agentId = "grow-read-agent";
+  const ws = workspaceRootFor(agentId);
+  fs.mkdirSync(ws, { recursive: true });
+  const tmpFile = path.join(ws, "grow-email.txt");
+  const original = "contact: jane.doe@example.com\n";
+  fs.writeFileSync(tmpFile, original, "utf8");
+  const agent = {
+    id: agentId,
+    policy: {
+      paths: [`~/Saaridge/workspaces/${agentId}`],
+      maxReadBytes: 1024 * 1024,
+    },
+  };
+
+  // Cold read (nothing memoized yet) must already return the whole marker.
+  const cold = await dataRead(agent, tmpFile, { encoding: "utf8" });
+  const coldText = String(cold.content);
+  assert.match(coldText, /vault:\/\/email-[0-9a-f]{16}/, `cold read: ${coldText}`);
+  assert.ok(
+    coldText.length > original.length,
+    `mediated text should be longer than ${original.length}, got ${coldText.length}`,
+  );
+  assert.ok(coldText.endsWith("\n"), "trailing newline must survive");
+
+  // stat must advertise the mediated length so FUSE does not clamp the read.
+  const st = await dataStat(agent, tmpFile);
+  assert.equal(
+    st.size,
+    Buffer.byteLength(coldText, "utf8"),
+    "stat must report the mediated size",
+  );
+  assert.equal(st.rawSize, original.length, "raw size stays available");
+
+  // Warm read goes through the memo and must match the cold read exactly.
+  const warm = await dataRead(agent, tmpFile, { encoding: "utf8" });
+  assert.equal(String(warm.content), coldText, "warm read must not differ");
+
+  // The case that actually reached users: a policy change drops the memo, and
+  // FUSE stats before it reads. That stat must already report the mediated size,
+  // or the kernel clamps the one read the agent makes and cuts the marker.
+  const { bustAll } = await import("../host/bridge/data/fs-memo.js");
+  bustAll("test-cold-stat");
+  const coldStat = await dataStat(agent, tmpFile);
+  assert.equal(
+    coldStat.size,
+    Buffer.byteLength(coldText, "utf8"),
+    "stat with an empty memo must still report the mediated size",
+  );
+  const afterColdStat = await dataRead(agent, tmpFile, {
+    offset: 0,
+    length: coldStat.size,
+    encoding: "utf8",
+  });
+  assert.equal(
+    String(afterColdStat.content),
+    coldText,
+    "read of stat-reported length must return the whole marker",
+  );
+  ok("grown mediated body is returned whole; cold stat reports mediated size");
+} catch (e) {
+  fail("mediated text truncation", e);
+}
+
+// Setting Protect Personal Data to Allow must actually show plain emails. It did
+// not, because EMAIL_OBFUSCATED also matched a bare `@`, so Stop Data Smuggling
+// (encoded_contact, redact) kept vaulting ordinary emails. Each detector must own
+// its own shape: plain `a@b.com` is personal data, disguised forms are smuggling.
+section("Allow on personal data is not overridden by smuggling");
+try {
+  const { detectPersonalByCategories, detectSmugglingByCategories } =
+    await import("../host/bridge/control/detect/rules.js");
+
+  const smug = (t) =>
+    detectSmugglingByCategories(t, [
+      "encoded_contact",
+      "encoded_blobs",
+      "obfuscation",
+    ]).length;
+  const pers = (t) => detectPersonalByCategories(t, ["emails"]).length;
+
+  // Plain email: personal data only.
+  assert.equal(pers("contact: jane.doe@example.com"), 1);
+  assert.equal(smug("contact: jane.doe@example.com"), 0);
+  assert.equal(pers("mail me at bob@corp.co today"), 1);
+  assert.equal(smug("mail me at bob@corp.co today"), 0);
+
+  // Disguised forms stay smuggling, including a spaced `@` (still a dodge).
+  for (const t of [
+    "contact: jane.doe [at] example.com",
+    "contact: jane.doe (at) example.com",
+    "contact: jane.doe at example.com",
+    "contact: jane.doe @ example.com",
+    "contact: jane.doe @example.com",
+    "contact: jane.doe@ example.com",
+  ]) {
+    assert.equal(smug(t), 1, `expected smuggling hit for ${JSON.stringify(t)}`);
+  }
+
+  // End to end: Allow on personal data with smuggling still redacting must
+  // return the plain email untouched.
+  resetPolicyEngine();
+  setGlobalPolicy("stop-data-smuggling", true);
+  setPolicyMode("stop-data-smuggling", "redact");
+  setGlobalPolicy("protect-personal-data", true);
+  setPolicyMode("protect-personal-data", "allow");
+  setGlobalPolicy("protect-secrets", false);
+  setGlobalPolicy("block-payment-data", false);
+  setGlobalPolicy("hide-sensitive-files", false);
+  setGlobalPolicy("words-i-protect", false);
+
+  const plain = "contact: jane.doe@example.com\n";
+  const allowed = await mediateContent({
+    agentId: "test-agent",
+    channel: "fs",
+    direction: "ingress",
+    path: "/tmp/allow-personal.txt",
+    data: plain,
+  });
+  const allowedText = Buffer.isBuffer(allowed.data)
+    ? allowed.data.toString("utf8")
+    : String(allowed.data ?? "");
+  assert.equal(
+    allowedText,
+    plain,
+    "Allow on personal data must return the plain email",
+  );
+  assert.doesNotMatch(allowedText, /vault:\/\//);
+
+  // ...and Redact must still vault it, so Allow is a real switch.
+  setPolicyMode("protect-personal-data", "redact");
+  const redacted = await mediateContent({
+    agentId: "test-agent",
+    channel: "fs",
+    direction: "ingress",
+    path: "/tmp/allow-personal.txt",
+    data: plain,
+  });
+  const redactedText = Buffer.isBuffer(redacted.data)
+    ? redacted.data.toString("utf8")
+    : String(redacted.data ?? "");
+  assert.match(redactedText, /vault:\/\/email-/);
+  ok("Allow shows plain emails; Redact still vaults them");
+} catch (e) {
+  fail("allow personal data not overridden", e);
+}
+
+section("policy bust marker for FUSE invalidate");
+try {
+  const { POLICY_BUST_MARKER, bustAll, getEventsSince } = await import(
+    "../host/bridge/data/fs-memo.js"
+  );
+  bustAll("test");
+  const ev = getEventsSince(0);
+  const paths = (ev.events || []).map((e) => e.path);
+  if (!paths.includes(POLICY_BUST_MARKER)) {
+    throw new Error(`expected ${POLICY_BUST_MARKER} in fs events`);
+  }
+  ok("bustAll emits FUSE policy invalidate marker");
+} catch (e) {
+  fail("policy bust marker", e);
 }
 
 process.exit(done());

@@ -29,8 +29,9 @@ fi
 export SAARIDGE_SANDBOX_HOME="${SAARIDGE_SANDBOX_HOME:-/home/browser}"
 export SAARIDGE_HOST_HOME="${SAARIDGE_HOST_HOME:-/host/home}"
 export HOME="${SAARIDGE_SANDBOX_HOME}"
-export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
-export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
+export XDG_CONFIG_HOME="${HOME}/.config"
+export XDG_CACHE_HOME="${HOME}/.cache"
+export XDG_DATA_HOME="${HOME}/.local/share"
 export BRIDGE_CREDENTIALS_FILE="${BRIDGE_CREDENTIALS_FILE:-$HOME/.bridge-credentials}"
 export SAARIDGE_PROJECTS="${SAARIDGE_PROJECTS:-/host/workspaces/workspace-desktop}"
 export CURSOR_PROJECT_DIR="${CURSOR_PROJECT_DIR:-$SAARIDGE_PROJECTS}"
@@ -501,6 +502,11 @@ fi
 if [[ -x /opt/bridge/dedupe-xfce-panel.sh ]]; then
   /opt/bridge/dedupe-xfce-panel.sh >/tmp/dedupe-panel.log 2>&1 || true
 fi
+# Default dock launchers have no ~/.config/xfce4/panel/launcher-* files, so every
+# slot shows the settings-gear placeholder. Seed them with real .desktop files.
+if [[ -x /opt/bridge/ensure-panel-launchers.sh ]]; then
+  /opt/bridge/ensure-panel-launchers.sh >/tmp/panel-launchers.log 2>&1 || true
+fi
 
 # Virtual speakers + audio stream to host viewer (ws://host:6082), kept alive by watchdog
 chmod 755 /usr/local/bin/start-audio.sh /opt/bridge/audio-watchdog.sh 2>/dev/null || true
@@ -527,4 +533,9 @@ rm -f "$HOME/.config/saaridge-browser-opened-this-session" 2>/dev/null || true
 # Keep the desktop session helper alive — do NOT relaunch apps
 while true; do
   sleep 30
+  # Recurring: a wiped ~/.config/xfce4/panel brings the gear placeholders back.
+  if [[ -x /opt/bridge/ensure-panel-launchers.sh ]] && \
+     [[ ! -f "${XDG_CONFIG_HOME:-$HOME/.config}/xfce4/panel/launcher-17/xfce4-terminal-emulator.desktop" ]]; then
+    /opt/bridge/ensure-panel-launchers.sh >/tmp/panel-launchers.log 2>&1 || true
+  fi
 done

@@ -67,6 +67,7 @@ COPY container/workspace-ops-daemon.py /opt/bridge/workspace-ops-daemon.py
 COPY container/workspace-ops-client.py /opt/bridge/workspace-ops-client.py
 COPY container/repair-desktop.sh /opt/bridge/repair-desktop.sh
 COPY container/dedupe-xfce-panel.sh /opt/bridge/dedupe-xfce-panel.sh
+COPY container/ensure-panel-launchers.sh /opt/bridge/ensure-panel-launchers.sh
 COPY container/host-bin/ /opt/bridge/host-bin/
 COPY container/hostfs-fuse.py /opt/bridge/hostfs-fuse.py
 COPY container/hostfs-watchdog.sh /opt/bridge/hostfs-watchdog.sh
@@ -96,6 +97,7 @@ RUN chmod +x /opt/bridge/bridge-browser.sh /opt/bridge/launch-browser.sh \
       /opt/bridge/workspace-ops-client.py \
       /opt/bridge/repair-desktop.sh \
       /opt/bridge/dedupe-xfce-panel.sh \
+      /opt/bridge/ensure-panel-launchers.sh \
       /opt/bridge/hostfs-fuse.py \
       /opt/bridge/hostfs-watchdog.sh \
       /opt/bridge/hostfs-ready.sh \

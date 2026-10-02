@@ -8,6 +8,23 @@ source "$ROOT/scripts/lib/host-stack.sh"
 SAARIDGE_ROOT="$ROOT"
 cd "$ROOT"
 
+# Never run two supervisors (Electron + launch-mac + manual shells fight over ports).
+while read -r peer; do
+  [[ -z "${peer:-}" || "$peer" == "$$" ]] && continue
+  if kill -0 "$peer" 2>/dev/null; then
+    if saaridge_host_ready; then
+      echo "[start-host] supervisor $peer already runs a healthy host — exiting"
+      exit 0
+    fi
+    echo "[start-host] waiting for peer supervisor $peer to settle…"
+    sleep 0.5
+    if saaridge_host_ready; then
+      echo "[start-host] host ready under peer $peer — exiting"
+      exit 0
+    fi
+  fi
+done < <(pgrep -f "start-host\\.sh" 2>/dev/null || true)
+
 # Packaged macOS apps get a minimal PATH; Docker CLI lives outside it.
 for d in \
   /usr/local/bin \

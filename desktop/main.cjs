@@ -19,12 +19,19 @@ const {
   dialog,
   session,
   clipboard,
+  powerMonitor,
+  screen,
 } = require("electron");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const readline = require("node:readline");
 const { createHash } = require("node:crypto");
+const {
+  replacementBounds,
+  nudgeSize,
+  planDisplayWake,
+} = require("./display-wake.cjs");
 
 /** Repo root in dev; packaged install uses extraResources/saaridge-root. */
 const resolveRoot = () => {
@@ -43,6 +50,13 @@ const CHROME_INJECT = fs.readFileSync(
 );
 
 app.setName("Saaridge");
+
+// Display sleep frees the window IOSurface. Keep the renderer scheduled so a
+// lock does not discard the layer before power/display recovery runs.
+app.commandLine.appendSwitch("disable-renderer-backgrounding");
+app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
+app.commandLine.appendSwitch("disable-background-timer-throttling");
+app.commandLine.appendSwitch("disable-features", "MacWebContentsOcclusion");
 if (process.platform === "darwin") {
   app.setAboutPanelOptions({
     applicationName: "Saaridge",
@@ -152,6 +166,15 @@ let consentDialog = null;
 let desktopLive = false;
 let streamHealTimer = null;
 let streamHealInFlight = false;
+/** SkyLight dropped the display id (lock / display sleep / system sleep). */
+let surfaceStale = false;
+/** True between lock-screen and unlock-screen. Dark wake must not rebuild yet. */
+let screenLocked = false;
+let wakeRecoverTimer = null;
+let wakeRecoverInFlight = false;
+/** Open Settings dialog — stream heal must not reload noVNC while this is set (macOS modal blanks parent). */
+let settingsWindow = null;
+let pendingDesktopReload = false;
 let micCaptureWin = null;
 let micStatus = { state: "off", message: "Microphone sharing is off" };
 
@@ -377,6 +400,7 @@ const injectWorkspaceChrome = async () => {
 };
 
 const focusDesktop = () => {
+  if (settingsWindow && !settingsWindow.isDestroyed()) return;
   if (!mainWindow || mainWindow.isDestroyed() || !desktopLive) return;
   try {
     mainWindow.webContents.focus();
@@ -950,6 +974,10 @@ const attachKeyBridge = (webContents) => {
 
 const openDesktop = async () => {
   if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (settingsWindow && !settingsWindow.isDestroyed()) {
+    pendingDesktopReload = true;
+    return;
+  }
   desktopLive = false;
   await mainWindow.loadURL(DESKTOP);
   desktopLive = true;
@@ -958,6 +986,12 @@ const openDesktop = async () => {
   // Titlebar inset is already applied by novnc-saaridge.html (?titlebar=44).
   setTimeout(focusDesktop, 100);
   setTimeout(focusDesktop, 500);
+};
+
+const flushPendingDesktopReload = async () => {
+  if (!pendingDesktopReload) return;
+  pendingDesktopReload = false;
+  await openDesktop();
 };
 
 /** Retail boot: Docker must be up before the control plane can start the workspace. */
@@ -1048,8 +1082,22 @@ const startHostIfNeeded = async ({ forceRestart = false } = {}) => {
     (await modulesOk()) &&
     (await hostBrandOk());
 
-  if (!forceRestart && (await hostReady())) {
+  /** Old hosts reported hostRfb true but top-level ok false (inside spread bug). */
+  const streamHealthLooksStale = async () => {
+    const r = await fetchJson(`${CONTROL}/api/desktop/stream-health`, {}, 5000);
+    const top = r.body?.ok;
+    const h = r.body?.health;
+    if (top === true) return false;
+    if (!h || r.status === 404) return false;
+    return Boolean(h.hostRfb && h.novncHttp && h.hostWsPort && h.ok === false);
+  };
+
+  const stale = await streamHealthLooksStale();
+  if (!forceRestart && (await hostReady()) && !stale) {
     return { already: true };
+  }
+  if (stale) {
+    forceRestart = true;
   }
 
   // One clean takeover: stop every supervisor/host (including fighting copies),
@@ -1339,6 +1387,7 @@ const createWindow = () => {
 
   const bringFront = () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (settingsWindow && !settingsWindow.isDestroyed()) return;
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.show();
     mainWindow.focus();
@@ -1359,6 +1408,7 @@ const createWindow = () => {
     }
   });
   mainWindow.on("focus", () => {
+    if (settingsWindow && !settingsWindow.isDestroyed()) return;
     if (desktopLive) setTimeout(focusDesktop, 30);
   });
 
@@ -1372,6 +1422,15 @@ const createWindow = () => {
     void shell.openExternal(url);
     return { action: "deny" };
   });
+
+  mainWindow.webContents.on("render-process-gone", (_event, details) => {
+    logDisplayWake(`renderer gone ${details?.reason || "unknown"}`);
+    noteDisplaySleep("render-process-gone");
+    scheduleDisplayWakeRecovery("render-process-gone");
+  });
+  const wakeIfSurfaceStale = () => scheduleDisplayWakeRecovery("window-show");
+  mainWindow.on("show", wakeIfSurfaceStale);
+  mainWindow.on("focus", wakeIfSurfaceStale);
 
   mainWindow.on("closed", () => {
     stopBootPoll();
@@ -1425,6 +1484,9 @@ ipcMain.handle("saaridge:hide-desktop", async () => {
 });
 
 ipcMain.handle("saaridge:focus-desktop", async () => {
+  if (settingsWindow && !settingsWindow.isDestroyed()) {
+    return { ok: true, skipped: "settings-open" };
+  }
   focusDesktop();
   return { ok: true };
 });
@@ -1436,14 +1498,24 @@ ipcMain.on("saaridge:mouse", (_event, payload) => {
 const openSettingsWindow = (pane = "policies") => {
   const allowed = new Set(["policies", "microphone", "resources"]);
   const safePane = allowed.has(pane) ? pane : "policies";
+  if (settingsWindow && !settingsWindow.isDestroyed()) {
+    settingsWindow.show();
+    settingsWindow.focus();
+    settingsWindow.webContents.send("saaridge:settings-pane", safePane);
+    return { ok: true, reused: true };
+  }
+  // macOS: modal child of the noVNC window often blanks the parent WebContents.
+  const useModal =
+    process.platform !== "darwin" && mainWindow && !mainWindow.isDestroyed();
   const dlg = new BrowserWindow({
     width: 880,
     height: 720,
     minWidth: 720,
     minHeight: 520,
-    parent: mainWindow || undefined,
-    modal: true,
-    show: true,
+    parent: useModal ? mainWindow : undefined,
+    modal: useModal,
+    show: false,
+    paintWhenInitiallyHidden: true,
     resizable: true,
     minimizable: false,
     maximizable: false,
@@ -1455,12 +1527,22 @@ const openSettingsWindow = (pane = "policies") => {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      backgroundThrottling: false,
     },
   });
+  settingsWindow = dlg;
   void dlg.loadFile(path.join(__dirname, "settings.html"), {
     query: { pane: safePane },
   });
-  dlg.on("closed", () => focusDesktop());
+  dlg.once("ready-to-show", () => {
+    if (dlg.isDestroyed()) return;
+    dlg.show();
+    dlg.focus();
+  });
+  dlg.on("closed", () => {
+    settingsWindow = null;
+    void flushPendingDesktopReload().then(() => focusDesktop());
+  });
   return { ok: true };
 };
 
@@ -1608,6 +1690,137 @@ const stopConsentPoll = () => {
   }
 };
 
+const logDisplayWake = (message) => {
+  try {
+    fs.appendFileSync(
+      "/tmp/saaridge-desktop-main.log",
+      `[display-wake] ${message}\n`,
+    );
+  } catch (_) {}
+};
+
+const noteDisplaySleep = (reason) => {
+  surfaceStale = true;
+  logDisplayWake(`surface stale (${reason})`);
+};
+
+const hasUsableDisplay = () =>
+  screen.getAllDisplays().some(
+    (d) => d.bounds && d.bounds.width > 100 && d.bounds.height > 100,
+  );
+
+const nudgeWindowSurface = (win) => {
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  if (!win.isVisible()) win.show();
+  const displays = screen.getAllDisplays();
+  const current = win.getBounds();
+  const moved = replacementBounds(
+    current,
+    displays,
+    screen.getPrimaryDisplay().workArea,
+  );
+  const placed = moved || current;
+  if (moved) win.setBounds(placed);
+  // Width +1 allocates a new IOSurface after the display id was invalidated.
+  win.setBounds(nudgeSize(placed));
+  setTimeout(() => {
+    if (win.isDestroyed()) return;
+    win.setBounds(placed);
+    try {
+      win.webContents.invalidate();
+    } catch (_) {}
+  }, 80);
+};
+
+const scheduleDisplayWakeRecovery = (reason) => {
+  if (!surfaceStale || screenLocked || !hasUsableDisplay()) return;
+  if (wakeRecoverTimer) clearTimeout(wakeRecoverTimer);
+  wakeRecoverTimer = setTimeout(() => {
+    wakeRecoverTimer = null;
+    void recoverFromDisplayWake(reason);
+  }, 600);
+};
+
+/**
+ * Rebuild the blank window left behind when the Mac locks and the display
+ * sleeps. Stream-health can stay ok across that, so this path reloads the
+ * viewer itself instead of waiting for the x11vnc heal poll.
+ */
+const recoverFromDisplayWake = async (reason) => {
+  if (wakeRecoverInFlight) {
+    surfaceStale = true;
+    return;
+  }
+  const plan = planDisplayWake({
+    surfaceStale,
+    screenLocked,
+    hasDisplay: hasUsableDisplay(),
+    desktopLive,
+    settingsOpen: Boolean(settingsWindow && !settingsWindow.isDestroyed()),
+    crashed: Boolean(
+      mainWindow &&
+        !mainWindow.isDestroyed() &&
+        mainWindow.webContents.isCrashed(),
+    ),
+    shellLoaded: Boolean(mainWindow && !mainWindow.isDestroyed() && !desktopLive),
+  });
+  if (!plan.recover) return;
+  // Clear before the bounds nudge so display-metrics-changed does not loop.
+  surfaceStale = false;
+  wakeRecoverInFlight = true;
+  logDisplayWake(
+    `recover ${reason} reloadDesktop=${plan.reloadDesktop} defer=${plan.deferDesktopReload}`,
+  );
+  try {
+    for (const win of BrowserWindow.getAllWindows()) nudgeWindowSurface(win);
+    await sleep(150);
+    if (plan.deferDesktopReload) pendingDesktopReload = true;
+    if (plan.reloadDesktop) {
+      await openDesktop();
+    } else if (
+      plan.reloadShell &&
+      mainWindow &&
+      !mainWindow.isDestroyed()
+    ) {
+      mainWindow.loadFile(path.join(__dirname, "shell.html"));
+    }
+  } catch (err) {
+    surfaceStale = true;
+    logDisplayWake(`recover failed ${err?.message || err}`);
+  } finally {
+    wakeRecoverInFlight = false;
+    if (surfaceStale) scheduleDisplayWakeRecovery("coalesced");
+  }
+};
+
+const installDisplayWakeRecovery = () => {
+  powerMonitor.on("suspend", () => noteDisplaySleep("suspend"));
+  powerMonitor.on("lock-screen", () => {
+    screenLocked = true;
+    noteDisplaySleep("lock-screen");
+  });
+  powerMonitor.on("resume", () => {
+    noteDisplaySleep("resume");
+    scheduleDisplayWakeRecovery("resume");
+  });
+  powerMonitor.on("unlock-screen", () => {
+    screenLocked = false;
+    noteDisplaySleep("unlock-screen");
+    scheduleDisplayWakeRecovery("unlock-screen");
+  });
+  screen.on("display-removed", () => noteDisplaySleep("display-removed"));
+  screen.on("display-added", () => scheduleDisplayWakeRecovery("display-added"));
+  screen.on("display-metrics-changed", () => {
+    if (surfaceStale) scheduleDisplayWakeRecovery("display-metrics-changed");
+  });
+  app.on("child-process-gone", (_event, details) => {
+    if (details?.type !== "GPU") return;
+    noteDisplaySleep("gpu-process-gone");
+    scheduleDisplayWakeRecovery("gpu-process-gone");
+  });
+};
+
 /** Self-heal black screen if x11vnc dies while the app is open. */
 const startStreamHeal = () => {
   if (streamHealTimer) return;
@@ -1616,13 +1829,28 @@ const startStreamHeal = () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     streamHealInFlight = true;
     try {
+      // Renderer death leaves a blank window while stream-health stays green.
+      if (mainWindow.webContents.isCrashed()) {
+        logDisplayWake("heal reloading crashed renderer");
+        if (settingsWindow && !settingsWindow.isDestroyed()) {
+          pendingDesktopReload = true;
+        } else {
+          await openDesktop();
+        }
+        return;
+      }
+      // Budget must exceed the host's in-container inspect (10s docker exec);
+      // a shorter timeout reads as "unhealthy" and provokes a needless repair.
       const health = await fetchJson(
         `${CONTROL}/api/desktop/stream-health`,
         {},
-        4000,
+        15_000,
       );
       if (health.status === 404) return; // older host — skip
-      if (health.ok && health.body?.ok) return;
+      // Only repair on a definite negative verdict. A timeout or transport error
+      // says nothing about the stream, and repairing kills the live WebSocket.
+      if (!health.ok || !health.body) return;
+      if (health.body.ok) return;
       const ensure = await fetchJson(
         `${CONTROL}/api/desktop/ensure-stream`,
         {
@@ -1634,7 +1862,11 @@ const startStreamHeal = () => {
       );
       if (ensure.ok && ensure.body?.ok) {
         restartInputPumps();
-        await openDesktop();
+        if (settingsWindow && !settingsWindow.isDestroyed()) {
+          pendingDesktopReload = true;
+        } else {
+          await openDesktop();
+        }
       }
     } finally {
       streamHealInFlight = false;
@@ -1667,6 +1899,7 @@ app.whenReady().then(() => {
       permission === "mediaKeySystem",
   );
   createWindow();
+  installDisplayWakeRecovery();
   startConsentPoll();
   if (readMicPrefs().shareMic) {
     syncMicSharing(true);

@@ -89,6 +89,9 @@ fi
 if [[ -x /opt/bridge/dedupe-xfce-panel.sh ]]; then
   /opt/bridge/dedupe-xfce-panel.sh >>"$LOG" 2>&1 || true
 fi
+if [[ -x /opt/bridge/ensure-panel-launchers.sh ]]; then
+  /opt/bridge/ensure-panel-launchers.sh >>"$LOG" 2>&1 || true
+fi
 
 # Keep desktop icons below normal windows
 wmctrl -r Desktop -b add,below 2>/dev/null || true

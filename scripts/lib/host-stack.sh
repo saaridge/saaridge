@@ -19,10 +19,34 @@ saaridge_control_ok() {
 saaridge_modules_ok() {
   local code
   code="$(
-    curl -s -o /dev/null -w "%{http_code}" --connect-timeout 1 --max-time 5 \
+    curl -s -o /dev/null -w "%{http_code}" --connect-timeout 1 --max-time 12 \
       "${SAARIDGE_CONTROL_URL}/api/desktop/stream-health" 2>/dev/null || echo 000
   )"
   [[ "$code" == "200" || "$code" == "503" ]]
+}
+
+saaridge_supervisor_pids() {
+  pgrep -f "start-host\\.sh" 2>/dev/null || true
+}
+
+saaridge_kill_all_supervisors() {
+  local pid
+  saaridge_stop_host_stack
+  pkill -f "start-host\\.sh" 2>/dev/null || true
+  for _ in 1 2 3 4 5 6 7 8; do
+    saaridge_supervisor_pids | grep -q . || break
+    while read -r pid; do
+      [[ -z "$pid" ]] && continue
+      kill "$pid" 2>/dev/null || true
+    done < <(saaridge_supervisor_pids)
+    sleep 0.15
+    pkill -9 -f "start-host\\.sh" 2>/dev/null || true
+    sleep 0.1
+  done
+  saaridge_free_ports
+  rm -f "$SAARIDGE_HOST_PIDFILE" "$SAARIDGE_SUPERVISOR_PIDFILE"
+  rm -rf "$SAARIDGE_HOST_LOCKDIR"
+  sleep 0.3
 }
 
 saaridge_brand_ok() {
@@ -71,6 +95,8 @@ saaridge_stop_host_stack() {
     rm -f /tmp/onebridge-host.pid
   fi
   pkill -f "${SAARIDGE_ROOT}/scripts/start-host.sh" 2>/dev/null || true
+  pkill -f "scripts/start-host.sh" 2>/dev/null || true
+  pkill -f "start-host\\.sh" 2>/dev/null || true
   pkill -f "node ${SAARIDGE_ROOT}/host/index.js" 2>/dev/null || true
   pkill -f "node host/index.js" 2>/dev/null || true
   saaridge_free_ports

@@ -52,6 +52,7 @@ const {
   mediationErrorResult,
   mediateStreamText,
   adaptiveTtlMsForReason,
+  connectTcp,
 } = await import("../host/bridge/proxy.js");
 const {
   shouldProcessNetText,
@@ -157,7 +158,7 @@ try {
     value: secret,
     sourcePath: "/tmp/test",
   });
-  if (!id || !/^[a-f0-9]+$/i.test(id)) throw new Error(`bad id ${id}`);
+  if (!id || !/^tok-[a-f0-9]+$/i.test(id)) throw new Error(`bad id ${id}`);
   const file = vaultFilePath(agentId);
   const raw = fs.readFileSync(file, "utf8");
   if (raw.includes(secret)) {
@@ -224,7 +225,10 @@ try {
   if (requiresMediate({ url: "https://ok.example/", headers: {}, body: "hello" })) {
     throw new Error("plain body should TUNNEL-ok");
   }
-  if (!hasVaultRefs("vault://abc123")) throw new Error("hasVaultRefs");
+  if (!hasVaultRefs("vault://abc123")) throw new Error("hasVaultRefs legacy hex");
+  if (!hasVaultRefs("vault://email-deadbeef01234567")) {
+    throw new Error("hasVaultRefs entity-prefixed id");
+  }
   ok("requiresMediate / hasVaultRefs");
 } catch (e) {
   fail("mediate classifier", e);
@@ -650,6 +654,72 @@ try {
   ok("hardlink after cache warm denied via nlink refresh");
 } catch (e) {
   fail("hardlink inode miss refresh", e);
+}
+
+// 8. connectTcp bounds the connect only. An agent stream that goes quiet while
+// the model thinks must not be torn down: socket.setTimeout is an idle timer
+// that keeps firing for the life of the socket, so leaving it armed killed live
+// TUNNELs every 12s and the client reconnected in a loop and appeared hung.
+console.log("\nconnect timeout must not become a tunnel idle timeout");
+{
+  const net = await import("node:net");
+  const IDLE = 300;
+  const server = net.createServer(() => {
+    /* accept and stay silent: upstream mid-stream, model thinking */
+  });
+  try {
+    await new Promise((r) => server.listen(0, "127.0.0.1", r));
+    const { port } = server.address();
+    const sock = await connectTcp(port, "127.0.0.1", { timeoutMs: IDLE });
+    try {
+      if (sock.timeout) {
+        fail(
+          "idle timer disarmed after connect",
+          new Error(`socket.timeout=${sock.timeout}, expected 0`),
+        );
+      } else {
+        ok("idle timer disarmed after connect");
+      }
+      await new Promise((r) => setTimeout(r, IDLE * 3));
+      if (sock.destroyed) {
+        fail(
+          "idle tunnel survives past connect timeout",
+          new Error(`socket destroyed after ${IDLE * 3}ms idle`),
+        );
+      } else {
+        ok("idle tunnel survives past connect timeout");
+      }
+    } finally {
+      sock.destroy();
+    }
+  } catch (e) {
+    fail("connectTcp idle tunnel", e);
+  } finally {
+    server.close();
+  }
+
+  // The connect bound itself must still fire (RFC 5737 blackhole never answers).
+  try {
+    const t0 = Date.now();
+    let rejected = false;
+    try {
+      const s = await connectTcp(9, "192.0.2.1", { timeoutMs: IDLE });
+      s.destroy();
+    } catch {
+      rejected = true;
+    }
+    const elapsed = Date.now() - t0;
+    if (rejected && elapsed < 10_000) {
+      ok(`connect timeout still enforced (${elapsed}ms)`);
+    } else {
+      fail(
+        "connect timeout still enforced",
+        new Error(`rejected=${rejected} elapsed=${elapsed}ms`),
+      );
+    }
+  } catch (e) {
+    fail("connect timeout still enforced", e);
+  }
 }
 
 // Cleanup test vault file (best-effort)

@@ -146,9 +146,25 @@ const readStore = (agentId) => {
   }
 };
 
+/** Hot-path cache — vault.put runs per span; avoid re-reading JSON each time. */
+const storeMem = new Map();
+
+const getStoreMutable = (agentId) => {
+  const id = String(agentId || "unknown");
+  if (!storeMem.has(id)) {
+    storeMem.set(id, readStore(id));
+  }
+  return storeMem.get(id);
+};
+
+const dropStoreMem = (agentId) => {
+  storeMem.delete(String(agentId || "unknown"));
+};
+
 const writeStore = (agentId, data) => {
   ensureDirs();
   const file = fileFor(agentId);
+  const existed = fs.existsSync(file);
   // Never persist plaintext `value` fields
   const secrets = {};
   for (const [id, row] of Object.entries(data.secrets || {})) {
@@ -165,11 +181,14 @@ const writeStore = (agentId, data) => {
   } catch {
     /* ignore */
   }
-  // Keep FS hardlink deny set fresh for new vault files.
-  try {
-    require_("../data/policy.js").refreshBridgeStateInodes();
-  } catch {
-    /* ignore circular/load errors */
+  dropStoreMem(agentId);
+  storeMem.set(String(agentId || "unknown"), data);
+  if (!existed) {
+    try {
+      require_("../data/policy.js").refreshBridgeStateInodes();
+    } catch {
+      /* ignore circular/load errors */
+    }
   }
 };
 
@@ -180,24 +199,21 @@ export const vaultFilePath = (agentId) => fileFor(agentId);
 export const put = (agentId, { kind, name, value, sourcePath } = {}) => {
   const v = String(value ?? "");
   if (!v) return "";
-  const store = readStore(agentId);
+  const store = getStoreMutable(agentId);
   const h = hashValue(v);
   const wantName = name || null;
   for (const [id, row] of Object.entries(store.secrets || {})) {
-    if (row.valueHash === h && (!wantName || row.name === wantName)) {
+    if (row?.valueHash === h && (!wantName || row.name === wantName)) {
       return id;
     }
-    // Dedup against legacy plaintext if still present in memory only
-    try {
-      const plain = decryptRow(row)?.value;
-      if (plain === v && (!wantName || row.name === wantName || !wantName)) {
-        return id;
-      }
-    } catch {
-      /* skip corrupt */
-    }
   }
-  const id = crypto.randomBytes(8).toString("hex");
+  const slug =
+    String(name || kind || "secret")
+      .toLowerCase()
+      .replace(/_/g, "-")
+      .replace(/[^a-z0-9-]+/g, "")
+      .replace(/^-+|-+$/g, "") || "secret";
+  const id = `${slug}-${crypto.randomBytes(8).toString("hex")}`;
   store.secrets[id] = persistRow(
     {
       id,
@@ -278,7 +294,7 @@ export const remove = (agentId, id) => {
 /** Resolve Authorization / header placeholders vault://<id>. */
 export const resolveVaultRefs = (agentId, text) => {
   if (text == null) return text;
-  return String(text).replace(/vault:\/\/([a-f0-9]+)/gi, (_, id) => {
+  return String(text).replace(/vault:\/\/([a-z0-9][a-z0-9_-]*)/gi, (_, id) => {
     const row = get(agentId, id);
     return row ? row.value : `vault://${id}`;
   });

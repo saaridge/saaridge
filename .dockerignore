@@ -1,0 +1,7 @@
+# container/Dockerfile only COPYs from container/, so everything else is dead
+# weight in the build context. Without this the whole repo (several GB, including
+# state/private/ — the encrypted vault, tokens and policy config — plus
+# node_modules and .git) is uploaded to the Docker daemon on every build.
+*
+!container
+container/hostfs-rust/target

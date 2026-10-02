@@ -110,7 +110,22 @@ if [[ -z "$PROXY" && -f "${BRIDGE_CREDENTIALS_FILE:-}" ]]; then
   PROXY="http://127.0.0.1:${PORT}"
 fi
 
+# The bridge's own control plane (Data API / FS IPC) is the mediator, not agent
+# egress. Routing it through the egress proxy is circular: the host side cannot
+# resolve host.docker.internal, so those calls always fail — which silently killed
+# FUSE invalidation. Derived from BRIDGE_URL, so this is not a static site list.
+# Data API mediation (control/lib.js) still applies; only the proxy hop is skipped.
+NOPROXY="127.0.0.1,localhost"
+if [[ -n "${BRIDGE_URL:-}" ]]; then
+  BRIDGE_HOST="${BRIDGE_URL#*://}"
+  BRIDGE_HOST="${BRIDGE_HOST%%/*}"
+  BRIDGE_HOST="${BRIDGE_HOST%%:*}"
+  if [[ -n "$BRIDGE_HOST" ]]; then
+    NOPROXY="${NOPROXY},${BRIDGE_HOST}"
+  fi
+fi
+
 if [[ -n "$PROXY" ]]; then
-  exec "$REAL_CURL" --proxy "$PROXY" --proxy-insecure "$@"
+  exec "$REAL_CURL" --proxy "$PROXY" --proxy-insecure --noproxy "$NOPROXY" "$@"
 fi
 exec "$REAL_CURL" "$@"

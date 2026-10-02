@@ -78,10 +78,37 @@ export const onFsWrite = async ({ agent, path: filePath, data }) => {
   if (result?.action === "deny") {
     return { action: "deny", reason: result.reason || "denied by onFsWrite" };
   }
-  if (result?.action === "rewrite") {
-    return { action: "rewrite", data: result.data ?? data };
+  let nextData = result?.data ?? data;
+  let action = result?.action === "rewrite" ? "rewrite" : "allow";
+
+  const agentId = agent?.id;
+  if (agentId && nextData != null) {
+    const blob =
+      Buffer.isBuffer(nextData) ? nextData.toString("utf8") : String(nextData);
+    if (hasVaultRefs(blob)) {
+      try {
+        const resolved = resolveDeep(agentId, blob);
+        assertNoUnresolvedVaultRefs([resolved], "host file write");
+        nextData = Buffer.isBuffer(nextData)
+          ? Buffer.from(resolved, "utf8")
+          : resolved;
+        action = "rewrite";
+      } catch (err) {
+        if (err?.denied || err?.code === "EACCES") {
+          return {
+            action: "deny",
+            reason: err.message,
+          };
+        }
+        throw err;
+      }
+    }
   }
-  return { action: "allow", data: result?.data ?? data };
+
+  if (action === "rewrite") {
+    return { action: "rewrite", data: nextData };
+  }
+  return { action: "allow", data: nextData };
 };
 
 export const onFsList = async ({ agent, path: dirPath, entries }) => {

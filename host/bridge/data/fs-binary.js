@@ -15,6 +15,9 @@ import { resolveAgentByToken } from "../../lib/auth.js";
 import { logBridge } from "../../lib/logger.js";
 import * as dataApi from "./api.js";
 
+/** Negative lookups an editor makes constantly — answered, never logged. */
+export const EXPECTED_FS_CODES = new Set(["ENOENT", "ENOTDIR"]);
+
 export const OPS = Object.freeze({
   AUTH: 1,
   TREE: 2,
@@ -245,11 +248,17 @@ const attachConnection = (socket) => {
         const result = await handleOp(agent, op, body);
         send(op, reqId, result);
       } catch (err) {
-        logBridge("fs_ipc_op_error", {
-          op: OP_NAME[op] || op,
-          error: err?.message || String(err),
-          code: err?.code,
-        });
+        // A missing path is the normal answer to a probe, not a fault: editors
+        // stat .cursor/.vscode/.config on every keystroke. Logging those made
+        // ENOENT ~69% of bridge.log (24MB) and put a synchronous append on the
+        // hot FS path. The client still gets the error reply.
+        if (!EXPECTED_FS_CODES.has(err?.code)) {
+          logBridge("fs_ipc_op_error", {
+            op: OP_NAME[op] || op,
+            error: err?.message || String(err),
+            code: err?.code,
+          });
+        }
         socket.write(encodeError(reqId, err, OPS.ERROR));
       }
     }

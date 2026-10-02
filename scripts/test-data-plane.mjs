@@ -242,8 +242,11 @@ if (process.env.TEST_FUSE !== "1") {
       "exec",
       "saaridge-box",
       "bash",
-      "-lc",
-      "pkill -f hostfs-fuse.py || true",
+      "-c",
+      // `[x]` stops pkill matching this exec's own command line (SIGTERM/143
+      // before the kill lands), and the Rust mount is the active one by default.
+      "pkill -f '/opt/bridge/[s]aaridge-hostfs' 2>/dev/null; " +
+        "pkill -f '[h]ostfs-fuse.py' 2>/dev/null; true",
     ]);
     let remounted = false;
     for (let i = 0; i < 20; i++) {
@@ -268,6 +271,42 @@ if (process.env.TEST_FUSE !== "1") {
 }
 } finally {
   cleanupTestAgent();
+}
+
+// Host logs are appended from hot paths (every FS IPC op, every inspected
+// message). Unbounded, they reached 167MB (traffic.jsonl) / 24MB (bridge.log),
+// and the readers slurped the whole file to show the last rows.
+console.log("\n== log rotation is size-capped ==");
+try {
+  const { appendRotating, readTail } = await import(
+    "../host/lib/log-rotate.js"
+  );
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "saaridge-logrot-"));
+  const file = path.join(dir, "test.log");
+  const line = `${"x".repeat(200)}\n`;
+  for (let i = 0; i < 200; i += 1) {
+    appendRotating(file, line, { maxBytes: 4_000, keep: 2 });
+  }
+  const live = fs.statSync(file).size;
+  if (live > 4_000) {
+    throw new Error(`live log ${live} bytes exceeds cap`);
+  }
+  if (!fs.existsSync(`${file}.1`)) throw new Error("no rotated generation");
+  if (fs.existsSync(`${file}.3`)) {
+    throw new Error("kept more generations than requested");
+  }
+  ok(`append rotates at cap (live=${live}B, keep=2)`);
+
+  // Tail reads must be bounded and must not return a partial leading record.
+  const tail = readTail(file, 1_000);
+  if (Buffer.byteLength(tail) > 1_000) throw new Error("tail exceeded window");
+  if (tail && tail.split("\n").filter(Boolean).some((l) => l.length !== 200)) {
+    throw new Error("tail returned a partial record");
+  }
+  ok("readTail is bounded and drops partial leading record");
+  fs.rmSync(dir, { recursive: true, force: true });
+} catch (e) {
+  fail("log rotation", e);
 }
 
 console.log(`\nDone. root=${saaridgeRoot()} failures=${failed}`);
