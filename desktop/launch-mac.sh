@@ -27,7 +27,14 @@ ensure_control_plane() {
   fi
 
   echo "[saaridge] control plane not ready — resetting host stack…"
-  saaridge_stop_host_stack
+  saaridge_kill_all_supervisors
+
+  if saaridge_supervisor_pids | grep -q .; then
+    echo "[saaridge] waiting for old host supervisors to exit…"
+    saaridge_wait_host_ready 20 && return 0
+    saaridge_kill_all_supervisors
+  fi
+
   echo "[saaridge] starting host supervisor…"
   nohup bash "$ROOT/scripts/start-host.sh" >>"$SAARIDGE_SUPERVISOR_LOG" 2>&1 &
   disown 2>/dev/null || true

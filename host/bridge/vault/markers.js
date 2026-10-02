@@ -1,7 +1,8 @@
 /**
  * Detect redacted / mediate-required requests (no hostname allowlists).
+ * IDs: legacy 16-hex, or entity-prefixed `email-deadbeef…`.
  */
-const VAULT_REF_RE = /vault:\/\/[a-f0-9]+/i;
+const VAULT_REF_RE = /vault:\/\/[a-z0-9][a-z0-9_-]*/i;
 
 export const hasVaultRefs = (value) => VAULT_REF_RE.test(String(value ?? ""));
 

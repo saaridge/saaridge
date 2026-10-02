@@ -22,10 +22,11 @@
     "test:host-identity": "node scripts/test-host-identity.mjs",
     "test:content-policies": "node scripts/test-content-policies.mjs",
     "test:keyboard": "node scripts/test-keyboard.mjs",
+    "test:settings-ui": "node scripts/test-settings-ui.mjs",
     "cleanup:test-agents": "node scripts/cleanup-test-agents.mjs",
     "pretest": "node scripts/cleanup-test-agents.mjs",
     "posttest": "node scripts/cleanup-test-agents.mjs",
-    "test": "npm run test:mediation-guarantee && npm run test:data-plane && npm run test:workspace-regression && npm run test:desktop-stream && npm run test:host-identity && npm run test:keyboard && npm run test:content-policies",
+    "test": "npm run test:mediation-guarantee && npm run test:data-plane && npm run test:workspace-regression && npm run test:desktop-stream && npm run test:host-identity && npm run test:keyboard && npm run test:settings-ui && npm run test:content-policies",
     "ship:prepare": "bash scripts/ship/prepare-ship-root.sh",
     "ship": "bash scripts/ship/build-installers.sh"
   },

@@ -9,8 +9,8 @@ AI agents are useful, but they should not get a free pass to everything on your 
 **In plain terms:**
 
 1. **You set the rules** — policies for secrets, personal data, payment info, and more (redact, block, or allow).
-2. **The agent works on mediated data** — when it reads files or browses, sensitive values can be replaced with safe placeholders (and secrets become `vault://…` markers instead of the real values).
-3. **When the agent writes or sends data, we put the real values back** where policy allows — so tools and websites still get what they need, without leaving permanent secret copies inside the agent’s world.
+2. **The agent works on mediated data** — sensitive values are stored in the host vault and replaced with **`vault://…` markers** (ids include the entity type, e.g. `vault://email-…`). Generic placeholders like `[EMAIL]` are not used for redacted content.
+3. **When the agent writes or sends data, we put the real values back** where policy allows — **`vault://` markers are resolved on file write and on outbound network** after policy runs, so tools and disk get the originals without keeping plaintext in the agent workspace.
 4. **Compute and data stay separated** — the agent runs in a locked workspace; your real files and network stay on the host and only move through Saaridge’s bridge.
 
 You keep control. The agent keeps the ability to work.

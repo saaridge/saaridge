@@ -2,6 +2,7 @@
  * Host-only AI policy admin + local content-policy registration.
  * Config under state/private (never FUSE / container mounted).
  */
+import fs from "node:fs";
 import path from "node:path";
 import {
   AlgorithmRegistry,
@@ -16,16 +17,52 @@ import {
   resolveEnabledCategories,
 } from "../bridge/control/policies/catalog.js";
 import { categoriesForUi } from "../bridge/control/detect/categories.js";
+import * as fsMemo from "../bridge/data/fs-memo.js";
+import * as vault from "../bridge/vault/index.js";
 
 export const AI_POLICY_CONFIG_PATH =
   process.env.AI_POLICY_CONFIG ||
   path.join(PRIVATE_STATE_DIR, "ai-policies.json");
 
 let engine = null;
+let policyConfigMtimeMs = 0;
+
+/** Reload policy store only when ai-policies.json changed (hot read path). */
+export const syncPolicyFromDisk = () => {
+  const e = getPolicyEngine();
+  try {
+    const st = fs.statSync(AI_POLICY_CONFIG_PATH);
+    if (st.mtimeMs !== policyConfigMtimeMs) {
+      e.reload();
+      policyConfigMtimeMs = st.mtimeMs;
+    }
+  } catch {
+    if (policyConfigMtimeMs === 0) {
+      e.reload();
+      policyConfigMtimeMs = Date.now();
+    }
+  }
+};
+
+const notePolicyConfigWritten = () => {
+  try {
+    policyConfigMtimeMs = fs.statSync(AI_POLICY_CONFIG_PATH).mtimeMs;
+  } catch {
+    policyConfigMtimeMs = Date.now();
+  }
+};
+
+/** Mediated file reads cache transformed bytes — bust when policy changes. */
+export const invalidateMediationCaches = () => {
+  try {
+    fsMemo.bustAll("policy");
+  } catch {
+    /* ignore */
+  }
+};
 
 const getModeForPolicy = (policyId) => {
   const e = getPolicyEngine();
-  e.reload();
   const entry = e.store.algorithms?.[policyId];
   const mode = entry?.options?.mode;
   if (typeof mode === "string" && MODES.includes(mode)) return mode;
@@ -35,14 +72,12 @@ const getModeForPolicy = (policyId) => {
 
 const getCategoriesForPolicy = (policyId) => {
   const e = getPolicyEngine();
-  e.reload();
   const entry = e.store.algorithms?.[policyId];
   return resolveEnabledCategories(policyId, entry?.options?.categories);
 };
 
 const getKnownValuesForPolicy = (policyId) => {
   const e = getPolicyEngine();
-  e.reload();
   const entry = e.store.algorithms?.[policyId];
   const raw = entry?.options?.knownValues;
   if (!Array.isArray(raw)) return [];
@@ -263,8 +298,8 @@ const enrichPolicy = (meta, a) => {
 };
 
 export const listGlobalPolicies = () => {
+  syncPolicyFromDisk();
   const e = getPolicyEngine();
-  e.reload();
   const byId = Object.fromEntries(e.listGlobal().map((a) => [a.id, a]));
   return POLICY_CATALOG.map((meta) => {
     const a = byId[meta.id] || {
@@ -281,6 +316,8 @@ export const setGlobalPolicy = (algorithmId, enabled) => {
   const e = getPolicyEngine();
   e.reload();
   e.setGlobal(algorithmId, enabled);
+  notePolicyConfigWritten();
+  invalidateMediationCaches();
   return listGlobalPolicies();
 };
 
@@ -313,6 +350,8 @@ export const setPolicyMode = (algorithmId, mode) => {
   };
   e.store = { ...e.store, algorithms };
   e.persist();
+  notePolicyConfigWritten();
+  invalidateMediationCaches();
   return listGlobalPolicies();
 };
 
@@ -348,6 +387,8 @@ export const setPolicyCategories = (algorithmId, categories) => {
   };
   e.store = { ...e.store, algorithms };
   e.persist();
+  notePolicyConfigWritten();
+  invalidateMediationCaches();
   return listGlobalPolicies();
 };
 
@@ -382,14 +423,16 @@ export const setPolicyKnownValues = (algorithmId, values) => {
   };
   e.store = { ...e.store, algorithms };
   e.persist();
+  notePolicyConfigWritten();
+  invalidateMediationCaches();
   return listGlobalPolicies();
 };
 
 export const getPolicyMode = (algorithmId) => getModeForPolicy(algorithmId);
 
 export const isPolicyActiveForAgent = (agentId, policyId) => {
+  syncPolicyFromDisk();
   const e = getPolicyEngine();
-  e.reload();
   return e.effectiveForAgent(agentId).includes(policyId);
 };
 
@@ -397,8 +440,8 @@ export const isPolicyActiveForAgent = (agentId, policyId) => {
  * Run content mediation for an agent on FS/net text.
  */
 export const mediateContent = async (ctx) => {
+  syncPolicyFromDisk();
   const e = getPolicyEngine();
-  e.reload();
   const modes = {};
   const policyCategories = {};
   const policyKnownValues = {};
@@ -409,6 +452,14 @@ export const mediateContent = async (ctx) => {
       policyKnownValues[p.id] = getKnownValuesForPolicy(p.id);
     }
   }
+  let vaultPlainValues = [];
+  if (ctx.direction === "egress" && ctx.agentId) {
+    try {
+      vaultPlainValues = vault.listPlainValues(ctx.agentId);
+    } catch {
+      vaultPlainValues = [];
+    }
+  }
   return e.mediate({
     ...ctx,
     meta: {
@@ -416,6 +467,7 @@ export const mediateContent = async (ctx) => {
       policyModes: modes,
       policyCategories,
       policyKnownValues,
+      vaultPlainValues,
     },
   });
 };

@@ -1,6 +1,12 @@
 (() => {
   let control = "http://127.0.0.1:3847";
-  let policyCache = { agents: [], global: { algorithms: [] } };
+  let policyCache = { agents: [], algorithms: [] };
+
+  const normalizeAlgorithms = (payload) => {
+    if (Array.isArray(payload)) return payload;
+    if (Array.isArray(payload?.algorithms)) return payload.algorithms;
+    return null;
+  };
 
   const $ = (id) => document.getElementById(id);
   const params = new URLSearchParams(location.search);
@@ -9,6 +15,9 @@
     paneParam === "microphone" || paneParam === "resources"
       ? paneParam
       : "policies";
+
+  let activePane = null;
+  let policiesLoadSeq = 0;
 
   const setPolicyStatus = (msg, isErr = false) => {
     const el = $("policyStatus");
@@ -25,16 +34,32 @@
   };
 
   const api = async (path, opts = {}) => {
-    const res = await fetch(`${control}${path}`, {
-      headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
-      ...opts,
-    });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
-    return body;
+    const timeoutMs = opts.timeoutMs ?? 30_000;
+    const { timeoutMs: _drop, ...fetchOpts } = opts;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetch(`${control}${path}`, {
+        headers: { "Content-Type": "application/json", ...(fetchOpts.headers || {}) },
+        signal: ctrl.signal,
+        ...fetchOpts,
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      return body;
+    } catch (err) {
+      if (err?.name === "AbortError") {
+        throw new Error("Policy API timed out — is the host busy?");
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
   };
 
   const showPane = (pane) => {
+    const prev = activePane;
+    activePane = pane;
     const policies = pane === "policies";
     const mic = pane === "microphone";
     const resources = pane === "resources";
@@ -44,10 +69,26 @@
     $("navPolicies").classList.toggle("active", policies);
     $("navMic").classList.toggle("active", mic);
     $("navResources").classList.toggle("active", resources);
-    if (policies) void reloadPolicies();
-    else if (mic) void reloadMic();
-    else void reloadResources();
+    if (policies) {
+      if (prev !== "policies") void reloadPolicies();
+    } else if (mic) {
+      if (prev !== "microphone") void reloadMic();
+    } else if (resources) {
+      if (prev !== "resources") void reloadResources();
+    }
   };
+
+  // Only .pane-body scrolls. If focus ever scrolls the overflow:hidden root, the
+  // whole layout slides out of the window and Settings looks blank.
+  const pinRootScroll = () => {
+    const root = document.scrollingElement || document.documentElement;
+    if (root.scrollTop || root.scrollLeft) root.scrollTo(0, 0);
+    if (document.body.scrollTop || document.body.scrollLeft) {
+      document.body.scrollTo(0, 0);
+    }
+  };
+  window.addEventListener("scroll", pinRootScroll, true);
+  document.addEventListener("focusin", () => requestAnimationFrame(pinRootScroll));
 
   document.querySelectorAll(".nav-btn").forEach((btn) => {
     btn.addEventListener("click", () => showPane(btn.dataset.pane));
@@ -105,7 +146,7 @@
     if (!agentSel || !policySel) return;
 
     const agents = policyCache.agents || [];
-    const algos = policyCache.global?.algorithms || [];
+    const algos = policyCache.algorithms;
 
     agentSel.innerHTML = "";
     const agentPlaceholder = document.createElement("option");
@@ -139,7 +180,7 @@
   const renderOverrides = () => {
     const root = $("overrideRows");
     if (!root) return;
-    const algos = policyCache.global?.algorithms || [];
+    const algos = policyCache.algorithms;
     const algoMeta = Object.fromEntries(algos.map((a) => [a.id, a]));
     const rows = collectOverrides(policyCache.agents, algos);
 
@@ -256,34 +297,51 @@
   };
 
   const reloadPolicies = async () => {
+    const seq = ++policiesLoadSeq;
     setPolicyStatus("Loading…");
+    let status;
+    let global;
+    let agentsRes;
     try {
-      const [status, global, agentsRes] = await Promise.all([
+      [status, global, agentsRes] = await Promise.all([
         api("/api/policies/status"),
         api("/api/policies/global"),
         api("/api/policies/agents"),
       ]);
+    } catch (err) {
+      if (seq === policiesLoadSeq) {
+        $("policyMeta").textContent =
+          "Could not reach policy API — is the host running?";
+        setPolicyStatus(String(err.message || err), true);
+      }
+      return;
+    }
+    if (seq !== policiesLoadSeq) {
+      return;
+    }
+    try {
       policyCache = {
-        agents: agentsRes.agents || [],
-        global,
+        agents: agentsRes?.agents || [],
+        algorithms: normalizeAlgorithms(global) || [],
       };
       $("policyMeta").textContent = `Saved only on this Mac: ${status.configPath || ""}`;
 
-      renderCoverageSummary(global.algorithms || []);
+      renderCoverageSummary(policyCache.algorithms);
 
       const globalRoot = $("globalRows");
-      globalRoot.innerHTML = "";
+      const policyCards = [];
       const modeLabels = {
         redact: "Redact",
         block: "Block",
         allow: "Allow",
       };
       const modeExplain = {
-        redact: "Matched values are replaced; the rest continues.",
+        redact:
+          "Matched values become vault:// markers (unique id per value); write-back restores originals.",
         block: "The whole request is stopped.",
         allow: "Matching content is left alone (free flow).",
       };
-      for (const algo of global.algorithms || []) {
+      for (const algo of policyCache.algorithms) {
         const card = document.createElement("div");
         card.className = `policy-card${algo.enabledGlobally ? "" : " disabled-card"}`;
 
@@ -337,6 +395,7 @@
             : "Turn on Enabled to use this rule."
         }`;
         tip.appendChild(tipMode);
+        const modeBadgeInTitle = title.querySelector(".policy-badge.mode");
         infoBtn.addEventListener("click", (ev) => {
           ev.stopPropagation();
           const open = tip.classList.toggle("open");
@@ -414,15 +473,35 @@
           input.disabled = !algo.enabledGlobally;
           input.addEventListener("change", async () => {
             if (!input.checked) return;
+            input.disabled = true;
+            const prevMode = algo.mode || "redact";
             try {
-              await api("/api/policies/mode", {
+              const resp = await api("/api/policies/mode", {
                 method: "POST",
                 body: JSON.stringify({ algorithmId: algo.id, mode }),
               });
+              const synced = normalizeAlgorithms(resp);
+              if (synced) policyCache.algorithms = synced;
+              algo.mode = mode;
+              const cached = policyCache.algorithms.find((a) => a.id === algo.id);
+              if (cached) cached.mode = mode;
               setPolicyStatus(`${algo.name}: ${modeLabels[mode]}`);
-              await reloadPolicies();
+              if (modeBadgeInTitle) {
+                modeBadgeInTitle.textContent =
+                  modeLabels[mode] || mode || "Redact";
+              }
+              tipMode.textContent = `Current setting: ${modeLabels[mode] || mode}. ${
+                modeExplain[mode] || ""
+              }`;
+              renderCoverageSummary(policyCache.algorithms);
             } catch (err) {
+              for (const m of modes) {
+                const r = modeGroup.querySelector(`input[value="${m}"]`);
+                if (r) r.checked = (prevMode || "redact") === m;
+              }
               setPolicyStatus(String(err.message || err), true);
+            } finally {
+              input.disabled = !algo.enabledGlobally;
             }
           });
           lab.appendChild(input);
@@ -606,17 +685,25 @@
         customize.appendChild(body);
         card.appendChild(customize);
 
-        globalRoot.appendChild(card);
+        policyCards.push(card);
       }
-      if (!(global.algorithms || []).length) {
-        globalRoot.innerHTML = '<p class="sub">No policies registered</p>';
+      if (seq !== policiesLoadSeq) return;
+
+      if (!policyCards.length) {
+        const empty = document.createElement("p");
+        empty.className = "sub";
+        empty.textContent = "No policies registered";
+        globalRoot.replaceChildren(empty);
+      } else {
+        globalRoot.replaceChildren(...policyCards);
       }
 
       renderOverrides();
       setPolicyStatus("");
     } catch (err) {
-      $("policyMeta").textContent = "Could not reach policy API — is the host running?";
-      setPolicyStatus(String(err.message || err), true);
+      if (seq === policiesLoadSeq) {
+        setPolicyStatus(String(err.message || err), true);
+      }
     }
   };
 
@@ -637,7 +724,7 @@
       setPolicyStatus("Choose an agent and policy first", true);
       return;
     }
-    const dup = collectOverrides(policyCache.agents, policyCache.global?.algorithms || []).some(
+    const dup = collectOverrides(policyCache.agents, policyCache.algorithms).some(
       (r) => r.agentId === agentId && r.algorithmId === algorithmId,
     );
     if (dup) {
@@ -794,6 +881,12 @@
     } finally {
       if (poll) clearInterval(poll);
       btn.disabled = false;
+    }
+  });
+
+  window.saaridge?.onSettingsPane?.((pane) => {
+    if (pane === "policies" || pane === "microphone" || pane === "resources") {
+      showPane(pane);
     }
   });
 

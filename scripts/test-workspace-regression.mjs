@@ -30,6 +30,140 @@ const { ok, fail, skip, section, done } = createRunner("workspace-regression");
 const dockerEnabled =
   process.env.TEST_WORKSPACE_SKIP_DOCKER !== "1" && dockerBoxRunning();
 
+section("source: bridge control plane never rides the egress proxy");
+try {
+  const shim = fs.readFileSync(
+    path.join(ROOT, "container", "host-bin", "curl"),
+    "utf8",
+  );
+  if (!/--noproxy/.test(shim)) {
+    throw new Error(
+      "curl shim must exempt the bridge host (BRIDGE_URL) from --proxy",
+    );
+  }
+  if (!/BRIDGE_URL/.test(shim)) {
+    throw new Error("curl shim no-proxy list must be derived from BRIDGE_URL");
+  }
+  const watchdog = fs.readFileSync(
+    path.join(ROOT, "container", "hostfs-watchdog.sh"),
+    "utf8",
+  );
+  // /opt/bridge/host-bin can precede /usr/bin on PATH; a bare `curl` there is
+  // the shim, which proxied invalidation polls into permanent failure.
+  if (!/BRIDGE_CURL/.test(watchdog)) {
+    throw new Error("watchdog must call a non-shim curl for bridge polling");
+  }
+  if (/^\s*curl -sf -m 3 \\/m.test(watchdog)) {
+    throw new Error("watchdog fs/events poll must not use PATH-resolved curl");
+  }
+  if (!/rust_supports_policy_invalidate/.test(watchdog)) {
+    throw new Error(
+      "watchdog must check the Rust mount for policy-invalidation support",
+    );
+  }
+  // Grepping the binary for the marker is not a valid probe (the optimiser drops
+  // the literal), so the check must go through the binary's own capability flag.
+  if (!/--capabilities/.test(watchdog)) {
+    throw new Error(
+      "watchdog capability check must run `saaridge-hostfs --capabilities`, not grep the binary",
+    );
+  }
+  ok("bridge polling bypasses the egress proxy + Rust capability checked");
+} catch (e) {
+  fail("bridge control-plane proxy exemption", e);
+}
+
+// Mediated text can be longer than the file on disk (a vault:// marker replaces a
+// shorter email). The kernel sizes a read from the attribute it already cached, so
+// a policy change must reach the mount *before* the next read or it hands back a
+// truncated, unresolvable marker.
+section("source: policy invalidation reaches the mount before the next read");
+try {
+  const watchdog = fs.readFileSync(
+    path.join(ROOT, "container", "hostfs-watchdog.sh"),
+    "utf8",
+  );
+  const rust = fs.readFileSync(
+    path.join(ROOT, "container", "hostfs-rust", "src", "main.rs"),
+    "utf8",
+  );
+  const memo = fs.readFileSync(
+    path.join(ROOT, "host", "bridge", "data", "fs-memo.js"),
+    "utf8",
+  );
+
+  // A restarted bridge renumbers events from 1; a high watermark hid them all.
+  if (/"\$nxt" -gt 0/.test(watchdog)) {
+    throw new Error(
+      "watchdog must adopt the server event watermark even when it moves backwards",
+    );
+  }
+  if (!/EVENTS_EPOCH/.test(watchdog) || !/epoch/.test(memo)) {
+    throw new Error("bridge must publish an epoch and the watchdog must track it");
+  }
+  // The mount only drains the invalidate file while serving a request.
+  if (!/ls "\$MOUNT"/.test(watchdog)) {
+    throw new Error(
+      "watchdog must nudge the mount after writing invalidations so the drain happens before the next client read",
+    );
+  }
+  // Clearing the mount's own maps leaves the kernel's cached attrs in place.
+  if (!/notify_kernel_many/.test(rust)) {
+    throw new Error(
+      "policy invalidation must also invalidate the kernel's cached attrs",
+    );
+  }
+  if (!/verified/.test(rust)) {
+    throw new Error(
+      "listing-derived sizes must be marked unverified so they cannot clobber a stat-derived mediated size",
+    );
+  }
+  ok("invalidation lands before the next read (watermark, nudge, kernel inval)");
+} catch (e) {
+  fail("policy invalidation delivery", e);
+}
+
+// A bare `pkill -f <pattern>` inside `docker exec bash -c "...<pattern>..."`
+// matches the exec's own command line and SIGTERMs the shell (exit 143), so
+// every later command in the chain silently never runs. That is how an updated
+// hostfs-watchdog.sh could be copied in but never actually restarted.
+section("source: docker exec kill patterns must not self-match");
+try {
+  const offenders = [];
+  for (const rel of [
+    path.join("host", "lib", "desktop.js"),
+    path.join("host", "lib", "stream-stack.js"),
+    path.join("scripts", "test-data-plane.mjs"),
+    path.join("scripts", "test-workspace-regression.mjs"),
+  ]) {
+    const src = fs.readFileSync(path.join(ROOT, rel), "utf8");
+    for (const line of src.split("\n")) {
+      const trimmed = line.trim();
+      // Prose about the bug is not the bug.
+      if (trimmed.startsWith("//") || trimmed.startsWith("#") || trimmed.startsWith("*")) {
+        continue;
+      }
+      // Capture the whole pattern, quoted or bare — the bracket may sit anywhere
+      // in it (e.g. 'python3 /opt/bridge/[h]ostfs-fuse.py').
+      const m =
+        /p(?:kill|grep) -f\s+(?:'([^']*)'|\\?"((?:[^"\\]|\\.)*)\\?"|(\S+))/.exec(line);
+      if (!m) continue;
+      const pattern = m[1] ?? m[2] ?? m[3] ?? "";
+      // `[x]` anywhere in the pattern breaks the literal self-match.
+      if (/\[[^\]]\]/.test(pattern)) continue;
+      offenders.push(`${rel}: ${trimmed}`);
+    }
+  }
+  if (offenders.length) {
+    throw new Error(
+      `kill/match patterns need a [x] bracket to avoid self-match:\n  ${offenders.join("\n  ")}`,
+    );
+  }
+  ok("all docker exec pkill/pgrep patterns use the [x] self-match guard");
+} catch (e) {
+  fail("docker exec kill pattern self-match", e);
+}
+
 section("keyboard");
 try {
   const kb = runNodeScript("scripts/test-keyboard.mjs", { cwd: ROOT });
@@ -74,10 +208,12 @@ if (!dockerEnabled) {
 
   section("container FUSE orphan guard");
   try {
+    // `pgrep -fc` prints 0 AND exits 1, so `|| echo 0` yields two lines -> NaN.
+    // Count the Rust mount too; [s] stops pgrep matching this probe's own shell.
     const fuseCount = Number(
       dockerExec(
-        String.raw`pgrep -fc 'python3 /opt/bridge/hostfs-fuse\.py /host' 2>/dev/null || echo 0`,
-      ),
+        String.raw`pgrep -f '(/opt/bridge/[s]aaridge-hostfs|python3.*hostfs-fuse[.]py)' 2>/dev/null | wc -l | tr -d ' '`,
+      ).trim(),
     );
     if (!Number.isFinite(fuseCount) || fuseCount < 1 || fuseCount > 2) {
       throw new Error(`expected 1-2 live FUSE processes, got ${fuseCount}`);
@@ -85,6 +221,59 @@ if (!dockerEnabled) {
     ok(`FUSE process count healthy (${fuseCount})`);
   } catch (e) {
     fail("container FUSE orphan guard", e);
+  }
+
+  // Invalidation is how a policy change reaches already-cached file bytes. When
+  // this channel dies the container keeps serving pre-policy content (the
+  // "still shows [EMAIL] after switching to Redact" class of bug).
+  section("container FUSE invalidation channel");
+  try {
+    // The bridge Data API must be reachable directly. Routing it through the
+    // agent egress proxy fails with ENOTFOUND host.docker.internal on the host.
+    const out = dockerExec(
+      String.raw`TOK=$(python3 -c 'import json;print(json.load(open("/home/browser/.bridge-credentials")).get("token",""))' 2>/dev/null); ` +
+        `[ -n "$TOK" ] || { echo NO_TOKEN; exit 0; }; ` +
+        `/usr/bin/curl -s -o /dev/null -w '%{http_code}' -m 8 --noproxy '*' ` +
+        `-H "Authorization: Bearer $TOK" "\${BRIDGE_URL:-http://host.docker.internal:7331}/v1/fs/events?since=0"`,
+    ).trim();
+    if (out === "NO_TOKEN") {
+      skip("fs/events reachability", "container has no bridge credentials yet");
+    } else if (out !== "200") {
+      throw new Error(`GET /v1/fs/events from container returned ${out}, want 200`);
+    } else {
+      ok("container reaches /v1/fs/events directly (not via egress proxy)");
+    }
+  } catch (e) {
+    fail("container FUSE invalidation channel", e);
+  }
+
+  section("active FUSE mount understands policy invalidation");
+  try {
+    // Rust is baked into the image, so a stale image silently ignores the marker.
+    // Ask the binary instead of grepping it for "__saaridge_policy__": the Rust
+    // optimiser folds short literal comparisons into immediates and drops them
+    // from .rodata, so the string is absent even when the handling is present.
+    const impl = dockerExec(
+      String.raw`if pgrep -f '/opt/bridge/[s]aaridge-hostfs' >/dev/null 2>&1; then echo rust; ` +
+        String.raw`elif pgrep -f 'python3.*hostfs-fuse[.]py' >/dev/null 2>&1; then echo python; ` +
+        `else echo none; fi`,
+    ).trim();
+    if (impl === "none") {
+      throw new Error("no FUSE mount process is running");
+    }
+    const supports = dockerExec(
+      impl === "rust"
+        ? `/opt/bridge/saaridge-hostfs --capabilities 2>/dev/null | grep -qx policy-invalidate && echo yes || echo no`
+        : `grep -qa '__saaridge_policy__' /opt/bridge/hostfs-fuse.py && echo yes || echo no`,
+    ).trim();
+    if (supports !== "yes") {
+      throw new Error(
+        `${impl} FUSE does not support policy invalidation — policy changes will serve stale bytes`,
+      );
+    }
+    ok(`active ${impl} FUSE supports policy invalidation`);
+  } catch (e) {
+    fail("active FUSE policy invalidation support", e);
   }
 
   section("source: FUSE never tree-hydrates /host/home");
@@ -166,9 +355,14 @@ PY`,
   } else {
     try {
       try {
-        dockerExec("pkill -f 'python3 /opt/bridge/hostfs-fuse.py /host' || true", {
-          timeoutMs: 5000,
-        });
+        // Kill whichever mount is active (Rust is the default), and use `[x]`
+        // so pkill does not match this exec's own command line and SIGTERM the
+        // shell before the kill runs — that made this test pass vacuously.
+        dockerExec(
+          "pkill -f '/opt/bridge/[s]aaridge-hostfs' 2>/dev/null; " +
+            "pkill -f 'python3 /opt/bridge/[h]ostfs-fuse.py /host' 2>/dev/null; true",
+          { timeoutMs: 5000 },
+        );
       } catch {
         /* pkill may exit non-zero when process already dead */
       }

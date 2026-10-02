@@ -52,7 +52,7 @@ export const POLICY_CATALOG = [
     description:
       "Stops assistants from seeing emails, phones, and labeled personal details.",
     info:
-      "Looks for personal details in files and network text. Redact replaces matches with markers like [EMAIL]. Block cancels the request. Allow lets them through.",
+      "Looks for personal details in files and network text. Redact stores values in the vault and shows vault:// markers (with entity in the id). Block cancels the request. Allow lets them through.",
     defaultMode: "redact",
     allowModes: ["redact", "block", "allow"],
     defaultEnabled: false,
@@ -98,7 +98,7 @@ export const POLICY_CATALOG = [
     name: "Words I Protect",
     description: "Protect exact words or phrases you add (names, codes, etc.).",
     info:
-      "Add names or phrases that should never reach an assistant. Redact replaces them with [PROTECTED]. Block cancels the request. Allow turns this list off.",
+      "Add names or phrases that should never reach an assistant. Redact stores them in the vault with vault:// markers. Block cancels the request. Allow turns this list off.",
     defaultMode: "redact",
     allowModes: ["redact", "block", "allow"],
     defaultEnabled: false,
@@ -160,23 +160,52 @@ const applySpans = ({
   agentId,
   data,
   spans,
-  redactStyle = "mask",
+  redactStyle = "vault",
+  ctx,
 }) => {
-  if (!spans.length || mode === "allow") {
+  let fused = spans;
+  if (redactStyle === "vault" && ctx?.direction === "egress" && ctx?.agentId) {
+    const text = asText(data);
+    try {
+      const values = Array.isArray(ctx?.meta?.vaultPlainValues)
+        ? ctx.meta.vaultPlainValues
+        : vault.listPlainValues(ctx.agentId);
+      fused = [...spans, ...detectVaultReleak(text, values)];
+    } catch {
+      /* ignore vault errors */
+    }
+  }
+  if (!fused.length || mode === "allow") {
     return { action: "allow", data };
   }
   if (mode === "block") {
     return {
       action: "deny",
-      reason: `Blocked by ${policyId} (${spans[0].entity})`,
+      reason: `Blocked by ${policyId} (${fused[0].entity})`,
+      data: "",
+    };
+  }
+  let effectiveMode = mode;
+  if (
+    mode === "redact" &&
+    ctx?.channel === "net" &&
+    ctx?.direction === "egress" &&
+    fused.length
+  ) {
+    effectiveMode = "block";
+  }
+  if (effectiveMode === "block") {
+    return {
+      action: "deny",
+      reason: `Blocked by ${policyId} (${fused[0].entity})`,
       data: "",
     };
   }
   const text = asText(data);
   const next =
     redactStyle === "vault"
-      ? vaultReplaceSpans(agentId, text, spans)
-      : maskSpans(text, spans);
+      ? vaultReplaceSpans(agentId, text, fused)
+      : maskSpans(text, fused);
   return {
     action: next === text ? "allow" : "rewrite",
     data: maybeBuffer(data, next),
@@ -242,35 +271,14 @@ export const createContentPolicies = (
       const spans = detectSecretsByCategories(text, cats).filter(
         (s) => !text.slice(s.start, s.end).startsWith("vault://"),
       );
-      if (
-        cats.includes("vault_releak") &&
-        ctx.direction === "egress" &&
-        ctx.agentId
-      ) {
-        try {
-          const values = vault.listPlainValues(ctx.agentId);
-          spans.push(...detectVaultReleak(text, values));
-        } catch {
-          /* ignore vault errors */
-        }
-      }
-      const fused = spans;
-      let effectiveMode = mode;
-      if (
-        mode === "redact" &&
-        ctx.channel === "net" &&
-        ctx.direction === "egress" &&
-        fused.length
-      ) {
-        effectiveMode = "block";
-      }
       return applySpans({
-        mode: effectiveMode,
+        mode,
         policyId: this.id,
         agentId: ctx.agentId,
         data: ctx.data,
-        spans: fused,
+        spans,
         redactStyle: "vault",
+        ctx,
       });
     },
   };
@@ -298,7 +306,8 @@ export const createContentPolicies = (
         agentId: ctx.agentId,
         data: ctx.data,
         spans,
-        redactStyle: "mask",
+        redactStyle: "vault",
+        ctx,
       });
     },
   };
@@ -326,7 +335,8 @@ export const createContentPolicies = (
         agentId: ctx.agentId,
         data: ctx.data,
         spans,
-        redactStyle: "mask",
+        redactStyle: "vault",
+        ctx,
       });
     },
   };
@@ -421,7 +431,8 @@ export const createContentPolicies = (
         agentId: ctx.agentId,
         data: ctx.data,
         spans,
-        redactStyle: "mask",
+        redactStyle: "vault",
+        ctx,
       });
     },
   };
@@ -455,7 +466,8 @@ export const createContentPolicies = (
         agentId: ctx.agentId,
         data: ctx.data,
         spans,
-        redactStyle: "mask",
+        redactStyle: "vault",
+        ctx,
       });
     },
   };

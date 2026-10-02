@@ -30,7 +30,7 @@ if (!token) {
 const proxyAuth =
   "Basic " + Buffer.from(`${agentId}:${token}`, "utf8").toString("base64");
 
-const VAULT_REF_RE = /vault:\/\/[a-f0-9]+/i;
+const VAULT_REF_RE = /vault:\/\/[a-z0-9][a-z0-9_-]*/i;
 
 const hasVaultRefs = (value) => VAULT_REF_RE.test(String(value ?? ""));
 

@@ -6,8 +6,13 @@
 const EMAIL =
   /(?<![\w.+-])[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@(?:[A-Z0-9-]+\.)+[A-Z]{2,63}(?![\w-])/gi;
 
+// Only genuinely disguised forms. A *bare* `@` belongs to EMAIL, which Protect
+// Personal Data owns: matching it here made Stop Data Smuggling redact ordinary
+// emails too, so setting Protect Personal Data to Allow had no visible effect.
+// A spaced `name @ domain.com` is still a filter dodge, so `@` counts only when
+// whitespace sits next to it — hence `\s@` / `@\s` rather than plain `@`.
 const EMAIL_OBFUSCATED =
-  /(?<![\w.+-])([A-Z0-9.!#$%&'*+/=?^_`{|}~-]{1,64})\s*(?:\[at\]|\(at\)|\sat\s|@)\s*((?:[A-Z0-9-]+\.)+[A-Z]{2,63})(?![\w-])/gi;
+  /(?<![\w.+-])([A-Z0-9.!#$%&'*+/=?^_`{|}~-]{1,64})\s*(?:\[at\]|\(at\)|\sat\s|\s@|@\s)\s*((?:[A-Z0-9-]+\.)+[A-Z]{2,63})(?![\w-])/gi;
 
 const PHONE =
   /(?<!\w)(?:\+\d{1,3}[\s().-]?)?(?:\(?\d{1,4}\)?[\s.-]?){2,6}\d{1,4}(?!\w)/g;

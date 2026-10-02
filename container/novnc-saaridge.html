@@ -347,7 +347,10 @@
       resizeTimer = setTimeout(syncDesktopToViewer, ms);
     };
 
+    let connectGeneration = 0;
+
     function connect() {
+      const generation = ++connectGeneration;
       if (rfb) {
         try { rfb.disconnect(); } catch (_) {}
         rfb = null;
@@ -416,13 +419,24 @@
         }
         setTimeout(grabKeyboardLocal, 60);
       });
-      rfb.addEventListener("disconnect", (e) => {
-        if (!e.detail.clean) setTimeout(connect, 800);
+      rfb.addEventListener("disconnect", () => {
+        // Display sleep often closes the websocket with a clean status.
+        // Reconnecting only on unclean closes left a blank canvas after unlock.
+        // A newer connect() bumps connectGeneration so this socket is ignored.
+        if (generation !== connectGeneration) return;
+        setTimeout(() => {
+          if (generation !== connectGeneration) return;
+          connect();
+        }, 600);
       });
       rfb.addEventListener("credentialsrequired", () => {
         rfb.sendCredentials({ password: "" });
       });
     }
+
+    window.__saaridgeDisplayWake = () => {
+      connect();
+    };
 
     window.addEventListener("resize", () => scheduleSync(150));
     if (typeof ResizeObserver !== "undefined") {
@@ -474,8 +488,22 @@
       true,
     );
     window.addEventListener("focus", grabKeyboard);
+    let hiddenAt = 0;
     document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) grabKeyboard();
+      if (document.hidden) {
+        hiddenAt = Date.now();
+        return;
+      }
+      const awayMs = hiddenAt ? Date.now() - hiddenAt : 0;
+      hiddenAt = 0;
+      // A short occlusion (a dialog) should not drop the framebuffer.
+      // Lock / display sleep hides the page long enough that the canvas
+      // backing store is gone even if the RFB socket still looks connected.
+      if (awayMs >= 1500) {
+        connect();
+        return;
+      }
+      grabKeyboard();
     });
 
     connect();

@@ -402,6 +402,7 @@
         background: #0b100e;
       }
       .mode-group label {
+        position: relative;
         display: inline-flex;
         align-items: center;
         justify-content: center;
@@ -427,8 +428,14 @@
         color: var(--accent);
         font-weight: 600;
       }
+      /* Must stay inside its label: an unanchored absolute input lays out against
+         the document, and focusing it scrolls the overflow:hidden root off-screen. */
       .mode-group input {
         position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        margin: 0;
         opacity: 0;
         pointer-events: none;
       }

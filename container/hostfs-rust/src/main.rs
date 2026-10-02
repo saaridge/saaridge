@@ -27,6 +27,13 @@ const BODY_MAX_FILE: usize = 2 * 1024 * 1024;
 const BODY_MAX_TOTAL: usize = 64 * 1024 * 1024;
 const BLOCK_SIZE: u64 = 4096;
 
+// Reported by `saaridge-hostfs --capabilities` so the watchdog can detect a
+// binary from an older image that silently lacks a feature it depends on.
+// Grepping the binary for the feature's string literal does not work: the
+// optimiser folds short literal comparisons into immediate loads and drops
+// them from .rodata. These tokens are printed, so they always survive.
+static CAPABILITIES: &[&str] = &["policy-invalidate", "path-invalidate"];
+
 static EXCLUDES: &[&str] = &[
     "node_modules",
     ".npm",
@@ -139,6 +146,26 @@ struct EntryMeta {
     is_dir: bool,
     size: u64,
     mtime_ms: f64,
+    /// True when the size came from a per-file stat, which reports the *mediated*
+    /// length. Directory listings carry raw host sizes, and mediated text can be
+    /// longer (a `vault://` marker replaces a shorter email), so a listing must
+    /// never overwrite a verified size: the kernel clamps reads to attr.size and
+    /// would hand out a truncated, unresolvable marker.
+    verified: bool,
+}
+
+/// Merge a listing entry over whatever is cached. A listing reports the raw host
+/// size, so when a per-file stat already established the mediated size, keep it —
+/// otherwise the next read gets clamped to the shorter raw length.
+fn keep_verified_size(cached: Option<&EntryMeta>, fresh: EntryMeta) -> EntryMeta {
+    match cached {
+        Some(prev) if prev.verified && !fresh.is_dir && !prev.is_dir => EntryMeta {
+            size: prev.size,
+            verified: true,
+            ..fresh
+        },
+        _ => fresh,
+    }
 }
 
 struct DirListing {
@@ -230,6 +257,12 @@ impl BodyMemo {
         for k in keys {
             self.drop(&k);
         }
+    }
+
+    fn clear_all(&mut self) {
+        self.map.clear();
+        self.order.clear();
+        self.bytes = 0;
     }
 }
 
@@ -385,6 +418,30 @@ impl HostFs {
             if host_p.is_empty() {
                 continue;
             }
+            if matches!(
+                host_p,
+                "__saaridge_policy__" | "__policy__" | "@policy" | "/"
+            ) {
+                // Clearing our own maps is not enough: the kernel caches attrs and
+                // page contents independently, and it sizes a read from the attr it
+                // already holds. A policy change can make the mediated text longer
+                // (a `vault://` marker replaces a shorter email), so without an
+                // explicit invalidation the next read is clamped to the old size and
+                // returns a cut-off marker. Policy changes are rare, so tell the
+                // kernel to drop every file it knows about.
+                let files: Vec<String> = {
+                    let meta = self.meta.lock();
+                    meta.iter()
+                        .filter(|(_, m)| !m.is_dir)
+                        .map(|(p, _)| p.clone())
+                        .collect()
+                };
+                self.body.lock().clear_all();
+                self.dirs.lock().clear();
+                self.meta.lock().clear();
+                self.notify_kernel_many(&files);
+                continue;
+            }
             if let Some(fuse_p) = self.host_abs_to_fuse(host_p) {
                 // External change (MCP/API/other client): bust + kernel inval so
                 // open editors re-stat/re-read mediated host bytes.
@@ -403,6 +460,7 @@ impl HostFs {
                         .unwrap_or(false),
                     size: info.get("size").and_then(|v| v.as_u64()).unwrap_or(0),
                     mtime_ms: info.get("mtimeMs").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                    verified: true,
                 };
                 self.remember_ino(fuse_path);
                 self.meta.lock().insert(fuse_path.to_string(), m);
@@ -411,6 +469,53 @@ impl HostFs {
                 self.meta.lock().remove(fuse_path);
             }
         }
+    }
+
+    /// Entry needed to invalidate one path in the kernel's caches.
+    fn inval_target(&self, fuse_path: &str) -> (u64, u64, Option<std::ffi::OsString>) {
+        let ino = self.remember_ino(fuse_path);
+        let mut parent_ino = 0u64;
+        let mut name_owned: Option<std::ffi::OsString> = None;
+        if let Some(name) = Path::new(fuse_path).file_name() {
+            let parent = Path::new(fuse_path)
+                .parent()
+                .map(|p| {
+                    let s = p.to_string_lossy();
+                    if s.is_empty() {
+                        "/".to_string()
+                    } else {
+                        s.to_string()
+                    }
+                })
+                .unwrap_or_else(|| "/".into());
+            parent_ino = self.remember_ino(&parent);
+            name_owned = Some(name.to_os_string());
+        }
+        (ino, parent_ino, name_owned)
+    }
+
+    /// Invalidate many paths from a single thread. One thread per path would be
+    /// thousands of threads after a policy change.
+    fn notify_kernel_many(&self, fuse_paths: &[String]) {
+        if fuse_paths.is_empty() {
+            return;
+        }
+        let targets: Vec<_> = fuse_paths.iter().map(|p| self.inval_target(p)).collect();
+        let notifier = Arc::clone(&self.notifier);
+        // Never notify on the FUSE request thread — inval while the kernel is
+        // waiting for this reply can deadlock the mount.
+        std::thread::spawn(move || {
+            let guard = notifier.lock();
+            let Some(n) = guard.as_ref() else {
+                return;
+            };
+            for (ino, parent_ino, name) in targets {
+                let _ = n.inval_inode(ino, 0, 0);
+                if let Some(name) = name.as_ref() {
+                    let _ = n.inval_entry(parent_ino, name);
+                }
+            }
+        });
     }
 
     fn notify_kernel(&self, fuse_path: &str) {
@@ -487,6 +592,7 @@ impl HostFs {
                     is_dir: if leaf { is_dir } else { true },
                     size: if leaf { size } else { 0 },
                     mtime_ms: if leaf { mtime_ms } else { 0.0 },
+                    verified: false,
                 };
                 by_parent
                     .entry(parent.clone())
@@ -503,6 +609,7 @@ impl HostFs {
                 is_dir: true,
                 size: 0,
                 mtime_ms: 0.0,
+                verified: true,
             },
         );
         for (parent, names) in by_parent {
@@ -510,6 +617,7 @@ impl HostFs {
             for (name, m) in names {
                 let child = Self::child(&parent, &name);
                 self.remember_ino(&child);
+                let m = keep_verified_size(meta_map.get(&child), m);
                 meta_map.insert(child, m.clone());
                 list.push((name, m));
             }
@@ -556,9 +664,11 @@ impl HostFs {
                             .unwrap_or(false),
                         size: e.get("size").and_then(|v| v.as_u64()).unwrap_or(0),
                         mtime_ms: e.get("mtimeMs").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                        verified: false,
                     };
                     let child = Self::child(fuse_dir, name);
                     self.remember_ino(&child);
+                    let m = keep_verified_size(meta_map.get(&child), m);
                     meta_map.insert(child, m.clone());
                     list.push((name.to_string(), m));
                 }
@@ -569,6 +679,7 @@ impl HostFs {
                     is_dir: true,
                     size: 0,
                     mtime_ms: 0.0,
+                    verified: true,
                 },
             );
             drop(meta_map);
@@ -624,6 +735,7 @@ impl HostFs {
                 .unwrap_or(false),
             size: info.get("size").and_then(|v| v.as_u64()).unwrap_or(0),
             mtime_ms: info.get("mtimeMs").and_then(|v| v.as_f64()).unwrap_or(0.0),
+            verified: true,
         };
         self.remember_ino(fuse);
         self.meta.lock().insert(fuse.to_string(), m.clone());
@@ -696,6 +808,18 @@ impl Filesystem for HostFs {
         ) {
             reply.attr(&TTL, &mk_attr(ino, true, 0, 0.0, self.uid, self.gid));
             return;
+        }
+        // A directory listing only knows the raw host size, and the kernel clamps
+        // reads to the attr size it gets here — which would truncate mediated text
+        // that grew into an unresolvable `vault://` fragment. Pay for one stat when
+        // the cached size is not yet verified. `lookup` deliberately keeps using the
+        // listing, so `ls -l` stays a single round trip per directory.
+        let cached_unverified = {
+            let meta = self.meta.lock();
+            matches!(meta.get(&path), Some(m) if !m.verified && !m.is_dir)
+        };
+        if cached_unverified {
+            self.refresh_meta(&path);
         }
         match self.stat_path(&path) {
             Ok(m) => reply.attr(
@@ -801,10 +925,29 @@ impl Filesystem for HostFs {
         }
         match self.ipc.read(&self.host_path(&path), off, Some(size as u64)) {
             Ok(data) => {
+                // Mediated text can be longer than the bytes on the host disk: a
+                // `vault://email-<hex>` marker replaces a shorter address. The
+                // kernel clamps a read to the attr size it last saw, and
+                // stat_path serves cached metadata, so that stale smaller size
+                // would keep handing out a cut-off marker that nothing can
+                // resolve. Adopt the mediated length and let the kernel re-stat.
+                let mut gen_size = meta.size;
+                if off == 0 && (data.len() as u64) > meta.size {
+                    gen_size = data.len() as u64;
+                    self.meta.lock().insert(
+                        path.clone(),
+                        EntryMeta {
+                            size: gen_size,
+                            verified: true,
+                            ..meta.clone()
+                        },
+                    );
+                    self.notify_kernel(&path);
+                }
                 if want_full && data.len() <= BODY_MAX_FILE {
                     self.body
                         .lock()
-                        .put(&path, data.clone(), meta.mtime_ms, meta.size);
+                        .put(&path, data.clone(), meta.mtime_ms, gen_size);
                 }
                 reply.data(&data);
             }
@@ -1035,9 +1178,15 @@ fn load_credentials() -> (String, String, String) {
 }
 
 fn main() {
+    let arg1 = std::env::args().nth(1);
+    if arg1.as_deref() == Some("--capabilities") {
+        for cap in CAPABILITIES {
+            println!("{cap}");
+        }
+        return;
+    }
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    let mount = std::env::args()
-        .nth(1)
+    let mount = arg1
         .or_else(|| std::env::var("HOSTFS_MOUNT").ok())
         .unwrap_or_else(|| "/host".into());
     let (bridge, token, agent_id) = load_credentials();

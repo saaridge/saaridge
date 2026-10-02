@@ -552,6 +552,12 @@ BODY_MEMO_MAX_TOTAL = int(
     os.environ.get("SAARIDGE_BODY_MEMO_TOTAL", str(64 * 1024 * 1024))
 )
 META_TTL_SEC = float(os.environ.get("HOSTFS_META_TTL", "15") or "15")
+POLICY_BUST_MARKERS = frozenset(
+    {"__saaridge_policy__", "__policy__", "@policy", "/"}
+)
+LEGACY_REDACT_PLACEHOLDER_RE = __import__("re").compile(
+    rb"\[(EMAIL|PHONE|PROTECTED|CARD|CVV|SECRET|PRIVATE_KEY|NAME|ADDRESS|DATE|ID|REF|REDACTED|ENCODED)\]"
+)
 
 
 class _BodyMemo:
@@ -741,6 +747,11 @@ class HostFS(Fuse):
         for line in lines:
             host_p = line.strip()
             if not host_p:
+                continue
+            if host_p in POLICY_BUST_MARKERS:
+                self._bust()
+                sys.stderr.write("[hostfs-fuse] events-bust ALL (policy change)\n")
+                sys.stderr.flush()
                 continue
             fuse_p = self._host_abs_to_fuse(host_p)
             if fuse_p:
@@ -1095,6 +1106,9 @@ class HostFS(Fuse):
         )
         if want_full and size > 0 and size <= BODY_MEMO_MAX_FILE:
             hit = self._body_memo.get(p, mtime_ms, size)
+            if hit is not None and LEGACY_REDACT_PLACEHOLDER_RE.search(hit):
+                self._body_memo.bust(p)
+                hit = None
             if hit is not None:
                 if length is not None and int(length) > 0:
                     return hit[: int(length)]

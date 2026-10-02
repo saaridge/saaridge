@@ -8,6 +8,7 @@ import {
   filterBridgeStateListing,
 } from "./policy.js";
 import { transformRead, transformWrite, transformList } from "./transform.js";
+import { shouldProcessFsText } from "../transformers/text.js";
 import { audit } from "./audit.js";
 import { acquire, release } from "./limits.js";
 import * as store from "./store.js";
@@ -23,6 +24,19 @@ import * as fsMemo from "./fs-memo.js";
 /** Match FUSE default tree hydrate depth. */
 const WARM_TREE_DEPTH = Number(process.env.HOSTFS_TREE_DEPTH || 4) || 4;
 const WARM_TREE_MAX = Number(process.env.HOSTFS_TREE_MAX || 8000) || 8000;
+
+/** Old mask-style redaction; re-transform after vault policy upgrade. */
+const LEGACY_REDACT_PLACEHOLDER =
+  /\[(EMAIL|PHONE|PROTECTED|CARD|CVV|SECRET|PRIVATE_KEY|NAME|ADDRESS|DATE|ID|REF|REDACTED|ENCODED)\]/;
+
+const bodyMemoHasLegacyPlaceholders = (buf) => {
+  if (!buf?.length) return false;
+  try {
+    return LEGACY_REDACT_PLACEHOLDER.test(buf.toString("utf8"));
+  } catch {
+    return false;
+  }
+};
 
 const withLimit = async (agent, op, fn) => {
   const id = agent?.id;
@@ -237,11 +251,61 @@ export const tree = async (
   });
 };
 
+/**
+ * A FUSE client has already cached attr.size from the raw file, and the kernel
+ * will not read past it. Once mediation turns out to change the length, tell the
+ * client to re-stat so it picks up the mediated size instead of serving a
+ * truncated body for the duration of its attribute TTL.
+ */
+/**
+ * Mediated bytes for a whole text file, from the memo when possible. Returns
+ * null when the file is not whole-file mediated (binary, too large) or when
+ * mediation fails — callers then fall back to the raw host view.
+ */
+const mediatedBody = async (agent, real, info) => {
+  const memoized = fsMemo.getBodyMemo(real, info.mtimeMs, info.size);
+  if (memoized) return memoized;
+  if (!(info.isFile && info.size > 0 && info.size <= fsMemo.bodyMemoMaxFile())) {
+    return null;
+  }
+  if (!shouldProcessFsText(real, Buffer.alloc(0))) return null;
+  try {
+    let full = await store.readChunk(real, 0, info.size);
+    full = await transformRead(agent, real, full);
+    if (!Buffer.isBuffer(full)) full = Buffer.from(String(full), "utf8");
+    fsMemo.setBodyMemo(real, full, info.mtimeMs, info.size);
+    return full;
+  } catch {
+    // A denied or failing read must not break stat; report the raw size.
+    return null;
+  }
+};
+
+const noteMediatedSize = (realPath, mediatedLength, rawSize) => {
+  if (mediatedLength === rawSize) return;
+  try {
+    fsMemo.pushEvent(realPath, "mediated-size");
+  } catch {
+    /* invalidation is best-effort */
+  }
+};
+
 export const stat = async (agent, inputPath) => {
   return withLimit(agent, "stat", async () => {
     try {
       const { real } = assertReadable(agent, inputPath);
       const info = await store.statPath(real);
+      // FUSE turns this size into attr.size and the kernel refuses to read past
+      // it, so a raw size would clamp mediated text that grew (vault:// markers
+      // are longer than the emails they replace) and hand out a cut-off marker.
+      // Mediate now when the answer is not already memoized, otherwise the very
+      // first read after a policy change — the only read an agent may do — gets
+      // the truncated body. The work is not wasted: it fills the read memo.
+      const mediated = await mediatedBody(agent, real, info);
+      if (mediated && mediated.length !== info.size) {
+        auditOk(agent, "stat", { path: real, mediatedSize: mediated.length });
+        return { ...info, size: mediated.length, rawSize: info.size };
+      }
       auditOk(agent, "stat", { path: real });
       return info;
     } catch (err) {
@@ -282,46 +346,55 @@ export const read = async (
       }
       const off = Number(offset) || 0;
       const want = Number(len);
+      // "Whole file" means the caller asked for everything, not for exactly the
+      // raw byte count — mediated text may be longer than what is on disk.
+      const wholeFile = off === 0 && want >= info.size;
       let buf;
       let fromMemo = false;
-      const memoBuf = fsMemo.getBodyMemo(real, info.mtimeMs, info.size);
+      let memoBuf = fsMemo.getBodyMemo(real, info.mtimeMs, info.size);
+      if (memoBuf && bodyMemoHasLegacyPlaceholders(memoBuf)) {
+        fsMemo.bust(real, "legacy-placeholder");
+        memoBuf = null;
+      }
       if (memoBuf) {
-        buf = memoBuf.subarray(off, off + want);
+        buf = wholeFile ? memoBuf : memoBuf.subarray(off, off + want);
         fromMemo = true;
       } else {
-        // Full-file read under memo cap → transform once and store.
-        const canMemo =
+        const mediateWholeTextFile =
+          info.size > 0 &&
           info.size <= fsMemo.bodyMemoMaxFile() &&
-          off === 0 &&
-          want >= info.size;
-        if (canMemo) {
+          shouldProcessFsText(real, Buffer.alloc(0));
+        if (mediateWholeTextFile) {
           let full = await store.readChunk(real, 0, info.size);
           full = await transformRead(agent, real, full);
           if (!Buffer.isBuffer(full)) full = Buffer.from(String(full), "utf8");
           fsMemo.setBodyMemo(real, full, info.mtimeMs, info.size);
-          // Whole-file reads must return the full mediated body (rewrite may
-          // change length). Chunked reads still slice by host offset/want.
-          buf =
-            off === 0 && want >= info.size
-              ? full
-              : full.subarray(off, off + want);
+          noteMediatedSize(real, full.length, info.size);
+          // Mediation can grow the text (a vault:// marker is longer than the
+          // email it replaces). `want` defaults to the raw host size, so clamping
+          // to it cut the tail off and emitted an unresolvable half marker. A
+          // whole-file read must get the whole mediated body.
+          buf = wholeFile
+            ? full
+            : full.subarray(off, Math.min(off + want, full.length));
         } else {
-          buf = await store.readChunk(real, off, want);
-          buf = await transformRead(agent, real, buf);
-          if (!Buffer.isBuffer(buf)) buf = Buffer.from(String(buf), "utf8");
-          // If we fetched the whole file in one go under cap, memoize.
-          if (
-            off === 0 &&
-            want >= info.size &&
-            info.size <= fsMemo.bodyMemoMaxFile()
-          ) {
-            fsMemo.setBodyMemo(real, buf, info.mtimeMs, info.size);
+          const canMemo = info.size <= fsMemo.bodyMemoMaxFile() && wholeFile;
+          if (canMemo) {
+            let full = await store.readChunk(real, 0, info.size);
+            full = await transformRead(agent, real, full);
+            if (!Buffer.isBuffer(full)) full = Buffer.from(String(full), "utf8");
+            fsMemo.setBodyMemo(real, full, info.mtimeMs, info.size);
+            noteMediatedSize(real, full.length, info.size);
+            buf = full;
+          } else {
+            buf = await store.readChunk(real, off, want);
+            buf = await transformRead(agent, real, buf);
+            if (!Buffer.isBuffer(buf)) buf = Buffer.from(String(buf), "utf8");
+            if (wholeFile && info.size <= fsMemo.bodyMemoMaxFile()) {
+              fsMemo.setBodyMemo(real, buf, info.mtimeMs, info.size);
+            }
           }
         }
-      }
-      // Memo hit: whole-file clients get the full mediated buffer.
-      if (fromMemo && off === 0 && want >= info.size) {
-        buf = memoBuf;
       }
       auditOk(agent, "read", {
         path: real,
