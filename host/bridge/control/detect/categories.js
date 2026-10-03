@@ -126,6 +126,13 @@ export const POLICY_CATEGORIES = {
       description: "Exact matches for phrases you list below.",
     },
   ],
+  "files-i-protect": [
+    {
+      id: "named_files",
+      label: "File names you add",
+      description: "Exact file names (or relative paths) you list below.",
+    },
+  ],
 };
 
 export const defaultCategoryMap = (policyId) => {

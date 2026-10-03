@@ -287,7 +287,11 @@
         }
         if (algo.supportsKnownValues && (algo.knownValues || []).length) {
           const li = document.createElement("li");
-          li.textContent = `Your phrases: ${(algo.knownValues || []).join(", ")}`;
+          const label =
+            algo.knownValuesKind === "filenames"
+              ? "Your files"
+              : "Your phrases";
+          li.textContent = `${label}: ${(algo.knownValues || []).join(", ")}`;
           ul.appendChild(li);
         }
       }
@@ -342,6 +346,13 @@
         allow: "Matching content is left alone (free flow).",
       };
       for (const algo of policyCache.algorithms) {
+        const modes =
+          Array.isArray(algo.allowModes) && algo.allowModes.length
+            ? algo.allowModes
+            : ["redact", "block", "allow"];
+        const hideModes = modes.length <= 1;
+        const isFiles = algo.knownValuesKind === "filenames";
+
         const card = document.createElement("div");
         card.className = `policy-card${algo.enabledGlobally ? "" : " disabled-card"}`;
 
@@ -354,7 +365,7 @@
         onBadge.className = `policy-badge${algo.enabledGlobally ? "" : " off"}`;
         onBadge.textContent = algo.enabledGlobally ? "Enabled" : "Disabled";
         title.appendChild(onBadge);
-        if (algo.enabledGlobally) {
+        if (algo.enabledGlobally && !hideModes) {
           const modeBadge = document.createElement("span");
           modeBadge.className = "policy-badge mode";
           modeBadge.textContent = modeLabels[algo.mode] || algo.mode || "Redact";
@@ -386,14 +397,20 @@
         const tipMode = document.createElement("p");
         tipMode.style.margin = "0.55rem 0 0";
         tipMode.style.color = "#8fa79b";
-        const activeMode = algo.enabledGlobally
-          ? modeLabels[algo.mode] || algo.mode
-          : "Disabled";
-        tipMode.textContent = `Current setting: ${activeMode}. ${
-          algo.enabledGlobally
-            ? modeExplain[algo.mode] || ""
-            : "Turn on Enabled to use this rule."
-        }`;
+        if (hideModes) {
+          tipMode.textContent = algo.enabledGlobally
+            ? "Listed file names are blocked for assistants."
+            : "Turn on Enabled, then add a file name to block it.";
+        } else {
+          const activeMode = algo.enabledGlobally
+            ? modeLabels[algo.mode] || algo.mode
+            : "Disabled";
+          tipMode.textContent = `Current setting: ${activeMode}. ${
+            algo.enabledGlobally
+              ? modeExplain[algo.mode] || ""
+              : "Turn on Enabled to use this rule."
+          }`;
+        }
         tip.appendChild(tipMode);
         const modeBadgeInTitle = title.querySelector(".policy-badge.mode");
         infoBtn.addEventListener("click", (ev) => {
@@ -417,34 +434,36 @@
         desc.textContent = algo.description || "";
         card.appendChild(desc);
 
-        // What this checks — chips
-        const checksLabel = document.createElement("div");
-        checksLabel.className = "control-label";
-        checksLabel.textContent = "What this checks";
-        card.appendChild(checksLabel);
-        const chips = document.createElement("div");
-        chips.className = "chip-row";
-        const enabledCats = (algo.categories || []).filter((c) => c.enabled);
-        if (!enabledCats.length) {
-          const chip = document.createElement("span");
-          chip.className = "chip muted";
-          chip.textContent = "Nothing selected";
-          chips.appendChild(chip);
-        } else {
-          for (const c of enabledCats) {
+        if (!isFiles) {
+          // What this checks — chips
+          const checksLabel = document.createElement("div");
+          checksLabel.className = "control-label";
+          checksLabel.textContent = "What this checks";
+          card.appendChild(checksLabel);
+          const chips = document.createElement("div");
+          chips.className = "chip-row";
+          const enabledCats = (algo.categories || []).filter((c) => c.enabled);
+          if (!enabledCats.length) {
             const chip = document.createElement("span");
-            chip.className = "chip";
-            chip.textContent = c.label;
+            chip.className = "chip muted";
+            chip.textContent = "Nothing selected";
+            chips.appendChild(chip);
+          } else {
+            for (const c of enabledCats) {
+              const chip = document.createElement("span");
+              chip.className = "chip";
+              chip.textContent = c.label;
+              chips.appendChild(chip);
+            }
+          }
+          if (algo.customized) {
+            const chip = document.createElement("span");
+            chip.className = "chip muted";
+            chip.textContent = "Customized";
             chips.appendChild(chip);
           }
+          card.appendChild(chips);
         }
-        if (algo.customized) {
-          const chip = document.createElement("span");
-          chip.className = "chip muted";
-          chip.textContent = "Customized";
-          chips.appendChild(chip);
-        }
-        card.appendChild(chips);
 
         const controls = document.createElement("div");
         controls.className = "controls";
@@ -455,10 +474,6 @@
         modeLabel.textContent = "When found";
         modeCol.appendChild(modeLabel);
 
-        const modes =
-          Array.isArray(algo.allowModes) && algo.allowModes.length
-            ? algo.allowModes
-            : ["redact", "block", "allow"];
         const modeGroup = document.createElement("div");
         modeGroup.className = "mode-group";
         modeGroup.setAttribute("role", "radiogroup");
@@ -509,7 +524,9 @@
           modeGroup.appendChild(lab);
         }
         modeCol.appendChild(modeGroup);
-        controls.appendChild(modeCol);
+        if (!hideModes) {
+          controls.appendChild(modeCol);
+        }
 
         const toggle = document.createElement("label");
         toggle.className = "toggle-row";
@@ -539,13 +556,16 @@
         controls.appendChild(toggle);
         card.appendChild(controls);
 
-        // Customize disclosure
-        const customize = document.createElement("details");
+        // Customize disclosure (not used for filename-only block lists)
+        let customize = null;
+        let body = null;
+        if (!isFiles) {
+        customize = document.createElement("details");
         customize.className = "customize";
         const sum = document.createElement("summary");
         sum.textContent = "Customize what this checks";
         customize.appendChild(sum);
-        const body = document.createElement("div");
+        body = document.createElement("div");
         body.className = "customize-body";
 
         for (const c of algo.categories || []) {
@@ -585,6 +605,7 @@
           row.appendChild(help);
           body.appendChild(row);
         }
+        }
 
         if (algo.supportsKnownValues) {
           const wordsBox = document.createElement("div");
@@ -592,8 +613,9 @@
           const wordsHelp = document.createElement("p");
           wordsHelp.className = "cat-help";
           wordsHelp.style.margin = "0";
-          wordsHelp.textContent =
-            "Add names or phrases (at least 3 characters). Matching text is handled using the When found setting above.";
+          wordsHelp.textContent = isFiles
+            ? "Add a file name (at least 3 characters). That file is blocked for assistants."
+            : "Add names or phrases (at least 3 characters). Matching text is handled using the When found setting above.";
           wordsBox.appendChild(wordsHelp);
 
           const list = document.createElement("ul");
@@ -604,7 +626,9 @@
             if (!values.length) {
               const empty = document.createElement("p");
               empty.className = "words-empty";
-              empty.textContent = "No phrases yet.";
+              empty.textContent = isFiles
+                ? "No file names yet."
+                : "No phrases yet.";
               list.appendChild(empty);
               return;
             }
@@ -644,7 +668,7 @@
           addRow.className = "words-add";
           const input = document.createElement("input");
           input.type = "text";
-          input.placeholder = "e.g. Jane Doe";
+          input.placeholder = isFiles ? "e.g. secrets.txt" : "e.g. Jane Doe";
           input.disabled = !algo.enabledGlobally;
           const addBtn = document.createElement("button");
           addBtn.type = "button";
@@ -679,11 +703,17 @@
           addRow.appendChild(input);
           addRow.appendChild(addBtn);
           wordsBox.appendChild(addRow);
-          body.appendChild(wordsBox);
+          if (isFiles) {
+            card.appendChild(wordsBox);
+          } else {
+            body.appendChild(wordsBox);
+          }
         }
 
-        customize.appendChild(body);
-        card.appendChild(customize);
+        if (!isFiles) {
+          customize.appendChild(body);
+          card.appendChild(customize);
+        }
 
         policyCards.push(card);
       }

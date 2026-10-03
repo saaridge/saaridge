@@ -624,6 +624,31 @@ export const pathLooksSensitive = (filePath, enabledCategories = null) => {
     : new Set(enabledCategories).has(cat);
 };
 
+const normalizePathName = (value) =>
+  String(value || "")
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/^\.\//, "")
+    .replace(/\/+$/, "");
+
+/** True when `filePath` matches a user-listed file name or relative path. */
+export const pathMatchesKnownFiles = (filePath, names) => {
+  const p = normalizePathName(filePath);
+  if (!p) return false;
+  const base = (p.split("/").pop() || p).toLowerCase();
+  const hay = p.toLowerCase();
+  for (const raw of names || []) {
+    const n = normalizePathName(raw).toLowerCase();
+    if (!n) continue;
+    if (n.includes("/")) {
+      if (hay === n || hay.endsWith(`/${n}`)) return true;
+    } else if (base === n) {
+      return true;
+    }
+  }
+  return false;
+};
+
 export const MASK = {
   CREDENTIAL: "[SECRET]",
   PRIVATE_KEY: "[PRIVATE_KEY]",

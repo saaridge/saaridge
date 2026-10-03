@@ -19,15 +19,17 @@ const algorithms = [
   "hide-sensitive-files",
   "stop-data-smuggling",
   "words-i-protect",
+  "files-i-protect",
 ].map((id) => ({
   id,
   name: id,
   description: "Stub policy for layout test.",
   enabledGlobally: true,
   mode: "redact",
-  allowModes: ["redact", "block", "allow"],
+  allowModes: id === "files-i-protect" ? ["block"] : ["redact", "block", "allow"],
   categories: [cat(`${id}-a`), cat(`${id}-b`), cat(`${id}-c`)],
-  supportsKnownValues: id === "words-i-protect",
+  supportsKnownValues: id === "words-i-protect" || id === "files-i-protect",
+  knownValuesKind: id === "files-i-protect" ? "filenames" : "phrases",
   knownValues: [],
 }));
 
@@ -113,7 +115,17 @@ app.whenReady().then(async () => {
   }
 
   for (const algo of algorithms) {
-    for (const mode of ["block", "allow", "redact"]) {
+    const modes = algo.allowModes || ["block", "allow", "redact"];
+    if (modes.length <= 1) {
+      const radios = await wc.executeJavaScript(
+        `document.querySelectorAll('input[name="mode-${algo.id}"]').length`,
+      );
+      if (radios) {
+        failures.push(`${algo.id}: unexpected mode radios (${radios})`);
+      }
+      continue;
+    }
+    for (const mode of modes) {
       const r = await wc.executeJavaScript(`(async () => {
         const input = document.querySelector('input[name="mode-${algo.id}"][value="${mode}"]');
         if (!input) return { error: "radio missing" };

@@ -35,6 +35,7 @@ const {
   detectSmugglingByCategories,
   detectKnownValues,
   pathLooksSensitive,
+  pathMatchesKnownFiles,
 } = await import("../host/bridge/control/detect/rules.js");
 
 const { onFsList, onFsRead } = await import("../host/bridge/control/lib.js");
@@ -71,6 +72,10 @@ try {
   assert.ok(pathLooksSensitive(".env"));
   assert.ok(pathLooksSensitive("id_rsa"));
   assert.ok(!pathLooksSensitive("readme.md"));
+  assert.ok(pathMatchesKnownFiles("/tmp/notes.txt", ["notes.txt"]));
+  assert.ok(pathMatchesKnownFiles("src/budget.xlsx", ["src/budget.xlsx"]));
+  assert.ok(!pathMatchesKnownFiles("readme.md", ["notes.txt"]));
+  assert.ok(!pathMatchesKnownFiles("mynotes.txt", ["notes.txt"]));
   const smug = detectSmugglingByCategories("reach me at bob [at] example.com", [
     "encoded_contact",
   ]);
@@ -91,10 +96,15 @@ try {
   assert.ok(ids.includes("block-payment-data"));
   assert.ok(ids.includes("stop-data-smuggling"));
   assert.ok(ids.includes("words-i-protect"));
-  assert.equal(ids.length, 6);
+  assert.ok(ids.includes("files-i-protect"));
+  assert.equal(ids.length, 7);
   assert.ok(!ids.includes("pii.v1"));
   for (const g of global) {
-    assert.deepEqual(g.allowModes, ["redact", "block", "allow"]);
+    if (g.id === "files-i-protect") {
+      assert.deepEqual(g.allowModes, ["block"]);
+    } else {
+      assert.deepEqual(g.allowModes, ["redact", "block", "allow"]);
+    }
     assert.ok(Array.isArray(g.categories) && g.categories.length > 0);
   }
 
@@ -102,7 +112,7 @@ try {
   setPolicyMode("block-payment-data", "allow");
   const after = listGlobalPolicies().find((g) => g.id === "block-payment-data");
   assert.equal(after.mode, "allow");
-  ok("six policies; every policy allows Redact/Block/Allow");
+  ok("seven policies; Files I Protect is block-only");
 } catch (e) {
   fail("policy catalog + all modes", e);
 }
@@ -117,6 +127,7 @@ try {
   setGlobalPolicy("stop-data-smuggling", false);
   setGlobalPolicy("words-i-protect", false);
   setGlobalPolicy("hide-sensitive-files", false);
+  setGlobalPolicy("files-i-protect", false);
 
   const body = 'api_key = "sk-abcdefghijklmnopqrstuvwxyz12"';
   const result = await mediateContent({
@@ -230,6 +241,7 @@ try {
   setGlobalPolicy("protect-personal-data", false);
   setGlobalPolicy("block-payment-data", false);
   setGlobalPolicy("stop-data-smuggling", false);
+  setGlobalPolicy("files-i-protect", false);
   setPolicyKnownValues("words-i-protect", ["Acme Corp"]);
 
   const result = await mediateContent({
@@ -347,6 +359,73 @@ try {
   ok("Hide Sensitive Files filters (block) and renames (redact)");
 } catch (e) {
   fail("hide sensitive files", e);
+}
+
+section("files I protect is block-only");
+try {
+  resetPolicyEngine();
+  setGlobalPolicy("files-i-protect", true);
+  setPolicyKnownValues("files-i-protect", ["notes.txt", "src/budget.xlsx"]);
+  setGlobalPolicy("hide-sensitive-files", false);
+  setGlobalPolicy("protect-secrets", false);
+  setGlobalPolicy("stop-data-smuggling", false);
+  setGlobalPolicy("words-i-protect", false);
+
+  const named = listGlobalPolicies().find((g) => g.id === "files-i-protect");
+  assert.equal(named.supportsKnownValues, true);
+  assert.equal(named.knownValuesKind, "filenames");
+  assert.deepEqual(named.allowModes, ["block"]);
+  assert.equal(named.mode, "block");
+  assert.deepEqual(named.knownValues, ["notes.txt", "src/budget.xlsx"]);
+
+  assert.throws(
+    () => setPolicyMode("files-i-protect", "redact"),
+    /not allowed/,
+  );
+  assert.throws(
+    () => setPolicyMode("files-i-protect", "allow"),
+    /not allowed/,
+  );
+
+  const agent = { id: "test-agent" };
+  const listed = await onFsList({
+    agent,
+    path: "/tmp",
+    entries: [
+      { name: "readme.md" },
+      { name: "notes.txt" },
+      { name: "budget.xlsx" },
+    ],
+  });
+  assert.equal(listed.action, "rewrite");
+  assert.ok(listed.entries.every((e) => e.name !== "notes.txt"));
+  assert.ok(listed.entries.some((e) => e.name === "readme.md"));
+  // basename-only list entry does not match a relative path rule
+  assert.ok(listed.entries.some((e) => e.name === "budget.xlsx"));
+
+  const blocked = await onFsRead({
+    agent,
+    path: "/home/u/project/notes.txt",
+    data: "do not show this",
+  });
+  assert.equal(blocked.action, "deny");
+
+  const relativeBlocked = await onFsRead({
+    agent,
+    path: "/home/u/project/src/budget.xlsx",
+    data: "payroll",
+  });
+  assert.equal(relativeBlocked.action, "deny");
+
+  const allowed = await onFsRead({
+    agent,
+    path: "/home/u/project/readme.md",
+    data: "ok",
+  });
+  assert.equal(allowed.action, "allow");
+  ok("Files I Protect blocks listed names; redact/allow modes rejected");
+} catch (e) {
+  fail("files I protect", e);
 }
 
 section("vault releak on egress");

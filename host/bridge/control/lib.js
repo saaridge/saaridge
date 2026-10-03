@@ -12,9 +12,10 @@ import {
   getPolicyMode,
   isPolicyActiveForAgent,
   getEnabledCategories,
+  getPolicyKnownValues,
 } from "../../lib/ai-policy.js";
-import { pathLooksSensitive } from "./detect/rules.js";
-import { sensitiveNameAction } from "./policies/catalog.js";
+import { pathLooksSensitive, pathMatchesKnownFiles } from "./detect/rules.js";
+import { namedFileAction, sensitiveNameAction } from "./policies/catalog.js";
 
 const agentIdOf = (agent) =>
   String(agent?.id || agent?.agentId || "unknown");
@@ -68,6 +69,17 @@ export async function onFsRead({ agent, path: filePath, data }) {
     }
   }
 
+  if (isPolicyActiveForAgent(agentId, "files-i-protect")) {
+    const cats = getEnabledCategories("files-i-protect");
+    const names = getPolicyKnownValues("files-i-protect");
+    if (cats.includes("named_files") && pathMatchesKnownFiles(filePath, names)) {
+      return {
+        action: "deny",
+        reason: "Blocked by Files I Protect",
+      };
+    }
+  }
+
   return runTextPolicy({
     agent,
     channel: "fs",
@@ -94,43 +106,56 @@ export async function onFsWrite({ agent, path: filePath, data }) {
  */
 export async function onFsList({ agent, path: dirPath, entries }) {
   const agentId = agentIdOf(agent);
-  const list = Array.isArray(entries) ? entries : [];
-  if (!isPolicyActiveForAgent(agentId, "hide-sensitive-files")) {
-    return { action: "allow", entries: list };
-  }
-  const mode = getPolicyMode("hide-sensitive-files");
-  if (mode === "allow") {
-    return { action: "allow", entries: list };
-  }
-  const cats = new Set(getEnabledCategories("hide-sensitive-files"));
+  let list = Array.isArray(entries) ? entries : [];
   let changed = false;
-  const next = [];
-  for (const e of list) {
-    const name = typeof e === "string" ? e : e?.name;
-    const decision = sensitiveNameAction({
-      name,
-      mode,
-      enabledCategories: cats,
-    });
-    if (decision.action === "hide") {
-      changed = true;
-      continue;
-    }
-    if (decision.action === "rewrite") {
-      changed = true;
-      if (typeof e === "string") {
-        next.push(decision.name);
-      } else {
-        next.push({ ...e, name: decision.name });
+
+  const applyNameFilter = (decide) => {
+    const next = [];
+    for (const e of list) {
+      const name = typeof e === "string" ? e : e?.name;
+      const decision = decide(name);
+      if (decision.action === "hide") {
+        changed = true;
+        continue;
       }
-      continue;
+      if (decision.action === "rewrite") {
+        changed = true;
+        if (typeof e === "string") {
+          next.push(decision.name);
+        } else {
+          next.push({ ...e, name: decision.name });
+        }
+        continue;
+      }
+      next.push(e);
     }
-    next.push(e);
+    list = next;
+  };
+
+  if (isPolicyActiveForAgent(agentId, "hide-sensitive-files")) {
+    const mode = getPolicyMode("hide-sensitive-files");
+    if (mode !== "allow") {
+      const cats = new Set(getEnabledCategories("hide-sensitive-files"));
+      applyNameFilter((name) =>
+        sensitiveNameAction({ name, mode, enabledCategories: cats }),
+      );
+    }
   }
+
+  if (isPolicyActiveForAgent(agentId, "files-i-protect")) {
+    const cats = getEnabledCategories("files-i-protect");
+    if (cats.includes("named_files")) {
+      const names = getPolicyKnownValues("files-i-protect");
+      applyNameFilter((name) =>
+        namedFileAction({ name, mode: "block", names }),
+      );
+    }
+  }
+
   if (changed) {
-    return { action: "rewrite", entries: next };
+    return { action: "rewrite", entries: list };
   }
-  return { action: "allow", entries: list };
+  return { action: "allow", entries: Array.isArray(entries) ? entries : [] };
 }
 
 /** Outbound HTTP(S) / tool request — may still contain vault:// markers. */

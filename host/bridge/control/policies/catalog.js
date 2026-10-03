@@ -7,7 +7,7 @@
  *   allow  — free flow (no enforcement)
  *
  * Categories (options.categories): per-policy include/exclude map.
- * Words I Protect also uses options.knownValues: string[].
+ * Words I Protect / Files I Protect also use options.knownValues: string[].
  */
 import {
   detectSecretsByCategories,
@@ -17,6 +17,7 @@ import {
   detectSmugglingByCategories,
   detectKnownValues,
   pathLooksSensitive,
+  pathMatchesKnownFiles,
   pathCategory,
   maskSpans,
 } from "../detect/rules.js";
@@ -104,6 +105,21 @@ export const POLICY_CATALOG = [
     defaultEnabled: false,
     categories: POLICY_CATEGORIES["words-i-protect"],
     supportsKnownValues: true,
+    knownValuesKind: "phrases",
+  },
+  {
+    id: "files-i-protect",
+    name: "Files I Protect",
+    description:
+      "Add a file name. Assistants cannot read that file.",
+    info:
+      "Type a file name (notes.txt) or a relative path (src/budget.xlsx). Those files are hidden from lists and reads are denied. Turn the policy off to stop blocking.",
+    defaultMode: "block",
+    allowModes: ["block"],
+    defaultEnabled: false,
+    categories: POLICY_CATEGORIES["files-i-protect"],
+    supportsKnownValues: true,
+    knownValuesKind: "filenames",
   },
 ];
 
@@ -472,6 +488,38 @@ export const createContentPolicies = (
     },
   };
 
+  const filesIProtect = {
+    id: "files-i-protect",
+    name: "Files I Protect",
+    description: POLICY_CATALOG.find((p) => p.id === "files-i-protect")
+      .description,
+    async apply(ctx) {
+      if (ctx.channel !== "fs") return { action: "allow", data: ctx.data };
+      // Reads and lists only — do not rewrite agent writes into a placeholder.
+      if (ctx.direction === "egress") return { action: "allow", data: ctx.data };
+      const cats = getCats(ctx, this.id).length
+        ? getCats(ctx, this.id)
+        : catsOf(this.id);
+      if (!cats.includes("named_files")) {
+        return { action: "allow", data: ctx.data };
+      }
+      const names = getKnown(ctx, this.id).length
+        ? getKnown(ctx, this.id)
+        : knownOf(this.id);
+      if (!pathMatchesKnownFiles(ctx.path || "", names)) {
+        return { action: "allow", data: ctx.data };
+      }
+      if (ctx.meta?.list) {
+        return { action: "allow", data: ctx.data };
+      }
+      return {
+        action: "deny",
+        reason: "Blocked by Files I Protect",
+        data: "",
+      };
+    },
+  };
+
   return [
     protectSecrets,
     protectPersonal,
@@ -479,6 +527,7 @@ export const createContentPolicies = (
     hideFiles,
     stopSmuggling,
     wordsIProtect,
+    filesIProtect,
   ];
 };
 
@@ -497,4 +546,14 @@ export const sensitiveNameAction = ({
   return { action: "rewrite", name: "[hidden-file]" };
 };
 
-export { pathCategory, pathLooksSensitive };
+/** Helper for control/lib.js list filtering of user-named files. */
+export const namedFileAction = ({ name, mode, names }) => {
+  if (mode === "allow") return { action: "keep", name };
+  if (!pathMatchesKnownFiles(name, names)) {
+    return { action: "keep", name };
+  }
+  if (mode === "block") return { action: "hide", name };
+  return { action: "rewrite", name: "[hidden-file]" };
+};
+
+export { pathCategory, pathLooksSensitive, pathMatchesKnownFiles };

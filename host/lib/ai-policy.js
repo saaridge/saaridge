@@ -130,6 +130,11 @@ const ensureDefaultPolicies = (e) => {
         opts.mode = p.defaultMode;
         changed = true;
       }
+      const allowedModes = p.allowModes || MODES;
+      if (opts.mode && !allowedModes.includes(opts.mode)) {
+        opts.mode = p.defaultMode;
+        changed = true;
+      }
       if (!opts.categories || typeof opts.categories !== "object") {
         opts.categories = defaultCategoryMap(p.id);
         changed = true;
@@ -230,6 +235,7 @@ export const listPolicyCatalog = () =>
       description: c.description,
     })),
     supportsKnownValues: Boolean(p.supportsKnownValues),
+    knownValuesKind: p.knownValuesKind || null,
   }));
 
 export const listPolicyAlgorithms = () => {
@@ -291,6 +297,7 @@ const enrichPolicy = (meta, a) => {
     categories: cats,
     customized,
     supportsKnownValues: Boolean(meta.supportsKnownValues),
+    knownValuesKind: meta.knownValuesKind || null,
     knownValues: meta.supportsKnownValues
       ? getKnownValuesForPolicy(meta.id)
       : undefined,
